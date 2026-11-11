@@ -724,6 +724,7 @@ add_executable(planck-dft
     ${IO_SRC}
     ${SCF_SRC}
     ${SOLVATION_SRC}
+    ${BSSE_SRC}
     ${POPULATIONS_SRC}
     ${POSTHF_DFT_SRC}
     ${GRADIENT_SRC}

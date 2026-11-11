@@ -9,8 +9,9 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-11-10 (UKS DH step list; rewrite at `8570139a` on 2026-11-08, then the
-Yukawa and `hcore` decisions and the CI blocker).
+Last updated: 2026-11-11 (DFT counterpoise done; UKS DH step list 2026-11-10;
+rewrite at `8570139a` on 2026-11-08, then the Yukawa and `hcore` decisions and
+the CI blocker).
 
 This is the canonical list of what remains. What is done lives in
 `vault/Status/Completion.md`. Each item names its scope or answer doc, which
@@ -47,11 +48,8 @@ teaching code) reorders it.
 5. **Default DFT grid qualified for gradients** (§2, DFT). `legacy` fails the
    rotational-covariance check, so default-settings geometries and
    frequencies carry grid noise. A decision and a migration, not new code. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
-6. **DFT ghost atoms and counterpoise** (§2, BSSE). Interaction energies are
-   mostly computed with DFT. Scope: `docs/DFT_COUNTERPOISE_SCOPE.md`.
-   Steps 0, 1 and 3 done 2026-11-11 (`%begin_bsse` refused by name, ghost
-   single points PySCF-gated, symmetry off with ghosts); step 2, the KS
-   counterpoise driver, remains.
+6. ~~DFT ghost atoms and counterpoise.~~ Done 2026-11-11
+   (`docs/DFT_COUNTERPOISE.md`).
 7. ~~D3 reported separately in the results JSON.~~ Done 2026-11-10
    (`docs/RESULTS_JSON_ENERGY_TERMS.md`).
 8. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
@@ -187,11 +185,11 @@ further post-HF ghost-atom checks.
   that need them) wait on a response-machinery audit before the lift adapter
   can go through `compute_rmp2_gradient` / `compute_ump2_gradient`. Refused
   by `water_rmp2_spherical_{gradient,geomopt}_rejected`.
-- **BSSE:** the DFT counterpoise driver (ghost-atom DFT single points are
-  gated; D3 already leaves ghost atoms out, which is the
-  counterpoise-consistent choice), N-body counterpoise beyond two
-  fragments, counterpoise-corrected gradients and geomopt, and post-HF
-  ghost-reference verification beyond the SCF-level gates.
+- **BSSE:** N-body counterpoise beyond two fragments,
+  counterpoise-corrected gradients and geomopt (HF and DFT), counterpoise
+  under PCM (refused), and post-HF ghost-reference verification beyond the
+  SCF-level gates. HF and KS counterpoise single points are done
+  (`docs/DFT_COUNTERPOISE.md`).
 - **Symmetry:** conventional-path symmetry-unique ERI storage is out of scope
   (full-group reduction is a direct-SCF feature).
 - **`TensorOptimized` RCCSDT** is still treated in-tree as experimental.

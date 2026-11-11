@@ -427,8 +427,29 @@ historical design context, but they are no longer the source of truth for
 - Automated two-fragment SCF-level Boys-Bernardi counterpoise driver
 - Per-fragment charge and multiplicity handling
 - PySCF-validated He2/cc-pVDZ counterpoise decomposition
+- **DFT ghost atoms and counterpoise (2026-11-11, `docs/DFT_COUNTERPOISE.md`).**
+  `run_counterpoise` takes the sub-calculation runner as a parameter, and
+  `planck-dft` passes its KS single point, so HF and KS share one driver.
+  Before this, `planck-dft` silently ignored `%begin_bsse`. PCM with
+  counterpoise is now refused in both binaries (it used to be dropped
+  silently). Other changes:
+  - **Ghost grids** use the element's Z, as in PySCF ≥ 2.14 (#3302).
+  - **Symmetry** is now turned off when ghosts are present; He + Gh(He) had
+    been detected as D∞h and the SCF did not converge.
+  - **KS convergence:** both KS loops now feed the DIIS residual into
+    `is_converged`, with a KS stall floor of 1e-8 (HF keeps 1e-10). A lone He
+    from `hcore` had stopped at a stalled step 6.2e-7 Eh high. The floor must
+    stay above the SOSCF deadband residual (4.1e-10,
+    `water_rks_pbe_soscf_puredeadband_631g`).
+
+  Gates, all matching PySCF to every printed digit:
+  - `water_dimer_ghost_{rks_pbe,rks_b3lyp,cation_uks_pbe}_631gd`
+  - `{he2,water_dimer}_rks_b3lyp_cp_ccpvdz`
+  - `water_dimer_rks_b3lyp_d3bj_cp_ccpvdz`: its BSSE equals the D3-free
+    value, because ghosts carry no D3.
 
 ### Recent fixes now considered landed
+
 
 - **Every PCM workflow gated against PySCF; three defects fixed on the way
   (2026-11-10, `docs/PCM_GATING.md`).** Six new water/6-31G* cases: UKS and

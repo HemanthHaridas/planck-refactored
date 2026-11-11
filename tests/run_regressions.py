@@ -72,6 +72,10 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "casscf_sa_gnorm": re.compile(r"sa_g=([-+0-9Ee\.]+)"),
     "casscf_root_screen_gnorm": re.compile(r"root_screen_g=([-+0-9Ee\.]+)"),
     "casscf_max_root_gnorm": re.compile(r"max_root_g=([-+0-9Ee\.]+)"),
+    # Counterpoise report (src/bsse/counterpoise.cpp log_report).
+    "cp_dimer_energy": re.compile(r"E\(AB\)\s+dimer basis\s*:\s*([-+0-9Ee\.]+)\s+Eh"),
+    "cp_bsse": re.compile(r"BSSE\s+:\s*([-+0-9Ee\.]+)\s+Eh"),
+    "cp_interaction_energy": re.compile(r"Interaction \(CP-corrected\)\s*:\s*([-+0-9Ee\.]+)\s+Eh"),
     "gradient_max": re.compile(r"Gradient max\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
     "gradient_rms": re.compile(r"Gradient rms\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
     # Post-geomopt converged force from the "Final max|g|" summary line. Distinct

@@ -79,10 +79,15 @@ namespace HartreeFock
             double previous_total_energy,
             double total_energy);
 
+        // diis_stall_floor: the DIIS residual below which a step is never
+        // treated as stalled (see scf.cpp). 1e-10 for HF; the KS loops pass a
+        // higher value, since their residual floor sits higher (XC grid noise,
+        // and the SOSCF deadband stops at |g| ~ 2e-9).
         bool is_converged(
             const HartreeFock::OptionsSCF &scf_options,
             const IterationMetrics &metrics,
-            unsigned int iteration) noexcept;
+            unsigned int iteration,
+            double diis_stall_floor = 1E-10) noexcept;
 
         void store_restricted_iteration(
             HartreeFock::Calculator &calculator,

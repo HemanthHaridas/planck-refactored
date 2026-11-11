@@ -1,6 +1,7 @@
 #include "driver.h"
 
 #include "analytic_hessian.h"
+#include "bsse/counterpoise.h"
 #include "dispersion.h"
 #include "ks_orbital_hessian.h"
 #include "tddft_exchange.h"
@@ -94,6 +95,11 @@ namespace DFT::Driver
 
     namespace
     {
+        // DIIS-residual stall floor for the KS SCF (SCF::is_converged). Above
+        // HF's 1e-10: the pure-SOSCF deadband stops at a KS residual of 4.1e-10
+        // (water_rks_pbe_soscf_puredeadband_631g); the lone-He hcore stall it
+        // must catch sits at ~1e-3 (he2_rks_b3lyp_cp_ccpvdz).
+        constexpr double kKsDiisStallFloor = 1E-8;
 
         DFT::GridLevel to_grid_level(HartreeFock::DFTGridQuality quality)
         {
@@ -2222,11 +2228,15 @@ namespace DFT::Driver
                     }
 
                     const Eigen::MatrixXd next_density = density_from_orbitals(C_new, n_occ, 2.0);
-                    const auto metrics = HartreeFock::SCF::restricted_iteration_metrics(
+                    auto metrics = HartreeFock::SCF::restricted_iteration_metrics(
                         density,
                         next_density,
                         previous_total_energy,
                         total_energy);
+                    // Gate convergence on the DIIS residual as run_rhf does: a lone
+                    // He from hcore otherwise stops at a stalled step (dP = 0,
+                    // FPS-SPF ~1e-3), 6.2e-7 Eh above the minimum.
+                    metrics.diis_error = diis_error;
 
                     const double iter_time = std::chrono::duration<double>(
                                                  std::chrono::steady_clock::now() - iter_start)
@@ -2279,7 +2289,7 @@ namespace DFT::Driver
                     result.solvation_energy = pcm_energy;
                     calculator._solvation_energy = pcm_energy; // results JSON
 
-                    if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
+                    if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter, kKsDiisStallFloor))
                     {
                         // Store orbitals of the true KS matrix, not the DIIS
                         // extrapolation (same reason as run_rhf: with ~0 error
@@ -2791,6 +2801,7 @@ namespace DFT::Driver
                     next_beta_density,
                     previous_total_energy,
                     total_energy);
+                metrics.diis_error = diis_error; // stalled-step guard, as run_uhf
                 if (requested_level_shift > 0.0 || require_pt2_stationarity)
                 {
                     // Opposite alpha/beta changes must not cancel in the
@@ -2799,7 +2810,6 @@ namespace DFT::Driver
                     const Eigen::MatrixXd db = next_beta_density - beta_density;
                     metrics.delta_density_max = std::max(da.cwiseAbs().maxCoeff(), db.cwiseAbs().maxCoeff());
                     metrics.delta_density_rms = std::max(da.norm(), db.norm()) / static_cast<double>(nbasis);
-                    metrics.diis_error = diis_error; // physical commutator, including polishing
                 }
 
                 const double iter_time = std::chrono::duration<double>(
@@ -2879,7 +2889,7 @@ namespace DFT::Driver
                     continue;
                 }
 
-                if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
+                if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter, kKsDiisStallFloor))
                 {
                     if (active_level_shift > 0.0)
                     {
@@ -5094,7 +5104,7 @@ namespace DFT::Driver
         // cannot be driven below a grid-dependent floor -- a tol_density under
         // that floor is unreachable by construction and the run reports failure
         // while sitting on the converged answer. This is the same defect class
-        // as the DIIS residual floor in SCF::is_converged (see kDiisStallFloor):
+        // as the DIIS residual floor in SCF::is_converged (see its diis_stall_floor):
         // a threshold compared against a quantity whose numerical floor is
         // higher than it.
         //
@@ -5506,15 +5516,30 @@ namespace DFT::Driver
     {
         const auto program_start = CliSystemClock::now();
 
-        // The parser fills _bsse for either binary, but the counterpoise driver
-        // is HF-only. Without this a %begin_bsse block ran the plain molecule
-        // and printed no CP result (docs/DFT_COUNTERPOISE_SCOPE.md, step 0).
-        if (calculator._bsse._enabled)
-            return std::unexpected(
-                "counterpoise correction (%begin_bsse) is not yet supported in planck-dft; "
-                "run it with hartree-fock, or run the fragment calculations by hand");
-
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Input Parsing :", "Successful");
+
+        // Counterpoise: the shared five-calculation driver, each sub-calculation
+        // a KS single point (docs/DFT_COUNTERPOISE.md §1).
+        if (calculator._bsse._enabled)
+        {
+            if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+                return std::unexpected("counterpoise in planck-dft supports single-point energies only");
+            calculator.prepare_coordinates(); // the sub-calculation builder needs Bohr
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Counterpoise :",
+                                         "BSSE counterpoise correction requested (Kohn-Sham)");
+            auto cp = HartreeFock::BSSE::run_counterpoise(
+                calculator, [](HartreeFock::Calculator &sub) -> std::expected<double, std::string> {
+                    auto r = run(sub);
+                    if (!r)
+                        return std::unexpected(r.error());
+                    if (!r->converged)
+                        return std::unexpected("KS SCF did not converge");
+                    return r->total_energy;
+                });
+            if (!cp)
+                return std::unexpected("counterpoise failed: " + cp.error());
+            return EXIT_SUCCESS;
+        }
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Calculation Type :", map_enum(calculator._calculation));
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Theory :", "Kohn-Sham DFT");
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Reference :", dft_reference_label(calculator._scf._scf));

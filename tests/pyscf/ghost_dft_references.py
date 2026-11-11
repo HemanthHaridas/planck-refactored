@@ -1,7 +1,7 @@
-"""References for the ghost-atom DFT gates (docs/DFT_COUNTERPOISE_SCOPE.md step 1).
+"""References for the ghost-atom DFT gates (docs/DFT_COUNTERPOISE.md §2).
 
-PySCF RKS/UKS with cart=True, Planck's GBS, its CODATA 2018 Bohr and its
-unpruned 150 x 590 grid, for tests/inputs/regression/dft/*ghost*.hfinp.
+PySCF RKS/UKS with Planck's GBS, its CODATA 2018 Bohr and its unpruned
+150 x 590 grid, for tests/inputs/regression/dft/*ghost*.hfinp.
 
 A ghost atom's grid is built with its element's proton number, as in Planck
 and in PySCF >= 2.14 (pyscf/pyscf#3302). PySCF 2.13 built it as Z = 0 (radial
@@ -26,37 +26,50 @@ def field(text, key):
     return re.search(rf"^\s*{key}\s+(\S+)", text, re.M).group(1)
 
 
-def run(path):
+def parse(path):
+    """Input fields plus atoms as [(element, xyz strings, is_ghost)]."""
     text = path.read_text()
-    basis, exchange, guess = field(text, "basis"), field(text, "exchange"), field(text, "guess")
     coords = text.split("%begin_coords")[1].split("%end_coords")[0].strip().splitlines()
     charge, mult = map(int, coords[1].split())
-    atoms = [line.split() for line in coords[2:]]
-    real = [(re.sub(r"^Gh\((\w+)\)$", r"\1", a[0]), a[1:]) for a in atoms]
-    ghost = [("ghost-" + s if a[0].startswith("Gh(") else s, xyz) for a, (s, xyz) in zip(atoms, real)]
-    gbs = str(ROOT / "basis-sets" / basis)
-    elements = {s for s, _ in real}
-    bas = {e: parse_gaussian.load(gbs, e) for e in elements}
+    atoms = []
+    for line in coords[2:]:
+        tok = line.split()
+        g = re.fullmatch(r"Gh\((\w+)\)", tok[0])
+        atoms.append((g.group(1) if g else tok[0], tok[1:4], bool(g)))
+    guess = re.search(r"^\s*guess\s+(\S+)", text, re.M)
+    return dict(text=text, basis=field(text, "basis"), xc=XC[field(text, "exchange")],
+                cart=field(text, "basis_type") != "spherical", charge=charge, mult=mult,
+                guess=guess.group(1) if guess else "hcore", atoms=atoms)
 
-    def mol(spec, chg, spin):
-        return gto.M(atom="\n".join(f"{s} {' '.join(x)}" for s, x in spec), unit=BOHR_ANGSTROM,
-                     cart=True, verbose=0, charge=chg, spin=spin, basis=bas)
 
-    grids = dft.gen_grid.Grids(mol(real, 0, 0))
+def energy(atoms, charge, mult, xc, basis, cart, guess="hcore"):
+    """KS energy of `atoms` [(element, xyz, is_ghost)], ghost grids at the element's Z."""
+    bas = {e: parse_gaussian.load(str(ROOT / "basis-sets" / basis), e) for e, _, _ in atoms}
+
+    def mol(ghosts, chg, spin):
+        spec = "\n".join(f"{'ghost-' if g and ghosts else ''}{e} {' '.join(x)}" for e, x, g in atoms)
+        return gto.M(atom=spec, unit=BOHR_ANGSTROM, cart=cart, verbose=0,
+                     charge=chg, spin=spin, basis=bas)
+
+    nelec = sum(gto.charge(e) for e, _, _ in atoms)
+    grids = dft.gen_grid.Grids(mol(False, 0, nelec % 2))  # ghosts made real
     grids.atom_grid = (150, 590)
     grids.prune = None
     grids.build()
 
-    m = mol(ghost, charge, mult - 1)
+    m = mol(True, charge, mult - 1)
     mf = (dft.RKS if mult == 1 else dft.UKS)(m)
-    mf.xc = XC[exchange]
+    mf.xc = xc
     mf.grids = grids
     mf.init_guess = "minao" if guess == "sad" else "1e"
     mf.conv_tol = 1e-12
     e = mf.kernel()
     assert mf.converged
-    print(f"{path.stem}: E = {e:.10f}  (nao {m.nao}, npts {len(grids.weights)})")
+    return e
 
 
-for p in sorted(CASES.glob("*ghost*.hfinp")):
-    run(p)
+if __name__ == "__main__":
+    for p in sorted(CASES.glob("*ghost*.hfinp")):
+        s = parse(p)
+        e = energy(s["atoms"], s["charge"], s["mult"], s["xc"], s["basis"], s["cart"], s["guess"])
+        print(f"{p.stem}: E = {e:.10f}")

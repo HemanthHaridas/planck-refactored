@@ -1,4 +1,4 @@
-# Ghost-atom DFT gate (docs/DFT_COUNTERPOISE_SCOPE.md step 1): water dimer,
+# Ghost-atom DFT gate (docs/DFT_COUNTERPOISE.md §2): water dimer,
 # second monomer ghosted. Reference: tests/pyscf/ghost_dft_references.py.
 %begin_control
     basis       6-31g*

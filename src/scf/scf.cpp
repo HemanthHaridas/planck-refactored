@@ -359,7 +359,8 @@ HartreeFock::SCF::IterationMetrics HartreeFock::SCF::unrestricted_iteration_metr
 bool HartreeFock::SCF::is_converged(
     const HartreeFock::OptionsSCF &scf_options,
     const IterationMetrics &metrics,
-    unsigned int iteration) noexcept
+    unsigned int iteration,
+    double diis_stall_floor) noexcept
 {
     // DIIS can extrapolate a Fock whose diagonalized density exactly
     // reproduces the previous one (ΔP → 0) while the DIIS residual FPS-SPF is
@@ -378,7 +379,7 @@ bool HartreeFock::SCF::is_converged(
     // threshold therefore makes any _tol_density below the DIIS noise floor
     // unreachable by construction: the run is converged and reports failure.
     //
-    // kDiisStallFloor separates the two regimes. The stall this guard exists to
+    // The stall floor (diis_stall_floor) separates the two regimes. The stall this guard exists to
     // catch sits at diis_error ~1.4e-03 (he_sad_ccpvdz, ΔP exactly 0 at iters
     // 4-8), seven orders of magnitude above the roundoff noise, so the floor
     // catches it with room to spare while never gating on noise. A caller asking
@@ -393,8 +394,13 @@ bool HartreeFock::SCF::is_converged(
     // instead of 12. Both are converged RHF to the same energy, but the extra
     // iterations change the orbitals enough to move which basin the CASSCF
     // reaches. Do not loosen this without re-running that case.
-    constexpr double kDiisStallFloor = 1E-10;
-    const double diis_tolerance = std::max(scf_options._tol_density, kDiisStallFloor);
+    //
+    // The floor is the diis_stall_floor parameter: 1E-10 (the default) for HF.
+    // planck-dft passes 1E-8: its pure-SOSCF deadband deliberately stops at
+    // |g| ~ 2e-9, where the KS residual reads 4.1e-10
+    // (water_rks_pbe_soscf_puredeadband_631g), and the lone-He stall it must
+    // still catch sits at ~1e-3.
+    const double diis_tolerance = std::max(scf_options._tol_density, diis_stall_floor);
     const bool diis_residual_ok =
         metrics.diis_error <= 0.0 || metrics.diis_error < diis_tolerance;
     return iteration > 1 &&

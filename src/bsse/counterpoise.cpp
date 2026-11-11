@@ -43,6 +43,7 @@ namespace HartreeFock
                 // NOT copy _bsse (avoid recursion), checkpoint path, or cached
                 // matrices — the sub-calc rebuilds everything from scratch.
                 sub._scf = parent._scf;
+                sub._dft = parent._dft; // functional, grid, dispersion (planck-dft)
                 sub._basis = parent._basis;
                 sub._geometry = parent._geometry;
                 sub._integral = parent._integral;
@@ -124,8 +125,6 @@ namespace HartreeFock
             std::expected<double, std::string> run_subcalculation(
                 HartreeFock::Calculator &sub)
             {
-                HartreeFock::Logger::ScopedSilence silence;
-
                 // Basis
                 const std::string gbs_file =
                     sub._basis._basis_path + "/" + sub._basis._basis_name;
@@ -174,12 +173,16 @@ namespace HartreeFock
 
             // Run one SubCalcSpec end to end (build + SCF) with a progress line.
             std::expected<double, std::string> run_spec(
-                const HartreeFock::Calculator &parent, const SubCalcSpec &spec)
+                const HartreeFock::Calculator &parent, const SubCalcSpec &spec,
+                const SubCalcRunner &run_sub)
             {
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Counterpoise :",
                                              std::format("Running sub-calculation: {}", spec.label));
                 HartreeFock::Calculator sub = build_subcalculator(parent, spec);
-                auto e = run_subcalculation(sub);
+                auto e = [&] {
+                    HartreeFock::Logger::ScopedSilence silence; // only the energy matters
+                    return run_sub(sub);
+                }();
                 if (!e)
                     return std::unexpected(std::format("{} failed: {}", spec.label, e.error()));
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Counterpoise :",
@@ -221,9 +224,19 @@ namespace HartreeFock
         std::expected<CounterpoiseResult, std::string>
         run_counterpoise(const HartreeFock::Calculator &parent)
         {
+            return run_counterpoise(parent, run_subcalculation);
+        }
+
+        std::expected<CounterpoiseResult, std::string>
+        run_counterpoise(const HartreeFock::Calculator &parent, const SubCalcRunner &run_sub)
+        {
             const auto &bsse = parent._bsse;
             if (bsse._fragments.size() != 2)
                 return std::unexpected("counterpoise: expected exactly two fragments");
+            // Sub-calculations do not copy _solvation: a PCM request would be
+            // silently dropped, and a cavity around ghost atoms is undefined.
+            if (parent._solvation._model != HartreeFock::SolvationModel::None)
+                return std::unexpected("counterpoise with PCM solvation is not supported");
 
             const std::vector<int> &A = bsse._fragments[0];
             const std::vector<int> &B = bsse._fragments[1];
@@ -250,27 +263,27 @@ namespace HartreeFock
 
             CounterpoiseResult r;
 
-            auto e_dimer = run_spec(parent, dimer);
+            auto e_dimer = run_spec(parent, dimer, run_sub);
             if (!e_dimer)
                 return std::unexpected(e_dimer.error());
             r.e_dimer = *e_dimer;
 
-            auto e_a = run_spec(parent, mono_a);
+            auto e_a = run_spec(parent, mono_a, run_sub);
             if (!e_a)
                 return std::unexpected(e_a.error());
             r.e_mono_a = *e_a;
 
-            auto e_b = run_spec(parent, mono_b);
+            auto e_b = run_spec(parent, mono_b, run_sub);
             if (!e_b)
                 return std::unexpected(e_b.error());
             r.e_mono_b = *e_b;
 
-            auto e_a_cp = run_spec(parent, mono_a_cp);
+            auto e_a_cp = run_spec(parent, mono_a_cp, run_sub);
             if (!e_a_cp)
                 return std::unexpected(e_a_cp.error());
             r.e_mono_a_cp = *e_a_cp;
 
-            auto e_b_cp = run_spec(parent, mono_b_cp);
+            auto e_b_cp = run_spec(parent, mono_b_cp, run_sub);
             if (!e_b_cp)
                 return std::unexpected(e_b_cp.error());
             r.e_mono_b_cp = *e_b_cp;
