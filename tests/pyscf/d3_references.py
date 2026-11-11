@@ -10,10 +10,12 @@ Needs pyscf-dispersion (pip) and a shared simple-dftd3 v1.0.0 build
 (cmake -DBUILD_SHARED_LIBS=ON -DWITH_API=ON, gfortran). pyscf-dispersion is
 NOT in tests/pyscf/.venv: from PySCF 2.15, `import pyscf` loads it eagerly
 and its 1.0.0 release breaks under NumPy 2, which would break every other
-reference script. Run this one from its own venv with PySCF and
-pyscf-dispersion installed:
+reference script. Run this one from tests/pyscf/.venv-d3 (PySCF 2.13.0,
+the version the D3 gates were pinned with, plus pyscf-dispersion 1.0.0;
+`python3 -m venv tests/pyscf/.venv-d3 && tests/pyscf/.venv-d3/bin/pip
+install pyscf==2.13.0 pyscf-dispersion==1.0.0` recreates it):
   DFTD3_LIBRARY=<prefix>/lib/libs-dftd3.dylib \
-    <d3-venv>/bin/python tests/pyscf/d3_references.py
+    tests/pyscf/.venv-d3/bin/python tests/pyscf/d3_references.py
 """
 import pathlib
 import re
@@ -76,6 +78,7 @@ def run(path):
 
     if exchange == "hyb_gga_xc_b2plyp":
         return  # PySCF RKS has no PT2 half; the D3 term above is the gate.
+
     def make(m):
         mf = (dft.RKS if mult == 1 else dft.UKS)(m)
         mf.xc = pyscf_xc
