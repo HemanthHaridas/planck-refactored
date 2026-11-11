@@ -18,7 +18,9 @@ driver (`src/bsse/counterpoise.cpp`) is HF-only: it builds five sub-
 `planck-dft` input with a `%begin_bsse` block therefore runs the plain
 molecule and prints no counterpoise result, without a word. **Step 0 is a
 refusal by name** in the DFT driver, with a regression case, before anything
-else.
+else. *Done 2026-11-11:* `DFT::Driver::run` (the CLI entry `planck-dft` and
+`planck-mpi` share) refuses `_bsse._enabled`; gated by
+`he2_rks_pbe_bsse_rejected_sto3g`. Step 2 replaces the refusal.
 
 ## What already holds for ghost atoms in DFT
 
@@ -31,15 +33,25 @@ atom.
 
 ## Steps
 
-### 1. Ghost-atom DFT single points
+### 1. Ghost-atom DFT single points — done 2026-11-11
 
-Gate RKS and UKS single points with ghost atoms against PySCF (`ghost-O`
-syntax, `mol.cart = True`): water dimer with one monomer ghosted, PBE and
-B3LYP, 6-31G*. Check what to compare: PySCF ≥ 2.14 gives ghosts their own
-Bragg radius in the Becke partition (#3302); match whatever Planck's
-`radial.h` table does for index 0 (radius 1.0) or change it. A ghost's grid
-treatment changes the energy at the 1e-6 level, so this choice must be made
-deliberately and written down.
+**Decision: a ghost atom's grid is built with its element's Z** (radial
+count, Treutler ξ, pruning, Becke radius), exactly as for the real atom.
+Planck already did this (the grid reads `atomic_numbers`, which ghosts keep;
+the `radial.h` index-0 entry is never reached for a ghost). Two reasons: the
+ghost carries the element's tight basis functions, which a Z = 0 (H-like)
+grid integrates poorly; and the dimer and ghosted-monomer runs then use the
+same grid, so its error cancels in the counterpoise difference. PySCF ≥ 2.14
+does the same (pyscf/pyscf#3302, checked against Q-Chem). PySCF 2.13 built
+ghost grids at Z = 0, which #3302 fixed as a bug; its gradient side is
+pyscf/pyscf#3597 / #3598.
+
+Gates (water dimer, second monomer ghosted, 6-31G*, cart, 150 × 590):
+`water_dimer_ghost_rks_{pbe,b3lyp}_631gd`,
+`water_dimer_ghost_cation_uks_pbe_631gd`. All three match PySCF to every
+printed digit (`tests/pyscf/ghost_dft_references.py`, which on 2.13 builds
+the grid on the molecule with ghosts made real). PySCF 2.13's own Z = 0 ghost
+grid is 3.1e-8 Eh off on the PBE case, so the 1e-9 gate tells them apart.
 
 ### 2. Counterpoise driver for KS
 
@@ -54,11 +66,12 @@ Gate: He2 and water dimer, B3LYP/cc-pVDZ (spherical), CP-corrected
 interaction energy against PySCF to 1e-8 Eh. Add D3 to one case (ghosts must
 contribute nothing).
 
-### 3. Symmetry
+### 3. Symmetry — done 2026-11-11
 
-The HF driver forces symmetry off when ghosts are present
-(`hf_driver.cpp`); the DFT driver needs the same switch. Verify, do not
-assume.
+The DFT driver lacked the HF driver's switch: He + Gh(He) was detected as
+D∞h and the RKS SCF diverged. `setup_symmetry` (`src/dft/driver.cpp`) now
+forces symmetry off when ghosts are present, with the HF warning;
+`water_dimer_ghost_rks_pbe_631gd` runs with `use_symm .true.` and asserts it.
 
 ## Not in this scope
 

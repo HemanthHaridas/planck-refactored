@@ -459,6 +459,17 @@ namespace DFT::Driver
                 return {};
             }
 
+            // Ghost atoms keep their real Z, so libmsym would treat them as
+            // nuclei and mix ghost and real centres (He + Gh(He) -> Dinfh, and
+            // the SCF diverges). Same rule as hf_driver.cpp.
+            if (calculator._molecule.has_ghost_atoms() && calculator._geometry._use_symm)
+            {
+                calculator._geometry._use_symm = false;
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning, "DFT Symmetry :",
+                    "Disabled because ghost atoms are present (counterpoise / BSSE)");
+            }
+
             if (!options.use_symmetry || !calculator._geometry._use_symm)
             {
                 calculator._molecule.set_standard_from_bohr(calculator._molecule._coordinates);
@@ -5494,6 +5505,14 @@ namespace DFT::Driver
         const std::string &json_path)
     {
         const auto program_start = CliSystemClock::now();
+
+        // The parser fills _bsse for either binary, but the counterpoise driver
+        // is HF-only. Without this a %begin_bsse block ran the plain molecule
+        // and printed no CP result (docs/DFT_COUNTERPOISE_SCOPE.md, step 0).
+        if (calculator._bsse._enabled)
+            return std::unexpected(
+                "counterpoise correction (%begin_bsse) is not yet supported in planck-dft; "
+                "run it with hartree-fock, or run the fragment calculations by hand");
 
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Input Parsing :", "Successful");
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Calculation Type :", map_enum(calculator._calculation));

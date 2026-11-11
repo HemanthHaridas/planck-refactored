@@ -49,6 +49,9 @@ teaching code) reorders it.
    frequencies carry grid noise. A decision and a migration, not new code. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
 6. **DFT ghost atoms and counterpoise** (§2, BSSE). Interaction energies are
    mostly computed with DFT. Scope: `docs/DFT_COUNTERPOISE_SCOPE.md`.
+   Steps 0, 1 and 3 done 2026-11-11 (`%begin_bsse` refused by name, ghost
+   single points PySCF-gated, symmetry off with ghosts); step 2, the KS
+   counterpoise driver, remains.
 7. ~~D3 reported separately in the results JSON.~~ Done 2026-11-10
    (`docs/RESULTS_JSON_ENERGY_TERMS.md`).
 8. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
@@ -184,8 +187,9 @@ further post-HF ghost-atom checks.
   that need them) wait on a response-machinery audit before the lift adapter
   can go through `compute_rmp2_gradient` / `compute_ump2_gradient`. Refused
   by `water_rmp2_spherical_{gradient,geomopt}_rejected`.
-- **BSSE:** DFT ghost atoms and counterpoise (D3 already leaves ghost
-  atoms out, which is the counterpoise-consistent choice), N-body counterpoise beyond two
+- **BSSE:** the DFT counterpoise driver (ghost-atom DFT single points are
+  gated; D3 already leaves ghost atoms out, which is the
+  counterpoise-consistent choice), N-body counterpoise beyond two
   fragments, counterpoise-corrected gradients and geomopt, and post-HF
   ghost-reference verification beyond the SCF-level gates.
 - **Symmetry:** conventional-path symmetry-unique ERI storage is out of scope

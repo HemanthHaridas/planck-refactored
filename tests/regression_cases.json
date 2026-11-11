@@ -8420,6 +8420,81 @@
    "checks": []
   },
   {
+   "id": "he2_rks_pbe_bsse_rejected_sto3g",
+   "input": "tests/inputs/regression/dft/he2_rks_pbe_bsse_rejected_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_note": "planck-dft has no counterpoise driver; a %begin_bsse block must be refused by name, not silently run as the plain molecule.",
+   "tags": [
+    "core",
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 1,
+   "contains": [
+    "counterpoise correction (%begin_bsse) is not yet supported in planck-dft"
+   ],
+   "checks": []
+  },
+  {
+   "id": "water_dimer_ghost_rks_pbe_631gd",
+   "input": "tests/inputs/regression/dft/water_dimer_ghost_rks_pbe_631gd.hfinp",
+   "executable": "planck-dft",
+   "_note": "Ghost-atom RKS gate (docs/DFT_COUNTERPOISE_SCOPE.md step 1). PySCF 2.13.0 reference from tests/pyscf/ghost_dft_references.py with the ghost grid built at the element's Z, as in PySCF >= 2.14 (#3302); PySCF 2.13's Z = 0 ghost grid gives -76.3224628463, 3.1e-8 off. use_symm is on to gate the ghost symmetry switch (He + Gh(He) was detected as Dinfh and diverged).",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Disabled because ghost atoms are present"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3224628775,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_dimer_ghost_rks_b3lyp_631gd",
+   "input": "tests/inputs/regression/dft/water_dimer_ghost_rks_b3lyp_631gd.hfinp",
+   "executable": "planck-dft",
+   "_note": "Ghost-atom RKS hybrid gate (docs/DFT_COUNTERPOISE_SCOPE.md step 1). PySCF 2.13.0 b3lypg reference from tests/pyscf/ghost_dft_references.py, ghost grid at the element's Z (#3302).",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4092354283,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_dimer_ghost_cation_uks_pbe_631gd",
+   "input": "tests/inputs/regression/dft/water_dimer_ghost_cation_uks_pbe_631gd.hfinp",
+   "executable": "planck-dft",
+   "_note": "Ghost-atom UKS gate (docs/DFT_COUNTERPOISE_SCOPE.md step 1): water cation doublet with a ghosted water, SAD guess (PySCF minao). PySCF 2.13.0 reference from tests/pyscf/ghost_dft_references.py, ghost grid at the element's Z (#3302).",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.8685845992,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "h2o2_cation_uks_b2plyp_v4_gradient_sto3g",
    "input": "tests/inputs/regression/dft/h2o2_cation_uks_b2plyp_v4_gradient_sto3g.hfinp",
    "executable": "planck-dft",
