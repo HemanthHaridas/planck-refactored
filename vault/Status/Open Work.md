@@ -44,7 +44,8 @@ teaching code) reorders it.
    then gradients (§2, DFT). r2SCAN, ωB97M-V, M06-2X and TPSSh are rejected
    today. Scope: `docs/META_GGA_SCOPE.md`.
 4. **Spherical MP2/UMP2 gradients** (§2, HF and post-HF). Every standard
-   basis is spherical; MP2 geometry optimization works only in Cartesian. Scope: `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`.
+   basis is spherical; MP2 geometry optimization works only in Cartesian. Scope: `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`
+   (audited 2026-11-11).
 5. **Default DFT grid qualified for gradients** (§2, DFT). `legacy` fails the
    rotational-covariance check, so default-settings geometries and
    frequencies carry grid noise. A decision and a migration, not new code. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
@@ -181,10 +182,24 @@ further post-HF ghost-atom checks.
   Roothaan Fock, which does not exist in the tree. ROHF CASSCF and RASSCF
   support only a closed inactive core, and the parity guard rejects a
   spin-polarized one. ROHF is also outside full-symmetry direct SCF.
-- **Spherical MP2/UMP2 gradients** (and the geomopt and frequency workflows
-  that need them) wait on a response-machinery audit before the lift adapter
-  can go through `compute_rmp2_gradient` / `compute_ump2_gradient`. Refused
-  by `water_rmp2_spherical_{gradient,geomopt}_rejected`.
+- **Spherical MP2/UMP2 gradients** (and geomopt; MP2 frequencies are refused
+  in every basis). Audited 2026-11-11 (`docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`):
+  - **Orbital half.** The Lagrangian stays in the working basis.
+  - **Size and frozen-check sites.** Five sites use the Cartesian
+    `nbasis()`; the frozen check would refuse every spherical RMP2
+    gradient.
+  - **Fock builds.** The two veff builders need the lift-build-project
+    pattern, which already exists in three copies; make it one helper.
+  - **Kernel inputs.** The 1e, overlap and Γ inputs are lifted once, and the
+    pair density is rebuilt with `Tᵀ C`.
+
+  The response code is already spherical-correct. Still refused by
+  `water_rmp2_spherical_{gradient,geomopt}_rejected`.
+- **Frozen-core MP2 gradients** (RMP2 and UMP2) are refused by name. The
+  builders lack the frozen–active occupied and virtual relaxation blocks and
+  see only the active orbitals; the scope doc says why and what to add
+  (PySCF `grad/mp2.py` L124–132). UMP2 had no refusal and printed a gradient
+  4.5e-2 Ha/Bohr off until 2026-11-11.
 - **BSSE:** N-body counterpoise beyond two fragments,
   counterpoise-corrected gradients and geomopt (HF and DFT), counterpoise
   under PCM (refused), and post-HF ghost-reference verification beyond the

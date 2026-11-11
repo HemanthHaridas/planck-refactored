@@ -450,6 +450,18 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Frozen-core UMP2 gradients are refused (2026-11-11).** With
+  `mp2_frozen`, the UMP2 gradient used to run and print a gradient
+  4.5e-2 Ha/Bohr off the energy FD, with no warning (water cation STO-3G,
+  O z: −0.1647 vs −0.1201). The builders have no frozen-core terms: no
+  frozen–active relaxation blocks, and they see only the active orbitals
+  (`docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`). RMP2 already refused it.
+  - **One shared check.** All three builders now call
+    `has_frozen_orbitals`, which compares the active count with the SCF MO
+    count. RMP2's old comparison with `nbasis()` would have refused every
+    spherical gradient.
+  - **Gates.** `water_rmp2_frozen_gradient_rejected` and
+    `water_radical_cation_ump2_frozen_gradient_rejected`.
 
 - **Every PCM workflow gated against PySCF; three defects fixed on the way
   (2026-11-10, `docs/PCM_GATING.md`).** Six new water/6-31G* cases: UKS and

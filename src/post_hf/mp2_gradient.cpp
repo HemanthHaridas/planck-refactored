@@ -68,6 +68,15 @@ namespace
 
     using RowMajorMatrix = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
+    // True when the MP2 result correlates only part of the SCF orbitals
+    // (mp2_frozen). The gradient builders treat the result's orbitals as the
+    // whole space, so they would drop the frozen orbitals' response terms
+    // silently. Compared against the SCF MO count, which is right in either basis.
+    bool has_frozen_orbitals(std::size_t n_active, const Eigen::MatrixXd &scf_mo_coefficients)
+    {
+        return n_active != 0 && n_active != static_cast<std::size_t>(scf_mo_coefficients.cols());
+    }
+
     // T2 -> AO half density, the first of the two back-transforms the MP2
     // gradients share: half[i,p,q,j] = (C_l T_ij C_rᵀ)(p,q), where
     // amplitude(i, j) returns the (nv_l x nv_r) virtual block T_ij. One small
@@ -244,8 +253,7 @@ namespace HartreeFock::Correlation
     {
         if (result.t2.empty())
             return std::unexpected("build_rmp2_lagrangian: T2 amplitudes are required.");
-        if (!result.active_mo.empty() &&
-            static_cast<int>(result.active_mo.size()) != static_cast<int>(calculator._shells.nbasis()))
+        if (has_frozen_orbitals(result.active_mo.size(), calculator._info._scf.alpha.mo_coefficients))
             return std::unexpected("build_rmp2_lagrangian: frozen-orbital gradients are not implemented.");
 
         const int nao = static_cast<int>(calculator._shells.nbasis());
@@ -417,8 +425,7 @@ namespace HartreeFock::Correlation
     {
         if (result.t2.empty())
             return std::unexpected("build_rmp2_gradient_intermediates: T2 amplitudes are required.");
-        if (!result.active_mo.empty() &&
-            static_cast<int>(result.active_mo.size()) != static_cast<int>(calculator._shells.nbasis()))
+        if (has_frozen_orbitals(result.active_mo.size(), calculator._info._scf.alpha.mo_coefficients))
             return std::unexpected("build_rmp2_gradient_intermediates: frozen-orbital gradients are not implemented.");
         if ((presolved.lagrangian == nullptr) != (presolved.z == nullptr))
             return std::unexpected(
@@ -670,6 +677,11 @@ namespace HartreeFock::Correlation
     {
         if (result.t2_aa.empty() || result.t2_ab.empty() || result.t2_bb.empty())
             return std::unexpected("build_ump2_gradient_intermediates: T2 amplitudes are required.");
+        // Without this, mp2_frozen produced a gradient 4.5e-2 Ha/Bohr off the
+        // energy FD with no warning (water cation STO-3G, O z).
+        if (has_frozen_orbitals(result.active_mo_alpha.size(), calculator._info._scf.alpha.mo_coefficients) ||
+            has_frozen_orbitals(result.active_mo_beta.size(), calculator._info._scf.beta.mo_coefficients))
+            return std::unexpected("build_ump2_gradient_intermediates: frozen-orbital gradients are not implemented.");
 
         auto gamma_res = ump2_gamma1_intermediates(result);
         if (!gamma_res)

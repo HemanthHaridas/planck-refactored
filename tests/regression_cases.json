@@ -1824,6 +1824,30 @@
    ]
   },
   {
+   "id": "water_rmp2_frozen_gradient_rejected",
+   "input": "tests/inputs/regression/post_hf/water_rmp2_frozen_gradient_rejected.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "_note": "Boundary marker: the MP2 gradient builders have no frozen-core terms (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md), so mp2_frozen + gradient is refused by name.",
+   "expected_exit_code": 1,
+   "contains": [
+    "frozen-orbital gradients are not implemented"
+   ]
+  },
+  {
+   "id": "water_radical_cation_ump2_frozen_gradient_rejected",
+   "input": "tests/inputs/regression/open_shell/water_radical_cation_ump2_frozen_gradient_rejected.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "_note": "Boundary marker, UMP2: before 2026-11-11 this ran and printed a gradient 4.5e-2 Ha/Bohr off the frozen-core energy FD (O z analytic -0.1647 vs FD -0.1201) with no warning. Now refused by name, as RMP2 always was.",
+   "expected_exit_code": 1,
+   "contains": [
+    "frozen-orbital gradients are not implemented"
+   ]
+  },
+  {
    "id": "water_dft_camb3lyp_gradient_symm_ultrafine_fd",
    "input": "tests/inputs/regression/dft/water_dft_camb3lyp_gradient_symm_ultrafine.hfinp",
    "executable": "tests/dft_gradient_fd.py",
