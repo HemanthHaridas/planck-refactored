@@ -104,6 +104,12 @@ namespace HartreeFock
         std::expected<Eigen::MatrixXd, std::string> to_working(
             const HartreeFock::Basis &basis, const Eigen::MatrixXd &M_cart);
 
+        // MO coefficients working -> Cartesian: C_cart = Tᵀ C_mo, so that
+        // φ_i = Σ_a C_cart(a,i) χ_a exactly. Returns C_mo unchanged (bitwise) in
+        // Cartesian mode. The caller guarantees C_mo has working-basis rows.
+        Eigen::MatrixXd mos_to_cartesian(
+            const HartreeFock::Basis &basis, const Eigen::MatrixXd &C_mo);
+
     } // namespace BasisFunctions
 } // namespace HartreeFock
 

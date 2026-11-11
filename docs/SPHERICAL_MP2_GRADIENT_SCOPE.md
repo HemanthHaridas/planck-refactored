@@ -121,8 +121,8 @@ working-basis M, tr(M ∂X_sph) = tr(Tᵀ M T ∂X_cart).
   - Spherical mode holds one extra n_cart⁴ buffer at peak.
 
 **4. RI branches** (L138–139, L162–164, L301–305, L484–502, L738–772). These
-are out of this scope (step 5). With `mp2_use_ri`, spherical MP2 gradients
-must stay refused by name.
+are out of this scope; they belong to the combined RI item in Open Work.
+With `mp2_use_ri`, spherical MP2 gradients must stay refused by name.
 
 **5. Callers outside the HF driver.** `build_rmp2_lagrangian` and
 `build_rmp2_energy_weighted_density` are shared with the RKS double-hybrid
@@ -136,6 +136,19 @@ state (`rebuild_basis_dependent_state`).
 refused in **every** basis (`hf_driver.cpp`, "Correlated frequencies are not
 implemented"), so lifting the spherical gate enables `gradient` and `geomopt`
 only. Step 4 below is corrected accordingly.
+
+**Why frequencies are refused when geomopt is not:** it is wiring, not
+physics.
+- The geomopt step (`geomopt.cpp` L115–142) runs SCF, then RMP2/UMP2, then
+  `compute_{r,u}mp2_gradient`.
+- The semi-numerical Hessian (`freq/hessian.cpp` L100–120) picks the
+  gradient at each displaced geometry by SCF type alone (RHF/UHF/ROHF). It
+  never looks at `_correlation`.
+- So MP2 + `frequency` would print MP2 energies with HF frequencies. The
+  driver refuses it for that reason, "until the MP2 gradient is wired into
+  the Hessian dispatch".
+
+Step 5 adds that wiring.
 
 ### Found on the way: the frozen-core UMP2 gradient is silently wrong
 
@@ -210,9 +223,31 @@ FD. This is what "Not in this scope" below refers to.
 
 0. ~~Refuse frozen-core UMP2 gradients.~~ Done 2026-11-11 (above); the
    frozen check in class 1 was fixed with it.
-1. **Refactor, Cartesian bitwise.** Add the shared working-basis Fock
-   helper and route `uhf_response` and both veff builders through it. Size
-   with `working_nbasis()` (class 1). Add the skin
+1. **Refactor, Cartesian bitwise — done 2026-11-11.** What landed:
+   - **`SCF::two_electron_fock{,_uhf}`** (`src/scf/scf.{h,cpp}`) is the one
+     working-basis Fock helper: lift the density, build, project back.
+     `uhf_response.cpp` and both MP2 veff builders call it; the veff
+     builders now return `std::expected`.
+   - **`BasisFunctions::mos_to_cartesian`** (`src/basis/spherical.{h,cpp}`)
+     is the one coefficient lift, Tᵀ C, and an identity in Cartesian mode.
+     It replaces the two earlier copies, in `ks_orbital_hessian.cpp` and the
+     TDDFT setup in `src/dft/driver.cpp`.
+   - **In `mp2_gradient.cpp`:**
+     - `nao` is the working size and `nao_cart` the kernel size;
+     - `lift_to_cartesian` lifts every 1e, overlap and separable-Γ input
+       once;
+     - the pair densities come from two builders, `rmp2_pair_density` and
+       `ump2_pair_densities`. They run once in the working basis for the
+       Lagrangian, and again with Tᵀ C for Γ in spherical mode only.
+       Cartesian mode reuses the one buffer.
+   - **Gate unchanged.** Spherical MP2 gradients stay refused until step 2.
+
+   Verification: 68 regression cases pass, 0 fail. They cover every MP2 and
+   double-hybrid case, and every TDDFT, stability and SOSCF case, Cartesian
+   and spherical, since those cover the changed code. A partial bitwise
+   output comparison against the `328ec560` binaries showed differences
+   only in timing columns and timestamps among the lines it printed; it was
+   not rerun with a corrected filter. Add the skin
    lifts and the Cartesian pair-density rebuild (class 3). Every lift is the
    identity in Cartesian mode, so all MP2/UMP2 gradient cases must be bitwise
    unchanged:
@@ -232,9 +267,33 @@ FD. This is what "Not in this scope" below refers to.
    - `water_rmp2_spherical_geomopt_rejected` becomes a geomopt case (PySCF
      `geometric_solver` E_opt, `geomopt_grad_tol` as in the PCM gates).
 
-   Frequency stays refused for MP2 in every basis.
-5. **RI-MP2 gradient in spherical.** Separate, after steps 1–4: the RI
-   3-centre factors have their own basis convention.
+   Frequency stays refused for MP2 until step 5.
+5. **MP2 frequencies (Cartesian and spherical).** Two loops each compute
+   "SCF and gradient at this geometry", and only the geomopt one handles
+   MP2. The steps:
+   - **One shared routine.** Factor the per-geometry SCF → MP2 → gradient
+     step out of `geomopt.cpp` into one routine that both loops call, and use
+     it in `hessian.cpp`. Do not add a second MP2 branch to the Hessian.
+   - **Lift the refusal.** Remove the correlated-frequency refusal in
+     `hf_driver.cpp`. That enables `frequency`, `geomoptfreq` and
+     `imaginaryfollow`.
+   - **Gate.** RMP2 and UMP2 frequencies against PySCF: a finite-difference
+     Hessian of PySCF's analytic `mp2.Gradients`, as the ROHF frequency gate
+     does. Use one Cartesian and one spherical case.
+   - **Convert the rejection cases.** `water_ri_rmp2_freq_rejected` and
+     `water_radical_cation_ump2_freq_rejected` become positive cases. Keep
+     the RI one refused if RI-MP2 frequencies are not validated; that case
+     pins the guard order.
+
+   Cost is 6N MP2 gradients (each with its own SCF and Z-vector solve) for N
+   atoms, so this is for small molecules. In spherical mode this needs steps
+   1–3 first; the Hessian loop already rebuilds the spherical state at every
+   displaced geometry (`rebuild_basis_dependent_state`).
+RI-MP2 gradients in spherical are **not in this scope**. The RI 3-centre
+derivative tensors are Cartesian-only (`compute_3c_eri_deriv` refuses a
+spherical basis). The work moves to the combined RI item in Open Work
+(priority 9). Until then, step 2 keeps `mp2_use_ri` + spherical + gradient
+refused by name at the driver gate.
 
 ## Not in this scope
 

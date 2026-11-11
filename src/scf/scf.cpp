@@ -356,6 +356,40 @@ HartreeFock::SCF::IterationMetrics HartreeFock::SCF::unrestricted_iteration_metr
     return metrics;
 }
 
+std::expected<Eigen::MatrixXd, std::string> HartreeFock::SCF::two_electron_fock(
+    const HartreeFock::Calculator &calc,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &density)
+{
+    auto D = HartreeFock::BasisFunctions::to_cartesian(calc._shells, density);
+    if (!D)
+        return std::unexpected(D.error());
+    return HartreeFock::BasisFunctions::to_working(
+        calc._shells, _compute_2e_fock(shell_pairs, *D, calc._shells.nbasis(), calc._integral._engine,
+                                       HartreeFock::ERIKernel::Coulomb, 0.0, calc._integral._tol_eri,
+                                       integral_ops(calc)));
+}
+
+std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string> HartreeFock::SCF::two_electron_fock_uhf(
+    const HartreeFock::Calculator &calc,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &density_alpha,
+    const Eigen::MatrixXd &density_beta)
+{
+    auto Da = HartreeFock::BasisFunctions::to_cartesian(calc._shells, density_alpha);
+    auto Db = HartreeFock::BasisFunctions::to_cartesian(calc._shells, density_beta);
+    if (!Da || !Db)
+        return std::unexpected(!Da ? Da.error() : Db.error());
+    auto [fa, fb] = _compute_2e_fock_uhf(shell_pairs, *Da, *Db, calc._shells.nbasis(), calc._integral._engine,
+                                         HartreeFock::ERIKernel::Coulomb, 0.0, calc._integral._tol_eri,
+                                         integral_ops(calc));
+    auto Ga = HartreeFock::BasisFunctions::to_working(calc._shells, fa);
+    auto Gb = HartreeFock::BasisFunctions::to_working(calc._shells, fb);
+    if (!Ga || !Gb)
+        return std::unexpected(!Ga ? Ga.error() : Gb.error());
+    return std::pair{std::move(*Ga), std::move(*Gb)};
+}
+
 bool HartreeFock::SCF::is_converged(
     const HartreeFock::OptionsSCF &scf_options,
     const IterationMetrics &metrics,

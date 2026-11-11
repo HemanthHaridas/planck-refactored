@@ -10,11 +10,7 @@ namespace DFT::Driver
     {
         bool spherical(const HartreeFock::Basis *basis) { return basis && basis->_spherical; }
 
-        // MO coefficients working -> Cartesian: C^T C_mo (see the header).
-        Eigen::MatrixXd cartesian_mos(const HartreeFock::Basis &basis, const Eigen::MatrixXd &C_mo)
-        {
-            return basis._cart_to_sph.transpose() * C_mo;
-        }
+        using HartreeFock::BasisFunctions::mos_to_cartesian;
 
         std::expected<void, std::string> check_mo_rows(const HartreeFock::Basis &basis,
                                                        std::initializer_list<const Eigen::MatrixXd *> mos)
@@ -38,8 +34,8 @@ namespace DFT::Driver
             if (!density)
                 return std::unexpected(density.error());
             in.density = std::move(*density);
-            in.C_occ = cartesian_mos(*in.basis, in.C_occ);
-            in.C_virt = cartesian_mos(*in.basis, in.C_virt);
+            in.C_occ = mos_to_cartesian(*in.basis, in.C_occ);
+            in.C_virt = mos_to_cartesian(*in.basis, in.C_virt);
         }
         const int nocc = static_cast<int>(in.C_occ.cols());
         const int nvirt = static_cast<int>(in.C_virt.cols());
@@ -93,7 +89,7 @@ namespace DFT::Driver
             in.alpha_density = std::move(*pa);
             in.beta_density = std::move(*pb);
             for (Eigen::MatrixXd *C : {&in.Ca_occ, &in.Ca_virt, &in.Cb_occ, &in.Cb_virt})
-                *C = cartesian_mos(*in.basis, *C);
+                *C = mos_to_cartesian(*in.basis, *C);
         }
         auto kernel = prepare_uks_xc_kernel(*in.molecular_grid, *in.ao_grid, in.alpha_density, in.beta_density,
                                             *in.x_functional, *in.c_functional);

@@ -56,6 +56,12 @@ teaching code) reorders it.
 8. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
 9. **RI-JK validated and usable for routine DFT/HF** (§5, RI-JK and BLAS).
    Nothing has landed and RI-JK has no regression case. Scope: `docs/RI_JK_ROUTINE_SCOPE.md`.
+   Take up the other RI work in the same item:
+   - **Spherical RI-MP2 gradients.** The RI 3c/2c derivative tensors are
+     Cartesian-only, and the spherical-gate refusal stays until then
+     (`docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`).
+   - **RI-DH** (O9 in §2).
+   - **G6**, the RI 2c/3c derivative profile (§5).
 
 **Expected, with a workaround.**
 
@@ -183,18 +189,25 @@ further post-HF ghost-atom checks.
   support only a closed inactive core, and the parity guard rejects a
   spin-polarized one. ROHF is also outside full-symmetry direct SCF.
 - **Spherical MP2/UMP2 gradients** (and geomopt; MP2 frequencies are refused
-  in every basis). Audited 2026-11-11 (`docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`):
-  - **Orbital half.** The Lagrangian stays in the working basis.
-  - **Size and frozen-check sites.** Five sites use the Cartesian
-    `nbasis()`; the frozen check would refuse every spherical RMP2
-    gradient.
-  - **Fock builds.** The two veff builders need the lift-build-project
-    pattern, which already exists in three copies; make it one helper.
-  - **Kernel inputs.** The 1e, overlap and Γ inputs are lifted once, and the
-    pair density is rebuilt with `Tᵀ C`.
+  in every basis). Audited 2026-11-11 (`docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`).
+  Step 1, the Cartesian-bitwise refactor, landed 2026-11-11:
+  - **Shared helpers.** One working-basis Fock helper,
+    `SCF::two_electron_fock{,_uhf}`, and one coefficient lift,
+    `BasisFunctions::mos_to_cartesian`.
+  - **`mp2_gradient.cpp`.** It sizes with the working basis and lifts every
+    kernel input once. The pair densities are rebuilt from Tᵀ C in spherical
+    mode.
 
-  The response code is already spherical-correct. Still refused by
-  `water_rmp2_spherical_{gradient,geomopt}_rejected`.
+  Left:
+  - steps 2–3, the RMP2 and UMP2 spherical gates against PySCF `cart=False`;
+  - step 4, converting `water_rmp2_spherical_{gradient,geomopt}_rejected`,
+    which are still refused;
+  - step 5, MP2 frequencies in either basis. The Hessian loop picks the
+    gradient by SCF type only and never calls the MP2 gradient, so they are
+    refused. The fix is to share geomopt's per-geometry SCF → MP2 → gradient
+    routine with the Hessian loop.
+
+  Spherical RI-MP2 gradients belong to the RI item (priority 9).
 - **Frozen-core MP2 gradients** (RMP2 and UMP2) are refused by name. The
   builders lack the frozen–active occupied and virtual relaxation blocks and
   see only the active orbitals; the scope doc says why and what to add

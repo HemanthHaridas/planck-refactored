@@ -1357,8 +1357,8 @@ namespace DFT::Driver
             // to_cartesian; MO counts come from the coefficient columns.
             const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator._shells.nbasis());
             const bool spherical = calculator._shells._spherical;
-            const auto cartesian_mos = [&](const Eigen::MatrixXd &C) -> Eigen::MatrixXd
-            { return spherical ? Eigen::MatrixXd(calculator._shells._cart_to_sph.transpose() * C) : C; };
+            const auto cartesian_mos = [&](const Eigen::MatrixXd &C)
+            { return HartreeFock::BasisFunctions::mos_to_cartesian(calculator._shells, C); };
             auto P_alpha = HartreeFock::BasisFunctions::to_cartesian(calculator._shells,
                                                                      calculator._info._scf.alpha.density);
             if (!P_alpha)
