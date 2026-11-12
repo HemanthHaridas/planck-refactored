@@ -460,7 +460,11 @@ historical design context, but they are no longer the source of truth for
   energy. Step 1 added `def2-universal-JKFIT` and `cc-pVTZ-JKFIT` (the first
   contracted auxiliary sets), also equal to PySCF on all four: fitting error
   ≤ 8.9e-5 / 5.9e-5 Eh. Gated by `*_rijk_jkfit_631gd`. No separate
-  `scf_ri_basis` keyword: RI-JK and RI-MP2 share one fitting cache.
+  `scf_ri_basis` keyword: RI-JK and RI-MP2 share one fitting cache. Step 2
+  lifted the spherical refusal: the fitted factors were already in the
+  working basis, so no code was needed. Spherical RI-JK equals PySCF on all
+  four molecules once PySCF also fits with a Cartesian aux basis (it makes
+  the aux spherical by default); `*_rijk_spherical_631gd`.
 - **HF frequency SCFs warm-start from the reference density (2026-11-12,
   `docs/ANALYTIC_HESSIAN_SCOPE.md` lever 1).** 19–20 → 14 iterations per
   displaced SCF, but only 1.04× on C1 cyclohexane/6-31G (SCF is 14 % of the

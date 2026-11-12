@@ -10,9 +10,11 @@
 // lives in its own storage, separate from the orbital `HartreeFock::Basis`,
 // and is never mixed into the orbital shell list or AO function index space.
 //
-// Conventionally, aux basis sets stay Cartesian (PySCF default). The mixed
-// Cartesian-aux × spherical-orbital case is handled inside the 3-center
-// integral routine, not here.
+// Aux basis sets stay Cartesian, even with a spherical orbital basis. PySCF
+// (2.15) does NOT: its auxmol follows mol.cart, a different fit, so spherical
+// references must use a Cartesian aux explicitly
+// (tests/pyscf/ri_jk_references.py cart_aux_jk). The mixed Cartesian-aux ×
+// spherical-orbital case is handled inside the 3-center integral routine.
 
 #include <expected>
 #include <string>

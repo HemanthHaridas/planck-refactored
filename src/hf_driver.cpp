@@ -622,18 +622,16 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     }
 
     // ── RI-JK SCF boundary ───────────────────────────────────────────────────────
-    // The RI J/K builders work on a plain AO density in the working basis. They
-    // have no spherical back-projection, no symmetry-orbit folding, and ROHF's
-    // Roothaan effective Fock is assembled after the (Ga, Gb) build that RI-JK
-    // replaces -- none of which is wired. Reject rather than silently returning a
-    // dense (or wrong) answer; each rejection names the specific reason.
+    // The RI J/K builders take a working-basis density (spherical included: they
+    // lift to Cartesian and project back). They have no symmetry-orbit folding,
+    // and ROHF's Roothaan effective Fock is assembled after the (Ga, Gb) build
+    // that RI-JK replaces -- neither is wired. Reject rather than silently
+    // returning a dense (or wrong) answer; each rejection names the reason.
     if (calculator._scf._ri_jk)
     {
         const char *reason =
             (calculator._scf._scf == HartreeFock::SCFType::ROHF)
                 ? "ROHF (the Roothaan effective Fock is not wired through the RI builders)"
-            : calculator._shells._spherical
-                ? "the spherical basis (the RI J/K builders have no spherical path)"
             : calculator._use_full_symmetry
                 ? "full point-group symmetry (RI J/K does not fold symmetry orbits)"
                 : nullptr;

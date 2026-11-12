@@ -1,6 +1,6 @@
 # What does RI-JK need before it is usable for routine HF and DFT?
 
-Scope, opened 2026-11-10. Steps 0–1 are done (2026-11-12; no separate keyword). It expires when the work
+Scope, opened 2026-11-10. Steps 0–2 are done (2026-11-12; no separate keyword). It expires when the work
 lands; rewrite it then as the answer. Status lives in
 `vault/Status/Open Work.md` (priority 6). The speed half (pair-factor cache,
 BLAS, RI-K from C_occ) is scoped in `docs/ERI_FOCK_BLAS_SCOPE.md`; this doc
@@ -9,11 +9,10 @@ is about correctness and reach.
 ## The state
 
 `scf_ri_jk` (`src/scf/scf.cpp`, `src/hf_driver.cpp`) replaces the J/K build
-in the HF SCF with RI. It is refused for ROHF, the spherical basis and full
-point-group symmetry (named rejections in `hf_driver.cpp`). It reuses the
-MP2 fitting basis (`mp2_ri_basis`); the only fitting sets in `basis-sets/`
-are `cc-pVDZ-RIFIT`, `cc-pVTZ-RIFIT` and `toy-ri`. `planck-dft` has no RI-JK
-at all.
+in the HF SCF with RI. It is refused for ROHF and full point-group symmetry
+(named rejections in `hf_driver.cpp`); the spherical refusal was lifted in
+step 2. It reuses the MP2 fitting basis (`mp2_ri_basis`). `planck-dft` has
+no RI-JK at all.
 
 So RI-JK today is Cartesian HF with the wrong kind of fitting basis
 (RIFIT sets are fitted for MP2 pair densities, not for the Coulomb/exchange
@@ -77,13 +76,29 @@ let them silently disagree"). A JKFIT set already works through
 RI-JK *and* RI-MP2 each with its own set, and that needs a second cache,
 not just a field. Decide that when such a run is wanted.
 
-### 2. Spherical
+### 2. Spherical — done 2026-11-12, by lifting the refusal
 
-Every standard basis is spherical. Two choices: run the RI builders on the
-lifted Cartesian density and project the result with `to_working`, as
-spherical PCM does (`evaluate_pcm_reaction_field`); or build spherical 3c
-integrals. Do the first; it is one mechanism and already proven for PCM.
-Gate against PySCF `cart=False`.
+Neither planned route was needed. `compute_3c_eri` already transforms the
+orbital indices of (μν|Q) to the spherical working basis
+(`unpack_transform_repack_3c`), so the fitted factors, `build_ri_j`/`build_ri_k`
+and both Fock builders already take and return working-basis matrices. The
+refusal in `hf_driver.cpp` was the only obstacle. (A lift inside the Fock
+builders was written first and reverted before it ran: it would have
+applied the Cartesian→spherical transform twice.)
+
+The reference needed care, not the code. Planck's auxiliary basis is always
+Cartesian; PySCF 2.15 makes it spherical for a `cart=False` molecule, a
+different fit. `tests/pyscf/ri_jk_references.py` therefore builds the 3c
+integrals over Cartesian orbitals and Cartesian aux and transforms the
+orbital indices with `cart2sph_coeff` (`cart_aux_jk`). With that, all four
+gate molecules equal Planck to every printed digit (def2-universal-JKFIT,
+spherical 6-31G*; `*_rijk_spherical_631gd`, core). Fitting errors match the
+Cartesian ones: 1.9e-5 to 9.0e-5 Eh.
+
+Found on the way: spherical water⁺ UHF from `hcore` lands on a saddle
+(λ_min −0.072, RI and exact alike, 0.072 Eh up). That input uses
+`guess sad`. Not decided: whether Planck should offer a spherical aux basis
+(fewer functions, and what PySCF does by default).
 
 ### 3. `planck-dft`
 
