@@ -10,11 +10,11 @@
 // lives in its own storage, separate from the orbital `HartreeFock::Basis`,
 // and is never mixed into the orbital shell list or AO function index space.
 //
-// Aux basis sets stay Cartesian, even with a spherical orbital basis. PySCF
-// (2.15) does NOT: its auxmol follows mol.cart, a different fit, so spherical
-// references must use a Cartesian aux explicitly
-// (tests/pyscf/ri_jk_references.py cart_aux_jk). The mixed Cartesian-aux ×
-// spherical-orbital case is handled inside the 3-center integral routine.
+// Aux shells are loaded Cartesian. The FITTED aux functions follow the orbital
+// basis, as in PySCF (its auxmol copies mol.cart): with a spherical orbital
+// basis, AuxBasis::cart_to_sph maps the Cartesian aux to pure harmonics
+// (docs/RI_SPHERICAL_AUX.md). The orbital-index transform of the
+// 3-center tensor is handled inside the 3-center integral routine.
 
 #include <expected>
 #include <string>
@@ -32,8 +32,17 @@ namespace HartreeFock
     {
         std::vector<Shell> shells;       // aux shells, in input order
         std::vector<std::size_t> offsets; // offsets[K] = first aux function of shell K
-        std::size_t nfunctions = 0;       // total aux function count (Σ (2L+1) or Cartesian count)
-        bool cartesian = true;            // aux functions are Cartesian by default
+        std::size_t nfunctions = 0;       // Cartesian aux function count (integral loops, offsets)
+        bool cartesian = true;            // shells are always loaded Cartesian
+        // Block-diagonal [n_sph_aux × nfunctions] map to the fitted (spherical)
+        // aux functions, set when the orbital basis is spherical; empty means
+        // the Cartesian functions are fitted directly. Applied once to the
+        // metric and the 3-center tensor (ri_eri.cpp).
+        Eigen::MatrixXd cart_to_sph;
+        std::size_t nfit() const
+        {
+            return cart_to_sph.size() ? static_cast<std::size_t>(cart_to_sph.rows()) : nfunctions;
+        }
     };
 
     namespace BasisFunctions

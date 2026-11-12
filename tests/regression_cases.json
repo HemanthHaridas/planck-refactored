@@ -410,6 +410,36 @@
    ]
   },
   {
+   "id": "water_rimp2_spherical_ccpvdz",
+   "input": "tests/inputs/regression/ri/water_rimp2_spherical_ccpvdz.hfinp",
+   "_note": "Spherical RI-MP2 (docs/RI_SPHERICAL_AUX.md): the fitted aux follows basis_type, so this equals PySCF DF-MP2 on a cart=False molecule (spherical aux) with the same GBS-read cc-pVDZ / cc-pVDZ-RIFIT: RHF -76.0228689456 to every digit, MP2 -76.2230990336 (PySCF) vs -76.2230990337. A Cartesian aux moves it by ~1e-4.",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged after",
+    "Total MP2 Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0228689456,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "mp2_total_energy",
+     "expected": -76.2230990337,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "h2_fci_rimp2_ccpvdz",
    "input": "tests/inputs/regression/ri/h2_fci_rimp2_ccpvdz.hfinp",
    "tags": [
@@ -688,7 +718,7 @@
   {
    "id": "water_rhf_rijk_spherical_631gd",
    "input": "tests/inputs/regression/ri/water_rhf_rijk_spherical_631gd.hfinp",
-   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE_SCOPE.md step 2), def2-universal-JKFIT. Planck's aux basis is Cartesian; the reference fits with the same Cartesian aux and transforms the orbital indices (tests/pyscf/ri_jk_references.py cart_aux_jk). Equal to every printed digit. Exact spherical energy -76.0052429766; fitting error 2.68e-05 Eh.",
+   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE_SCOPE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -76.0052429766; fitting error 2.10e-05 Eh.",
    "tags": [
     "core",
     "extended",
@@ -703,7 +733,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -76.005216173,
+     "expected": -76.0052219694,
      "atol": 1e-09
     }
    ]
@@ -711,7 +741,7 @@
   {
    "id": "water_cation_uhf_rijk_spherical_631gd",
    "input": "tests/inputs/regression/ri/water_cation_uhf_rijk_spherical_631gd.hfinp",
-   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE_SCOPE.md step 2), def2-universal-JKFIT. Planck's aux basis is Cartesian; the reference fits with the same Cartesian aux and transforms the orbital indices (tests/pyscf/ri_jk_references.py cart_aux_jk). Equal to every printed digit. Exact spherical energy -75.6016116469; fitting error 1.95e-05 Eh.",
+   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE_SCOPE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -75.6016116469; fitting error 1.63e-05 Eh.",
    "tags": [
     "core",
     "extended",
@@ -726,7 +756,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -75.6015921649,
+     "expected": -75.6015953457,
      "atol": 1e-09
     }
    ]
@@ -734,7 +764,7 @@
   {
    "id": "h2o2_rhf_rijk_spherical_631gd",
    "input": "tests/inputs/regression/ri/h2o2_rhf_rijk_spherical_631gd.hfinp",
-   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE_SCOPE.md step 2), def2-universal-JKFIT. Planck's aux basis is Cartesian; the reference fits with the same Cartesian aux and transforms the orbital indices (tests/pyscf/ri_jk_references.py cart_aux_jk). Equal to every printed digit. Exact spherical energy -150.7516121007; fitting error 8.95e-05 Eh.",
+   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE_SCOPE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -150.7516121007; fitting error 9.31e-05 Eh.",
    "tags": [
     "core",
     "extended",
@@ -749,7 +779,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -150.7515225935,
+     "expected": -150.7515189627,
      "atol": 1e-09
     }
    ]
@@ -757,7 +787,7 @@
   {
    "id": "h2o2_cation_uhf_rijk_spherical_631gd",
    "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_spherical_631gd.hfinp",
-   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE_SCOPE.md step 2), def2-universal-JKFIT. Planck's aux basis is Cartesian; the reference fits with the same Cartesian aux and transforms the orbital indices (tests/pyscf/ri_jk_references.py cart_aux_jk). Equal to every printed digit. Exact spherical energy -150.3668036892; fitting error 8.19e-05 Eh.",
+   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE_SCOPE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -150.3668036892; fitting error 8.81e-05 Eh.",
    "tags": [
     "core",
     "extended",
@@ -772,7 +802,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -150.3667217811,
+     "expected": -150.3667155884,
      "atol": 1e-09
     }
    ]

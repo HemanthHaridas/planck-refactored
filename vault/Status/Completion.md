@@ -462,9 +462,13 @@ historical design context, but they are no longer the source of truth for
   ≤ 8.9e-5 / 5.9e-5 Eh. Gated by `*_rijk_jkfit_631gd`. No separate
   `scf_ri_basis` keyword: RI-JK and RI-MP2 share one fitting cache. Step 2
   lifted the spherical refusal: the fitted factors were already in the
-  working basis, so no code was needed. Spherical RI-JK equals PySCF on all
-  four molecules once PySCF also fits with a Cartesian aux basis (it makes
-  the aux spherical by default); `*_rijk_spherical_631gd`.
+  working basis, so no code was needed; `*_rijk_spherical_631gd`.
+  Then the fitted aux was made to follow `basis_type`, as in PySCF
+  (`docs/RI_SPHERICAL_AUX.md`): a per-shell transform on the metric and the
+  3-center tensor, 14–20 % fewer fitted functions, and spherical RI-JK and
+  RI-MP2 equal plain PySCF density fitting to every printed digit (before,
+  a Cartesian aux put them 1e-5..2e-4 Eh off every other code). Cartesian
+  RI results unchanged.
 - **HF frequency SCFs warm-start from the reference density (2026-11-12,
   `docs/ANALYTIC_HESSIAN_SCOPE.md` lever 1).** 19–20 → 14 iterations per
   displaced SCF, but only 1.04× on C1 cyclohexane/6-31G (SCF is 14 % of the

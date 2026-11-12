@@ -9,6 +9,7 @@
 
 #include "base/tables.h"
 #include "basis/basis.h"        // BasisFunctions::_cartesian_shell_order
+#include "basis/spherical.h"    // BasisFunctions::cart_to_sph_block (spherical aux)
 #include "lookup/elements.h"
 #include "lookup/boys.h"        // HartreeFock::Lookup::boys
 #include "integrals/shellpair.h"
@@ -738,6 +739,8 @@ namespace HartreeFock::Correlation::RI
             }
         }
 
+        if (aux.cart_to_sph.size())
+            return Eigen::MatrixXd(aux.cart_to_sph * V * aux.cart_to_sph.transpose());
         return V;
     }
 
@@ -846,6 +849,29 @@ namespace HartreeFock::Correlation::RI
                 file_name, calculator._molecule);
             if (!aux_res)
                 return std::unexpected("ensure_ri_metric_ready: " + aux_res.error());
+            // The fitted aux follows the orbital basis (docs/RI_SPHERICAL_AUX.md).
+            // The fit is invariant to the row scale of this map, so the bare
+            // per-shell blocks serve; only their span (pure harmonics) matters.
+            if (calculator._shells._spherical)
+            {
+                std::size_t n_sph = 0;
+                for (const auto &sh : aux_res->shells)
+                    n_sph += 2 * static_cast<std::size_t>(sh._shell) + 1;
+                Eigen::MatrixXd T = Eigen::MatrixXd::Zero(
+                    static_cast<Eigen::Index>(n_sph), static_cast<Eigen::Index>(aux_res->nfunctions));
+                Eigen::Index row = 0;
+                for (std::size_t K = 0; K < aux_res->shells.size(); ++K)
+                {
+                    const int L = static_cast<int>(aux_res->shells[K]._shell);
+                    auto block = BasisFunctions::cart_to_sph_block(L);
+                    if (!block)
+                        return std::unexpected("ensure_ri_metric_ready: aux shell: " + block.error());
+                    T.block(row, static_cast<Eigen::Index>(aux_res->offsets[K]),
+                            block->rows(), block->cols()) = *block;
+                    row += block->rows();
+                }
+                aux_res->cart_to_sph = std::move(T);
+            }
             calculator._ri_aux_basis =
                 std::make_shared<HartreeFock::AuxBasis>(std::move(*aux_res));
         }
@@ -928,11 +954,13 @@ namespace HartreeFock::Correlation::RI
             }
         }
 
+        const Eigen::MatrixXd &T_aux = calculator._ri_aux_basis->cart_to_sph;
         if (!calculator._shells._spherical)
-            return j3c_cart;
+            return T_aux.size() ? Eigen::MatrixXd(j3c_cart * T_aux.transpose()) : j3c_cart;
         if (calculator._shells._cart_to_sph.size() == 0)
             return std::unexpected("compute_3c_eri: spherical basis requested but cart_to_sph is empty.");
-        return unpack_transform_repack_3c(j3c_cart, calculator._shells._cart_to_sph);
+        Eigen::MatrixXd j3c = unpack_transform_repack_3c(j3c_cart, calculator._shells._cart_to_sph);
+        return T_aux.size() ? Eigen::MatrixXd(j3c * T_aux.transpose()) : j3c;
     }
 
     std::array<double, 9> compute_3c_deriv_elem(
@@ -1186,6 +1214,9 @@ namespace HartreeFock::Correlation::RI
 
         const std::size_t natoms = calculator._molecule.natoms;
         const HartreeFock::AuxBasis &aux = *calculator._ri_aux_basis;
+        if (aux.cart_to_sph.size())
+            return std::unexpected("compute_2c_eri_deriv: spherical auxiliary basis not supported "
+                                   "(it follows a spherical orbital basis; Cartesian only).");
         const std::size_t naux = aux.nfunctions;
 
         std::vector<Eigen::MatrixXd> dV(
@@ -1402,7 +1433,7 @@ namespace HartreeFock::Correlation::RI
 
         const std::size_t n_work = calculator.working_nbasis();
         const std::size_t npair = n_work * (n_work + 1) / 2;
-        const std::size_t naux = calculator._ri_aux_basis ? calculator._ri_aux_basis->nfunctions : 0;
+        const std::size_t naux = calculator._ri_aux_basis ? calculator._ri_aux_basis->nfit() : 0;
         if (calculator._ri_j3c.rows() == static_cast<Eigen::Index>(npair) &&
             calculator._ri_j3c.cols() == static_cast<Eigen::Index>(naux))
             return {};

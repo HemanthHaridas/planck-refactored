@@ -29,10 +29,10 @@ namespace HartreeFock
         //                            dx2y2=m+2, dxy=m−2).
         //
         // This is the PRODUCTION entry point. For L = 0…5 it returns hand-verified
-        // matrices that have shipped with the symmetry module. L ≥ 6 returns an error
-        // for now (no input path reaches it — the GBS parser caps at H/L=5). The
-        // closed-form recurrence in spherical_recurrence.h is the independent oracle
-        // that validates these matrices; see tests/spherical_transform.cpp.
+        // matrices that have shipped with the symmetry module; L = 6 returns the
+        // closed-form recurrence (spherical_recurrence.h), which is also the
+        // independent oracle that validates L ≤ 5; see tests/spherical_transform.cpp.
+        // Orbital i shells (cc-pV6Z) and the def2-universal-JKFIT aux reach L = 6.
         std::expected<Eigen::MatrixXd, std::string> cart_to_sph_block(int L);
 
         // ── Whole-basis Cartesian → spherical transform C ─────────────────────────

@@ -1,16 +1,41 @@
 """Cartesian vs spherical auxiliary basis with a spherical orbital basis
-(docs/RI_SPHERICAL_AUX_SCOPE.md): aux function counts and RHF fitting error
+(docs/RI_SPHERICAL_AUX.md): aux function counts and RHF fitting error
 for each, against the exact energy. Bases read from Planck's GBS files.
   tests/pyscf/.venv/bin/python tests/pyscf/ri_aux_cart_vs_sph.py
 """
 import pathlib
-import sys
 
-from pyscf import gto, scf
+import numpy as np
+from pyscf import df, gto, scf
 from pyscf.gto.basis import parse_gaussian
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from ri_jk_references import ROOT, cart_aux_jk  # noqa: E402
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
+def cart_aux_jk(mol, aux_basis):
+    """get_jk for a spherical mol, fitted with a Cartesian auxiliary basis."""
+    molc = mol.copy()
+    molc.cart = True
+    molc.build()
+    auxmol = molc.copy()
+    auxmol.basis = aux_basis
+    auxmol.build()
+    assert molc.cart and auxmol.cart
+    naux, nc, ns = auxmol.nao, molc.nao, mol.nao
+    j3c = df.incore.aux_e2(molc, auxmol, intor="int3c2e", aosym="s1").reshape(nc, nc, naux)
+    c = molc.cart2sph_coeff()                                   # (nc, ns)
+    j3c = np.einsum("pi,pqQ,qj->ijQ", c, j3c, c, optimize=True).reshape(ns * ns, naux)
+    L = np.linalg.cholesky(auxmol.intor("int2c2e"))
+    B = np.linalg.solve(L, j3c.T)                               # (naux, ns*ns)
+    Bq = B.reshape(naux, ns, ns)
+
+    def get_jk(mol_, dm, hermi=1, with_j=True, with_k=True, omega=None):
+        dms = np.asarray(dm).reshape(-1, ns, ns)
+        vj = np.array([((B @ d.ravel()) @ B).reshape(ns, ns) for d in dms])
+        vk = np.array([np.einsum("Qij,jk,Qlk->il", Bq, d, Bq, optimize=True) for d in dms])
+        return vj.reshape(np.shape(dm)), vk.reshape(np.shape(dm))
+    return get_jk
+
 
 MOLS = {
     "water": "O 0 0 0\nH 0.758602 0 0.504284\nH -0.758602 0 0.504284",

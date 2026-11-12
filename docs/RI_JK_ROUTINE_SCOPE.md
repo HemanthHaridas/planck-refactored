@@ -1,6 +1,7 @@
 # What does RI-JK need before it is usable for routine HF and DFT?
 
-Scope, opened 2026-11-10. Steps 0–2 are done (2026-11-12; no separate keyword). It expires when the work
+Scope, opened 2026-11-10. Steps 0–2 are done (2026-11-12); steps 3–8 are
+scoped below. It expires when the work
 lands; rewrite it then as the answer. Status lives in
 `vault/Status/Open Work.md` (priority 6). The speed half (pair-factor cache,
 BLAS, RI-K from C_occ) is scoped in `docs/ERI_FOCK_BLAS_SCOPE.md`; this doc
@@ -9,14 +10,11 @@ is about correctness and reach.
 ## The state
 
 `scf_ri_jk` (`src/scf/scf.cpp`, `src/hf_driver.cpp`) replaces the J/K build
-in the HF SCF with RI. It is refused for ROHF and full point-group symmetry
-(named rejections in `hf_driver.cpp`); the spherical refusal was lifted in
-step 2. It reuses the MP2 fitting basis (`mp2_ri_basis`). `planck-dft` has
-no RI-JK at all.
-
-So RI-JK today is Cartesian HF with the wrong kind of fitting basis
-(RIFIT sets are fitted for MP2 pair densities, not for the Coulomb/exchange
-of the SCF density). Since step 0 it is at least correct against PySCF.
+in the RHF/UHF SCF with RI, Cartesian or spherical, with any fitting set
+given as `mp2_ri_basis` (JKFIT sets since step 1). It is refused for ROHF and
+full point-group symmetry. It equals PySCF density fitting to every printed
+digit (steps 0–2). `planck-dft` has no RI-JK at all, and every consumer
+outside the SCF loop still uses exact integrals (see Remaining work).
 
 ## Steps
 
@@ -86,36 +84,127 @@ refusal in `hf_driver.cpp` was the only obstacle. (A lift inside the Fock
 builders was written first and reverted before it ran: it would have
 applied the Cartesian→spherical transform twice.)
 
-The reference needed care, not the code. Planck's auxiliary basis is always
-Cartesian; PySCF 2.15 makes it spherical for a `cart=False` molecule, a
-different fit. `tests/pyscf/ri_jk_references.py` therefore builds the 3c
-integrals over Cartesian orbitals and Cartesian aux and transforms the
-orbital indices with `cart2sph_coeff` (`cart_aux_jk`). With that, all four
-gate molecules equal Planck to every printed digit (def2-universal-JKFIT,
-spherical 6-31G*; `*_rijk_spherical_631gd`, core). Fitting errors match the
-Cartesian ones: 1.9e-5 to 9.0e-5 Eh.
+At first the aux basis was always Cartesian, while PySCF makes it follow
+`mol.cart`, so the gates needed a Cartesian-aux PySCF reference. The same day
+the fitted aux was made to follow `basis_type` (`docs/RI_SPHERICAL_AUX.md`):
+all four gate molecules now equal plain PySCF `density_fit` to every printed
+digit (def2-universal-JKFIT, spherical 6-31G*; `*_rijk_spherical_631gd`,
+core). Fitting errors 1.6e-5 to 9.3e-5 Eh.
 
 Found on the way: spherical water⁺ UHF from `hcore` lands on a saddle
 (λ_min −0.072, RI and exact alike, 0.072 Eh up). That input uses
-`guess sad`. Not decided: whether Planck should offer a spherical aux basis
-(fewer functions, and what PySCF does by default).
+`guess sad`.
 
-### 3. `planck-dft`
+## Remaining work (scoped 2026-11-12)
 
-The KS J and the exact-exchange K for hybrids go through
-`_compute_2e_j_direct` / `_compute_2e_k_direct`. Route them through the RI
-builders under the same flag, keeping the unscaled-K contract (each caller
-applies its own prefactor; see the DFT J/K notes in CLAUDE.md). Gate PBE
-(RI-J only) and B3LYP RKS/UKS against PySCF `density_fit()`.
+Measured before writing: `scf_ri_jk` is checked only by the SCF loops,
+`hf_driver.cpp` and the RI cache (`ri_eri.cpp`). Every other consumer of the
+two-electron operator runs with exact integrals on RI orbitals and says
+nothing. In order of cost, cheapest first.
 
-### 4. Gradients
+### 3. Refuse the inconsistent gradient (now; ~10 lines)
 
-RI-JK SCF with an exact-integral gradient is inconsistent at the fitting
-error (~1e-5 Ha/Bohr). Refuse `scf_ri_jk` + gradient workflows by name until
-an RI-JK gradient exists (the RI 2c/3c derivative integrals exist for
-RI-MP2). The RI-JK gradient is a separate scope.
+`calculation gradient` with `scf_ri_jk` runs today and returns the
+exact-integral gradient at the RI orbitals. Water RHF, def2-universal-JKFIT:
+it misses a central-difference gradient of the RI energy by **9.9e-6
+Ha/Bohr**. That passes the default geometry-optimization threshold (3e-4)
+silently, and with the MP2 RIFIT set (fitting error ~50× larger) it would
+approach it; frequencies inherit it. Refuse `scf_ri_jk` for Gradient,
+GeomOpt, Frequency, GeomOptFrequency and ImaginaryFollow in the existing
+`hf_driver.cpp` gate, naming the reason. Gate: one `*_rijk_gradient_rejected`
+case. Lift when step 7 lands.
+
+### 4. SOSCF and stability (HF): use the RI operator, not the dense tensor
+
+With `scf_ri_jk`, both still build the full AO ERI tensor that RI exists to
+avoid:
+
+- **SOSCF** (`scf_soscf_start`) rebuilds it at **every** SOSCF step
+  (`RHF CPHF : Building AO ERI tensor`, once per step in the log), for the
+  CPHF Hessian action. It converges to the RI energy, because the gradient is
+  RI, but at n⁴ memory and per-step cost.
+- **Stability** (`stability_check`) builds it once and diagonalizes the
+  exact Hessian at the RI orbitals, so λ is off by the fitting error and the
+  memory is n⁴.
+
+The RI response already exists: under `mp2_use_ri`, `uhf_response.cpp`
+builds the response J/K with `build_ri_fock_uhf`. Route the SOSCF Hessian
+action the same way under `scf_ri_jk` (RHF and UHF). For stability, the
+explicit A/B matrices come from MO integrals, so build those from the fitted
+factors (B_ia,Q products, the RI-MP2 pattern) instead of `ensure_eri`. Gate:
+SOSCF and stability on a `*_rijk_*` input log no `Building AO ERI tensor`,
+SOSCF reaches the DIIS energy, and λ_min matches PySCF's stability analysis
+on a `density_fit()` SCF.
+
+Post-HF methods (MP2, CC, CASSCF) on RI-JK orbitals with exact integrals are
+a legitimate combination and stay as they are.
+
+### 5. ROHF (one branch)
+
+The refusal says the Roothaan Fock "is not wired", but `run_rohf` builds the
+same (Ga, Gb) as UHF (`_compute_fock_uhf` / `direct_fock_uhf`,
+`scf.cpp` ~2170) before assembling the effective Fock. Add the same
+`build_ri_fock_uhf` branch and drop the ROHF refusal. Gate: water⁺ ROHF
+against PySCF `ROHF(...).density_fit()`.
+
+### 6. `planck-dft`
+
+The KS J and the hybrid K go through `_compute_2e_j_direct` /
+`_compute_2e_k_direct` (`src/dft/driver.cpp` ~4693–4790). Points the plan
+has to respect:
+
+- **Basis.** KS J, K and V_xc are built in Cartesian from lifted densities
+  and projected to the working basis at the end. The RI builders take and
+  return working-basis matrices (the 3c tensor is already in the working
+  basis), so the RI branch uses the working densities
+  (`calculator._info._scf`) and adds its J/K *after* the projection; it must
+  not be fed the lifted ones.
+- **Prefactors.** Keep the unscaled-K contract: each caller applies its own
+  prefactor (−½c for RKS, −c per spin for UKS); the exchange energy is
+  computed from the same matrices.
+- **Range separation.** The RI 2c/3c integrals are Coulomb-kernel only
+  (`ri_eri.h`). Short-range erf exchange (HSE06, CAM-B3LYP, ωB97X) needs
+  attenuated metric and 3c integrals, the screened-kernel Boys scaling the OS
+  and HGP engines already carry. Refuse range-separated functionals with
+  `scf_ri_jk` by name first; attenuated RI-K is its own step.
+- **Other KS consumers.** `ks_orbital_hessian.cpp` (SOSCF and stability) and
+  the DH response/gradient paths build J/K directly; apply step 4's rule
+  (route through RI). TDDFT builds a dense tensor: refuse with `scf_ri_jk`
+  until a decision on RI response. DH gradients fall under step 3's refusal.
+- **MPI.** The RI builders have no MPI distribution, so under `planck-mpi`
+  every rank does the whole RI build: correct, no speed-up. Record it; do not
+  block on it.
+
+Gates against PySCF `dft.RKS/UKS(...).density_fit()` on Planck's unpruned
+grid convention (as the PCM and DH scripts do): water PBE (RI-J only), water
+and H2O2 B3LYP RKS, water⁺ B3LYP UKS, one spherical; the range-separated
+refusal.
+
+### 7. RI-JK gradient (HF, then KS)
+
+The derivative machinery exists from the RI-MP2 gradient:
+`compute_3c_eri_deriv`, `compute_2c_eri_deriv`, and the contraction
+`build_ri_two_electron_gradient(gamma3, x_proj, dJ, dV)`, which already
+carries the metric-derivative term. What is missing is the SCF three-index
+density γ_{μν,P} for J (D_μν·c_P with c = V⁻¹(P|λσ)D_λσ) and for K (from the
+occupied fitted factors). Cartesian first: `compute_3c_eri_deriv` refuses a
+spherical orbital basis, and the spherical case would lift γ on the orbital
+index and apply T_auxᵀ on the aux index (both contractions are linear). Then
+UHF/ROHF, then the KS J/K terms. Gate: PySCF `df` gradients
+(`mf.density_fit().nuc_grad_method()`) and an FD of the RI energy, as
+measured above; then lift step 3's refusal and add a geomopt case.
+
+### 8. Small and independent
+
+- **Heavy elements.** def2-universal-JKFIT reaches i functions (L = 6) past
+  Ne; nothing gates it. One def2/ECP molecule (HI/def2-SVP) against PySCF.
+- **`scf_ri_basis`.** Still open (step 1): only worth a second fitting cache
+  if a run wants RI-JK and RI-MP2 with different sets.
+
+Recommended order: 3 (correctness, minutes), 5 and 8a (small), 4, 6, 7.
 
 ## Not in this scope
 
-ROHF and full-symmetry RI-JK, COSX/seminumerical exchange, and the
-performance work in `ERI_FOCK_BLAS_SCOPE.md`.
+Full-symmetry RI-JK (symmetry-orbit folding), COSX/seminumerical exchange,
+attenuated (range-separated) RI-K beyond the refusal, and the performance
+work in `ERI_FOCK_BLAS_SCOPE.md`.
