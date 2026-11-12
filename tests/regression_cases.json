@@ -853,6 +853,31 @@
    ]
   },
   {
+   "id": "agcl_rhf_rijk_def2svp_ecp",
+   "input": "tests/inputs/regression/ri/agcl_rhf_rijk_def2svp_ecp.hfinp",
+   "_note": "RI-JK heavy-element gate (docs/RI_JK_ROUTINE_SCOPE.md step 8a): AgCl def2-SVP with the Ag ECP, spherical, def2-universal-JKFIT, whose Ag set has two l=6 shells (383 aux functions). Equal to PySCF density_fit with ECP and both bases read from Planck's GBS to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -605.4799989662; fitting error 4.92e-05 Eh.",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "def2",
+    "ecp",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -605.4799497321,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "water_rhf_rijk_gradient_rejected",
    "input": "tests/inputs/regression/ri/water_rhf_rijk_gradient_rejected.hfinp",
    "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 3). Before the refusal, scf_ri_jk + gradient returned the exact-integral gradient at RI orbitals, 9.9e-6 Ha/Bohr off a central FD of the RI energy (water, def2-universal-JKFIT): inside the geomopt threshold, so silent. Lift when the RI-JK gradient (step 7) lands.",

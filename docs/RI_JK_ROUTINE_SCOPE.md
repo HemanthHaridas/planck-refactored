@@ -23,9 +23,9 @@ to avoid. `planck-dft` has no RI-JK at all.
 | Full point-group symmetry | Refused; out of scope |
 | SOSCF, stability | Run, but build the dense tensor (step 4) |
 | `planck-dft` | Not started (step 6) |
-| Heavy elements (aux reaches L = 6) | Untested (step 8) |
+| Heavy elements, ECPs, aux L = 6 | **Done**, AgCl = PySCF (step 8a) |
 
-Recommended order for what is left: 8a (small), 4, 6, 7.
+Recommended order for what is left: 4, 6, 7.
 
 Scope, opened 2026-11-10. It expires when the work lands; rewrite it then as
 the answer. Status lives in `vault/Status/Open Work.md` (priority 6). The
@@ -211,8 +211,13 @@ step 3; then lift step 3's refusal and add a geomopt case.
 
 ### 8. Small and independent
 
-- **Heavy elements.** def2-universal-JKFIT reaches i functions (L = 6) past
-  Ne; nothing gates it. One def2/ECP molecule (HI/def2-SVP) against PySCF.
+- **Heavy elements — done 2026-11-12.** def2-universal-JKFIT carries i
+  functions (L = 6) for the transition metals and heavier (Zn, Ag, Au, …;
+  iodine stops at h, so HI would not have tested L = 6). AgCl, def2-SVP with
+  the Ag ECP, spherical: two l = 6 aux shells, 383 aux functions; equals
+  PySCF `density_fit` (ECP and bases from Planck's GBS) to every printed
+  digit, −605.4799497321, fitting error 4.9e-5 Eh.
+  `agcl_rhf_rijk_def2svp_ecp`, core. No code changed.
 - **`scf_ri_basis`.** Still open (step 1): only worth a second fitting cache
   if a run wants RI-JK and RI-MP2 with different sets.
 
