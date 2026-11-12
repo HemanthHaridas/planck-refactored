@@ -472,6 +472,8 @@ historical design context, but they are no longer the source of truth for
   and frequency workflows; before, they ran with the exact-integral gradient
   at RI orbitals, 9.9e-6 Ha/Bohr off the RI energy (water, JKFIT), silently
   (`water_rhf_rijk_gradient_rejected`).
+  Step 5: RI-JK ROHF (one branch: ROHF builds the UHF (Ga, Gb)); water⁺
+  equals PySCF ROHF density fitting, Cartesian and spherical.
 - **HF frequency SCFs warm-start from the reference density (2026-11-12,
   `docs/ANALYTIC_HESSIAN_SCOPE.md` lever 1).** 19–20 → 14 iterations per
   displaced SCF, but only 1.04× on C1 cyclohexane/6-31G (SCF is 14 % of the

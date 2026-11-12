@@ -624,10 +624,10 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     // ── RI-JK SCF boundary ───────────────────────────────────────────────────────
     // The RI J/K builders take and return working-basis matrices (the fitted
     // 3-center tensor is already in the working basis, spherical included).
-    // They have no symmetry-orbit folding, and ROHF's Roothaan effective Fock
-    // is assembled after the (Ga, Gb) build that RI-JK replaces -- neither is
-    // wired. No RI-JK gradient exists: the analytic gradient would use exact
-    // integrals at RI orbitals (water/def2-universal-JKFIT: 9.9e-6 Ha/Bohr off
+    // RHF, UHF and ROHF (whose Roothaan Fock is assembled from the same
+    // (Ga, Gb)) are wired. They have no symmetry-orbit folding. No RI-JK
+    // gradient exists: the analytic gradient would use exact integrals at RI
+    // orbitals (water/def2-universal-JKFIT: 9.9e-6 Ha/Bohr off
     // the RI energy's FD, inside the geomopt threshold), so every derivative
     // workflow is refused too (docs/RI_JK_ROUTINE_SCOPE.md steps 3 and 7).
     // Reject rather than silently returning a wrong answer; each names its reason.
@@ -641,9 +641,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             calc == HartreeFock::CalculationType::GeomOptFrequency ||
             calc == HartreeFock::CalculationType::ImaginaryFollow;
         const char *reason =
-            (calculator._scf._scf == HartreeFock::SCFType::ROHF)
-                ? "ROHF (the Roothaan effective Fock is not wired through the RI builders)"
-            : calculator._use_full_symmetry
+            calculator._use_full_symmetry
                 ? "full point-group symmetry (RI J/K does not fold symmetry orbits)"
             : derivative_workflow
                 ? "gradients, geometry optimization or frequencies (there is no RI-JK "
@@ -655,7 +653,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Error, "RI-JK :",
                 std::string("RI-JK SCF (scf_ri_jk) does not support ") + reason +
-                    ". Use an RHF or UHF energy without full symmetry, "
+                    ". Use an RHF, UHF or ROHF energy without full symmetry, "
                     "or disable RI-JK (scf_ri_jk false).");
             return EXIT_FAILURE;
         }

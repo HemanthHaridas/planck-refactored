@@ -2105,8 +2105,18 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
          (calculator._scf._mode == HartreeFock::SCFMode::Auto &&
           nbasis <= static_cast<std::size_t>(calculator._scf._threshold)));
 
+    // RI-JK: prime the fitted cache once (as RHF/UHF). ROHF's two-electron
+    // build is the UHF (Ga, Gb); the Roothaan coupling happens after it.
+    if (calculator._scf._ri_jk)
+    {
+        if (auto ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calculator); !ready)
+            return std::unexpected("RI-JK SCF: " + ready.error());
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
+                                     "RI-JK: density-fitted Fock build (dense ERI tensor skipped)");
+    }
+
     std::vector<double> eri;
-    if (use_conventional)
+    if (use_conventional && !calculator._scf._ri_jk)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
                                      std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
@@ -2165,7 +2175,12 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
         // Cartesian with spherical back-projection/forward-transform per spin channel.
         Eigen::MatrixXd Ga;
         Eigen::MatrixXd Gb;
-        if (use_conventional)
+        if (calculator._scf._ri_jk)
+        {
+            std::tie(Ga, Gb) =
+                HartreeFock::Correlation::RI::build_ri_fock_uhf(calculator, Pa, Pb);
+        }
+        else if (use_conventional)
         {
             std::tie(Ga, Gb) = HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis);
         }

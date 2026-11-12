@@ -40,7 +40,7 @@ def run(path):
                 basis={e: parse_gaussian.load(gbs, e) for e in elements})
     energies = []
     for fitted in (True, False):
-        mf = (scf.RHF if field(text, "scf_type") == "rhf" else scf.UHF)(mol)
+        mf = {"rhf": scf.RHF, "uhf": scf.UHF, "rohf": scf.ROHF}[field(text, "scf_type")](mol)
         aux_basis = {e: parse_gaussian.load(aux, e) for e in elements}
         if fitted:
             mf = mf.density_fit(auxbasis=aux_basis)

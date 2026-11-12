@@ -808,6 +808,51 @@
    ]
   },
   {
+   "id": "water_cation_rohf_rijk_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_rohf_rijk_631gd.hfinp",
+   "_note": "RI-JK ROHF (docs/RI_JK_ROUTINE_SCOPE.md step 5), def2-universal-JKFIT: equal to PySCF ROHF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -75.5989868950; fitting error 1.93e-05 Eh.",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ROHF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.5989675667,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_rohf_rijk_spherical_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_rohf_rijk_spherical_631gd.hfinp",
+   "_note": "RI-JK ROHF (docs/RI_JK_ROUTINE_SCOPE.md step 5), def2-universal-JKFIT: equal to PySCF ROHF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -75.5972480819; fitting error 1.56e-05 Eh.",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ROHF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.5972324349,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "water_rhf_rijk_gradient_rejected",
    "input": "tests/inputs/regression/ri/water_rhf_rijk_gradient_rejected.hfinp",
    "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 3). Before the refusal, scf_ri_jk + gradient returned the exact-integral gradient at RI orbitals, 9.9e-6 Ha/Bohr off a central FD of the RI energy (water, def2-universal-JKFIT): inside the geomopt threshold, so silent. Lift when the RI-JK gradient (step 7) lands.",
