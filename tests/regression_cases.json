@@ -642,6 +642,50 @@
    ]
   },
   {
+   "id": "water_rhf_rijk_jkfit_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_jkfit_631gd.hfinp",
+   "_note": "RI-JK with def2-universal-JKFIT (docs/RI_JK_ROUTINE_SCOPE.md step 1): contracted auxiliary shells, equal to PySCF density_fit with the same GBS-read bases to every printed digit (tests/pyscf/ri_jk_references.py def2-universal-JKFIT). Exact energy -76.0066326441; fitting error 2.67e-05 Eh, against ~1e-3 with cc-pVDZ-RIFIT.",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0066059836,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uhf_rijk_jkfit_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_jkfit_631gd.hfinp",
+   "_note": "RI-JK with def2-universal-JKFIT (docs/RI_JK_ROUTINE_SCOPE.md step 1): contracted auxiliary shells, equal to PySCF density_fit with the same GBS-read bases to every printed digit (tests/pyscf/ri_jk_references.py def2-universal-JKFIT). Exact energy -150.3692659085; fitting error 8.21e-05 Eh, against ~1e-3 with cc-pVDZ-RIFIT.",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.3691838375,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "nh3_rmp2_sto3g",
    "input": "inputs/examples/hf/mp2_validation/val_nh3.hfinp",
    "tags": [

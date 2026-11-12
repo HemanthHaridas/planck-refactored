@@ -4,10 +4,12 @@ PySCF density_fit on each tests/inputs/regression/ri/*_rijk_* input: the
 orbital basis and the auxiliary basis (mp2_ri_basis) both read from Planck's
 GBS files, Cartesian, Planck's CODATA 2018 Bohr. Also prints the exact
 (non-fitted) energy, so the fitting error is on record.
-  tests/pyscf/.venv/bin/python tests/pyscf/ri_jk_references.py
+  tests/pyscf/.venv/bin/python tests/pyscf/ri_jk_references.py [AUX_BASIS]
+AUX_BASIS overrides each input's mp2_ri_basis (e.g. def2-universal-JKFIT).
 """
 import pathlib
 import re
+import sys
 
 from pyscf import gto, scf
 from pyscf.gto.basis import parse_gaussian
@@ -27,7 +29,7 @@ def run(path):
     charge, mult = map(int, coords[1].split())
     elements = {line.split()[0] for line in coords[2:]}
     gbs = str(ROOT / "basis-sets" / field(text, "basis"))
-    aux = str(ROOT / "basis-sets" / field(text, "mp2_ri_basis"))
+    aux = str(ROOT / "basis-sets" / (sys.argv[1] if len(sys.argv) > 1 else field(text, "mp2_ri_basis")))
     mol = gto.M(atom="\n".join(coords[2:]), unit=BOHR_ANGSTROM, cart=True, verbose=0,
                 charge=charge, spin=mult - 1,
                 basis={e: parse_gaussian.load(gbs, e) for e in elements})

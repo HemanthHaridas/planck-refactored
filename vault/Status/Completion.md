@@ -457,7 +457,10 @@ historical design context, but they are no longer the source of truth for
   `density_fit` to every printed digit, with both bases read from Planck's GBS
   files (`tests/pyscf/ri_jk_references.py`); `*_rijk_631gd`, tagged core. No
   code changed. The MP2 fitting set costs 1.0–1.7e-3 Eh against the exact
-  energy, which JKFIT sets (step 1) should cut.
+  energy. Step 1 added `def2-universal-JKFIT` and `cc-pVTZ-JKFIT` (the first
+  contracted auxiliary sets), also equal to PySCF on all four: fitting error
+  ≤ 8.9e-5 / 5.9e-5 Eh. Gated by `*_rijk_jkfit_631gd`. No separate
+  `scf_ri_basis` keyword: RI-JK and RI-MP2 share one fitting cache.
 - **HF frequency SCFs warm-start from the reference density (2026-11-12,
   `docs/ANALYTIC_HESSIAN_SCOPE.md` lever 1).** 19–20 → 14 iterations per
   displaced SCF, but only 1.04× on C1 cyclohexane/6-31G (SCF is 14 % of the

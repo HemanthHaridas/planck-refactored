@@ -48,8 +48,8 @@ teaching code) reorders it.
    frequencies carry grid noise. A decision and a migration, not new code. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
 5. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
 6. **RI-JK validated and usable for routine DFT/HF** (§5, RI-JK and BLAS).
-   Step 0 done (2026-11-12): four HF RI-JK cases equal PySCF density
-   fitting; the MP2 fitting set they use costs ~1e-3 Eh. Next: JKFIT sets.
+   Steps 0–1 done (2026-11-12): HF RI-JK equals PySCF density fitting;
+   JKFIT sets cut the fitting error from ~1e-3 to ≤ 9e-5 Eh. Next: spherical.
    Scope: `docs/RI_JK_ROUTINE_SCOPE.md`.
    Take up the other RI work in the same item:
    - **Spherical RI-MP2 gradients.** The RI 3c/2c derivative tensors are

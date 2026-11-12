@@ -1,6 +1,6 @@
 # What does RI-JK need before it is usable for routine HF and DFT?
 
-Scope, opened 2026-11-10. Step 0 is done (2026-11-12). It expires when the work
+Scope, opened 2026-11-10. Steps 0–1 are done (2026-11-12; no separate keyword). It expires when the work
 lands; rewrite it then as the answer. Status lives in
 `vault/Status/Open Work.md` (priority 6). The speed half (pair-factor cache,
 BLAS, RI-K from C_occ) is scoped in `docs/ERI_FOCK_BLAS_SCOPE.md`; this doc
@@ -45,12 +45,37 @@ UHF instabilities before comparing.
 
 ### 1. JK fitting bases and their own keyword
 
-Add `def2-universal-jkfit` (Weigend 2008, covers H–Rn with def2 ECPs) and
-the cc-pVXZ-JKFIT sets to `basis-sets/`, and a keyword `scf_ri_basis`
-separate from `mp2_ri_basis` (fall back to it for compatibility). Quantify
-the fitting error on the gate cases: RI-JK total energies are expected
-within ~1e-5 Eh/atom of the exact ones with a JKFIT set; record the actual
-number.
+**Sets and measurement done 2026-11-12; the keyword is open.**
+
+`basis-sets/def2-universal-JKFIT` (86 elements, H–Rn) and
+`basis-sets/cc-pVTZ-JKFIT` (16 elements), from the Basis Set Exchange
+(gaussian94). BSE has no cc-pVDZ-JKFIT; cc-pVTZ-JKFIT is the usual fit for
+cc-pVDZ too. These are the first contracted auxiliary sets in the tree
+(RIFIT is uncontracted). Planck equals PySCF `density_fit` with each set on
+all four gate molecules to every printed digit
+(`tests/pyscf/ri_jk_references.py <set>`). Fitting error against the exact
+energy, Eh:
+
+| Case | cc-pVDZ-RIFIT | def2-universal-JKFIT | cc-pVTZ-JKFIT |
+|---|---|---|---|
+| water RHF | −1.00e-3 | +2.67e-5 | +1.52e-5 |
+| water⁺ UHF | −1.03e-3 | +1.95e-5 | +9.31e-6 |
+| H2O2 RHF | −1.56e-3 | +8.94e-5 | +5.89e-5 |
+| H2O2⁺ UHF | −1.69e-3 | +8.21e-5 | +5.54e-5 |
+
+So ≤ 2.2e-5 Eh/atom (def2) and ≤ 1.5e-5 (cc-pVTZ), near the expected
+~1e-5, and 40–60× better than the MP2 set. Gated by
+`{water_rhf,h2o2_cation_uhf}_rijk_jkfit_631gd` (def2-universal-JKFIT). Not
+tested: elements past Ne, where the set reaches i functions (L = 6).
+
+**The keyword `scf_ri_basis` is not added, deliberately.** The RI-JK and
+RI-MP2 consumers share one fitting cache (`_ri_aux_basis`, the 2c metric
+factor, the 3c tensor; `ensure_ri_metric_ready`), and `types.h` records one
+fitting basis per run as a decision ("splitting it into two keywords would
+let them silently disagree"). A JKFIT set already works through
+`mp2_ri_basis`. A separate keyword is only worth it for a run that wants
+RI-JK *and* RI-MP2 each with its own set, and that needs a second cache,
+not just a field. Decide that when such a run is wanted.
 
 ### 2. Spherical
 
