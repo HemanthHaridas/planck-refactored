@@ -1,6 +1,6 @@
 # What does RI-JK need before it is usable for routine HF and DFT?
 
-Scope, opened 2026-11-10. Nothing here is built. It expires when the work
+Scope, opened 2026-11-10. Step 0 is done (2026-11-12). It expires when the work
 lands; rewrite it then as the answer. Status lives in
 `vault/Status/Open Work.md` (priority 6). The speed half (pair-factor cache,
 BLAS, RI-K from C_occ) is scoped in `docs/ERI_FOCK_BLAS_SCOPE.md`; this doc
@@ -13,21 +13,35 @@ in the HF SCF with RI. It is refused for ROHF, the spherical basis and full
 point-group symmetry (named rejections in `hf_driver.cpp`). It reuses the
 MP2 fitting basis (`mp2_ri_basis`); the only fitting sets in `basis-sets/`
 are `cc-pVDZ-RIFIT`, `cc-pVTZ-RIFIT` and `toy-ri`. `planck-dft` has no RI-JK
-at all. No regression case uses `scf_ri_jk`.
+at all.
 
 So RI-JK today is Cartesian HF with the wrong kind of fitting basis
 (RIFIT sets are fitted for MP2 pair densities, not for the Coulomb/exchange
-of the SCF density), and nothing checks it.
+of the SCF density). Since step 0 it is at least correct against PySCF.
 
 ## Steps
 
-### 0. A gate for what exists
+### 0. A gate for what exists — done 2026-11-12
 
-Water and C1 H2O2, RHF and UHF, Cartesian 6-31G*, `scf_ri_jk` with
-cc-pVDZ-RIFIT, against PySCF `density_fit(auxbasis=…)` with the same
-auxiliary basis read from Planck's file. Every printed digit. This pins the
-current code before anything changes, and is the "first RI-JK regression
-case" the BLAS scope's B0 also asks for.
+Water, water⁺, C1 H2O2 and H2O2⁺, Cartesian 6-31G*, `scf_ri_jk` with
+cc-pVDZ-RIFIT. All four equal PySCF `density_fit` to every printed digit,
+with the orbital and auxiliary bases both read from Planck's GBS files
+(`tests/pyscf/ri_jk_references.py`). Regression cases
+`{water,water_cation,h2o2,h2o2_cation}_{rhf,uhf}_rijk_631gd`, tagged core.
+No code changed.
+
+| Case | E (RI-JK) | E (exact) | fitting error |
+|---|---|---|---|
+| water RHF | −76.0076329813 | −76.0066326441 | −1.00e-3 |
+| water⁺ UHF | −75.6043871772 | −75.6033570420 | −1.03e-3 |
+| H2O2 RHF | −150.7554893339 | −150.7539338384 | −1.56e-3 |
+| H2O2⁺ UHF | −150.3709559632 | −150.3692659085 | −1.69e-3 |
+
+The MP2 fitting set costs ~5e-4 Eh per heavy atom, the number step 1's JKFIT
+sets have to beat. One false alarm on the way: PySCF's `1e` guess puts
+H2O2⁺ UHF on a saddle 0.023 Eh up (unstable), where Planck's `hcore` run is
+on the stable minimum (λ_min +0.073). The reference script follows internal
+UHF instabilities before comparing.
 
 ### 1. JK fitting bases and their own keyword
 

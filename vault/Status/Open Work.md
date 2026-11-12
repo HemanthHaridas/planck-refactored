@@ -48,7 +48,9 @@ teaching code) reorders it.
    frequencies carry grid noise. A decision and a migration, not new code. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
 5. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
 6. **RI-JK validated and usable for routine DFT/HF** (§5, RI-JK and BLAS).
-   Nothing has landed and RI-JK has no regression case. Scope: `docs/RI_JK_ROUTINE_SCOPE.md`.
+   Step 0 done (2026-11-12): four HF RI-JK cases equal PySCF density
+   fitting; the MP2 fitting set they use costs ~1e-3 Eh. Next: JKFIT sets.
+   Scope: `docs/RI_JK_ROUTINE_SCOPE.md`.
    Take up the other RI work in the same item:
    - **Spherical RI-MP2 gradients.** The RI 3c/2c derivative tensors are
      Cartesian-only, and the spherical-gate refusal stays until then
@@ -304,7 +306,7 @@ None of these blocks correctness. Take each up only with a current profile.
     contract.
 - **RI-JK and BLAS** (`docs/ERI_FOCK_BLAS_SCOPE.md`). Nothing has landed.
   - B0: cache the density-independent `build_ri_pair_factors`, which is ~61 %
-    of the RI-JK Fock build. Add the first RI-JK regression case with it.
+    of the RI-JK Fock build. The `*_rijk_631gd` cases (2026-11-12) gate it.
   - B1: optional `USE_BLAS`.
   - B2: RI-K from `C_occ`.
   - B3 (`dsyevd`) is deferred.

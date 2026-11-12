@@ -451,6 +451,19 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **RI-JK SCF gated against PySCF (2026-11-12, `docs/RI_JK_ROUTINE_SCOPE.md`
+  step 0).** `scf_ri_jk` had no regression case. Water, water⁺, C1 H2O2 and
+  H2O2⁺ (RHF/UHF, Cartesian 6-31G*, cc-pVDZ-RIFIT) now equal PySCF
+  `density_fit` to every printed digit, with both bases read from Planck's GBS
+  files (`tests/pyscf/ri_jk_references.py`); `*_rijk_631gd`, tagged core. No
+  code changed. The MP2 fitting set costs 1.0–1.7e-3 Eh against the exact
+  energy, which JKFIT sets (step 1) should cut.
+- **HF frequency SCFs warm-start from the reference density (2026-11-12,
+  `docs/ANALYTIC_HESSIAN_SCOPE.md` lever 1).** 19–20 → 14 iterations per
+  displaced SCF, but only 1.04× on C1 cyclohexane/6-31G (SCF is 14 % of the
+  run) and 1.14× on the 12 HF frequency cases; frequencies unchanged. HF
+  frequency cost is gradient cost.
+
 - **UKS double-hybrid geometry optimization and frequencies (2026-11-12,
   `docs/UKS_DH_GEOMOPT_FREQ.md`).**
   - **One gradient for every caller.** The UKS DH assembly moved out of the
