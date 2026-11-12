@@ -111,8 +111,8 @@ namespace HartreeFock::Correlation
         const int n_occ = n_electrons / 2;
         const int n_virt = nb - n_occ;
 
-        // RI-fitted CPHF operator when MP2 RI is enabled — same A, no nao⁴.
-        if (calculator._mp2.use_ri)
+        // RI-fitted CPHF operator under RI-MP2 or RI-JK — same A, no nao⁴.
+        if (RI::fitted_response(calculator))
             return build_rhf_cphf_matrix_ri(calculator, C, eps, n_occ, n_virt);
 
         // RHF CPHF/Z-vector equations live in the occupied-virtual rotation

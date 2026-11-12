@@ -24,6 +24,13 @@
 
 namespace HartreeFock::Correlation::RI
 {
+    // Whether orbital-response operators (CPHF, SOSCF Hessian) use the fitted
+    // J/K: under RI-MP2 (its Z-vector) and under RI-JK (the SCF it solves).
+    inline bool fitted_response(const HartreeFock::Calculator &calculator)
+    {
+        return calculator._mp2.use_ri || calculator._scf._ri_jk;
+    }
+
     struct MetricFactorization
     {
         enum class Method

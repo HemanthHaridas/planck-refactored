@@ -63,12 +63,12 @@ namespace HartreeFock::Correlation
                 const Eigen::MatrixXd dm1b = Cb_virt * xb * Cb_occ.transpose();
                 const Eigen::MatrixXd dm1a_sym = dm1a + dm1a.transpose();
                 const Eigen::MatrixXd dm1b_sym = dm1b + dm1b.transpose();
-                // RI-consistent CPHF operator under MP2 RI (Step RG4.2): the induced
+                // RI-consistent CPHF operator under RI-MP2 or RI-JK (Step RG4.2): the induced
                 // Coulomb/exchange response is the same {J(Pa+Pb) - K(P_sigma)}
                 // quantity, built from the 3-center factors instead of the dense ERI.
                 const auto [va_ao, vb_ao] = [&]() -> std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
                 {
-                    if (calculator._mp2.use_ri)
+                    if (RI::fitted_response(calculator))
                     {
                         auto [fa, fb] = RI::build_ri_fock_uhf(calculator, dm1a_sym, dm1b_sym);
                         return {std::move(fa), std::move(fb)};

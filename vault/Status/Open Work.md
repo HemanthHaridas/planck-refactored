@@ -52,8 +52,8 @@ teaching code) reorders it.
    Cartesian and spherical; JKFIT sets cut the fitting error from ~1e-3 to
    ≤ 9e-5 Eh; the fitted aux follows `basis_type`
    (`docs/RI_SPHERICAL_AUX.md`); derivative workflows refused (no RI-JK
-   gradient); ROHF wired. Remaining, steps 4 and 6–8: RI SOSCF/stability
-   (both build the n⁴ tensor), `planck-dft`, the RI-JK gradient.
+   gradient); ROHF, SOSCF and stability on the fitted operator. Remaining:
+   `planck-dft` (step 6), the RI-JK gradient (step 7).
    Scope: `docs/RI_JK_ROUTINE_SCOPE.md`.
    Take up the other RI work in the same item:
    - **Spherical RI-MP2 gradients.** The RI 3c/2c derivative tensors are

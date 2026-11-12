@@ -878,6 +878,83 @@
    ]
   },
   {
+   "id": "water_rhf_rijk_soscf_stability_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_soscf_stability_631gd.hfinp",
+   "_note": "RI-JK SOSCF + stability (docs/RI_JK_ROUTINE_SCOPE.md step 4). Under scf_ri_jk the SOSCF Hessian and the stability MO blocks come from the RI factors; before, SOSCF rebuilt the dense AO ERI tensor every SOSCF step and stability diagonalized the exact Hessian at RI orbitals (~1e-6 off). Eigenvalues equal PySCF stability on mf.density_fit() (def2-universal-JKFIT; PySCF rhf_internal is 4x Planck's real-internal value: 1.5301167/4).",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SOSCF :",
+    "Wavefunction stability analysis"
+   ],
+   "not_contains": [
+    "Building AO ERI tensor"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0066059836,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_real_internal",
+     "expected": 0.38252918,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_complex_internal",
+     "expected": 0.35342077,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_triplet_external",
+     "expected": 0.30840102,
+     "atol": 1e-06
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uhf_rijk_soscf_stability_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_soscf_stability_631gd.hfinp",
+   "_note": "RI-JK SOSCF + stability (docs/RI_JK_ROUTINE_SCOPE.md step 4). Under scf_ri_jk the SOSCF Hessian and the stability MO blocks come from the RI factors; before, SOSCF rebuilt the dense AO ERI tensor every SOSCF step and stability diagonalized the exact Hessian at RI orbitals (~1e-6 off). Eigenvalues equal PySCF stability on mf.density_fit() (def2-universal-JKFIT; PySCF uhf_internal is 2x Planck's: 0.14645447/2).",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "open_shell"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SOSCF :",
+    "Wavefunction stability analysis"
+   ],
+   "not_contains": [
+    "Building AO ERI tensor"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.3691838375,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_uhf_internal",
+     "expected": 0.073227235,
+     "atol": 1e-06
+    }
+   ]
+  },
+  {
    "id": "water_rhf_rijk_gradient_rejected",
    "input": "tests/inputs/regression/ri/water_rhf_rijk_gradient_rejected.hfinp",
    "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 3). Before the refusal, scf_ri_jk + gradient returned the exact-integral gradient at RI orbitals, 9.9e-6 Ha/Bohr off a central FD of the RI energy (water, def2-universal-JKFIT): inside the geomopt threshold, so silent. Lift when the RI-JK gradient (step 7) lands.",

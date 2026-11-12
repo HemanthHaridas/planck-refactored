@@ -1930,6 +1930,10 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/rifit.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/basis.cpp
+        # ri_eri.cpp builds the spherical aux map (cart_to_sph_block; L = 6 via
+        # the recurrence), docs/RI_SPHERICAL_AUX.md.
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${SRC_DIR}/integrals/os.cpp
         ${SRC_DIR}/integrals/hgp.cpp
         ${SRC_DIR}/integrals/rys.cpp

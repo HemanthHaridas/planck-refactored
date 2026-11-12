@@ -2,7 +2,7 @@
 
 ## Headline (2026-11-12)
 
-**RI-JK HF energies are done and exact against PySCF.** `scf_ri_jk` gives
+**RI-JK HF energies, SOSCF and stability are done and exact against PySCF.** `scf_ri_jk` gives
 RHF, UHF and ROHF energies, Cartesian or spherical, that equal PySCF density
 fitting to every printed digit on every gate molecule. With a JKFIT set the
 fitting error is ≤ 2.2e-5 Eh per atom (def2-universal-JKFIT) and ≤ 1.5e-5
@@ -11,8 +11,7 @@ auxiliary basis follows `basis_type`, as in PySCF.
 
 **Not yet usable beyond HF energies.** Derivative workflows are refused (no
 RI-JK gradient exists, and the exact-integral one was silently 9.9e-6
-Ha/Bohr off). SOSCF and stability still build the full n⁴ tensor RI exists
-to avoid. `planck-dft` has no RI-JK at all.
+Ha/Bohr off). `planck-dft` has no RI-JK at all.
 
 | | Status |
 |---|---|
@@ -21,11 +20,11 @@ to avoid. `planck-dft` has no RI-JK at all.
 | Spherical auxiliary basis for spherical runs | **Done** (`docs/RI_SPHERICAL_AUX.md`) |
 | Gradient, geomopt, frequencies | **Refused** by name (step 3); RI-JK gradient is step 7 |
 | Full point-group symmetry | Refused; out of scope |
-| SOSCF, stability | Run, but build the dense tensor (step 4) |
+| SOSCF, stability | **Done**, fitted operator; eigenvalues = PySCF DF (step 4) |
 | `planck-dft` | Not started (step 6) |
 | Heavy elements, ECPs, aux L = 6 | **Done**, AgCl = PySCF (step 8a) |
 
-Recommended order for what is left: 4, 6, 7.
+Recommended order for what is left: 6, 7.
 
 Scope, opened 2026-11-10. It expires when the work lands; rewrite it then as
 the answer. Status lives in `vault/Status/Open Work.md` (priority 6). The
@@ -37,7 +36,7 @@ How `scf_ri_jk` is wired: the RHF/UHF/ROHF loops in `src/scf/scf.cpp` call
 or direct Fock build; the fitting set is `mp2_ri_basis`; the boundary is the
 RI-JK gate in `src/hf_driver.cpp`. Nothing else checks the flag: every other
 consumer of the two-electron operator runs with exact integrals on RI
-orbitals (steps 4 and 6).
+orbitals (step 6; HF SOSCF and stability were fixed in step 4).
 
 ## Done
 
@@ -125,6 +124,33 @@ naming the reason (checked on gradient, geomopt and frequency; energies
 unchanged). Gated by `water_rhf_rijk_gradient_rejected` (core). Lift when
 step 7 lands.
 
+### 4. SOSCF and stability use the fitted operator
+
+Before, with `scf_ri_jk` both still used exact integrals: RHF **SOSCF**
+rebuilt the full AO ERI tensor at every SOSCF step for its CPHF Hessian (UHF
+SOSCF used exact direct J/K), and **stability** built the tensor once and
+diagonalized the exact Hessian at the RI orbitals, ~1e-6 off the fitted one.
+
+Both now use machinery that already existed for RI-MP2:
+
+- The CPHF builders (`rhf_response.cpp`, `uhf_response.cpp`) take their
+  fitted route under `RI::fitted_response(calc)` = `mp2_use_ri || scf_ri_jk`
+  (`ri_eri.h`); before, only `mp2_use_ri`.
+- Stability (`stability.cpp`) gets its MO blocks from a `MOBlocks` helper:
+  `transform_eri_ri` (fitted, same layout) under `scf_ri_jk`, the dense
+  transform otherwise. It keys on `scf_ri_jk` alone: it analyses the SCF
+  operator, which RI-MP2 does not change.
+
+Water RHF (def2-universal-JKFIT): the three eigenvalues equal PySCF's
+stability analysis on `mf.density_fit()` to the 7 printed digits (real
+internal 0.3825292 = PySCF 1.5301167/4, complex 0.3534208, triplet
+0.3084010). H2O2⁺ UHF: 0.07322713 = PySCF `uhf_internal` 0.14645447/2. SOSCF
+reaches the RI energy; neither log builds the AO tensor. Gated by
+`{water_rhf,h2o2_cation_uhf}_rijk_soscf_stability_631gd` (core), which check
+the eigenvalues and `not_contains: Building AO ERI tensor`; the old code fails
+both. Post-HF methods (MP2, CC, CASSCF) on RI-JK orbitals keep exact
+integrals: a legitimate combination.
+
 ### 5. ROHF, one branch
 
 The refusal said the Roothaan Fock "is not wired", but `run_rohf` builds the
@@ -136,31 +162,6 @@ the refusal is gone. Water⁺ ROHF, def2-universal-JKFIT, equals PySCF
 1.6e-5 Eh. `water_cation_rohf_rijk{,_spherical}_631gd`, core.
 
 ## Remaining
-
-### 4. SOSCF and stability (HF): use the RI operator, not the dense tensor
-
-With `scf_ri_jk`, both still build the full AO ERI tensor that RI exists to
-avoid:
-
-- **SOSCF** (`scf_soscf_start`) rebuilds it at **every** SOSCF step
-  (`RHF CPHF : Building AO ERI tensor`, once per step in the log), for the
-  CPHF Hessian action. It converges to the RI energy, because the gradient is
-  RI, but at n⁴ memory and per-step cost.
-- **Stability** (`stability_check`) builds it once and diagonalizes the
-  exact Hessian at the RI orbitals, so λ is off by the fitting error and the
-  memory is n⁴.
-
-The RI response already exists: under `mp2_use_ri`, `uhf_response.cpp`
-builds the response J/K with `build_ri_fock_uhf`. Route the SOSCF Hessian
-action the same way under `scf_ri_jk` (RHF and UHF). For stability, the
-explicit A/B matrices come from MO integrals, so build those from the fitted
-factors (B_ia,Q products, the RI-MP2 pattern) instead of `ensure_eri`. Gate:
-SOSCF and stability on a `*_rijk_*` input log no `Building AO ERI tensor`,
-SOSCF reaches the DIIS energy, and λ_min matches PySCF's stability analysis
-on a `density_fit()` SCF.
-
-Post-HF methods (MP2, CC, CASSCF) on RI-JK orbitals with exact integrals are
-a legitimate combination and stay as they are.
 
 ### 6. `planck-dft`
 

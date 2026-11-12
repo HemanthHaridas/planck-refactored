@@ -476,6 +476,10 @@ historical design context, but they are no longer the source of truth for
   equals PySCF ROHF density fitting, Cartesian and spherical.
   Step 8a: AgCl/def2-SVP with ECP and def2-universal-JKFIT (two l = 6 aux
   shells on Ag) equals PySCF to every printed digit; no code changed.
+  Step 4: SOSCF and stability use the fitted operator under `scf_ri_jk`
+  (RI-MP2's CPHF route and `transform_eri_ri`); before, SOSCF rebuilt the AO
+  tensor every step and stability used the exact Hessian. Eigenvalues equal
+  PySCF stability on a density-fitted SCF (RHF and UHF).
 - **HF frequency SCFs warm-start from the reference density (2026-11-12,
   `docs/ANALYTIC_HESSIAN_SCOPE.md` lever 1).** 19–20 → 14 iterations per
   displaced SCF, but only 1.04× on C1 cyclohexane/6-31G (SCF is 14 % of the
