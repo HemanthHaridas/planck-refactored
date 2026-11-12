@@ -9,7 +9,7 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-11-12 (MP2 frequencies done; DFT counterpoise 2026-11-11; UKS DH step list 2026-11-10;
+Last updated: 2026-11-12 (MP2 frequencies and UKS DH geomopt/freq done; DFT counterpoise 2026-11-11; UKS DH step list 2026-11-10;
 rewrite at `8570139a` on 2026-11-08, then the Yukawa and `hcore` decisions and
 the CI blocker).
 
@@ -43,17 +43,11 @@ teaching code) reorders it.
 3. **Meta-GGA**, at least SCF energies with a by-name refusal everywhere else,
    then gradients (§2, DFT). r2SCAN, ωB97M-V, M06-2X and TPSSh are rejected
    today. Scope: `docs/META_GGA_SCOPE.md`.
-4. ~~MP2 frequencies.~~ Done 2026-11-12, both bases
-   (`docs/SPHERICAL_MP2_GRADIENTS.md`).
-5. **Default DFT grid qualified for gradients** (§2, DFT). `legacy` fails the
+4. **Default DFT grid qualified for gradients** (§2, DFT). `legacy` fails the
    rotational-covariance check, so default-settings geometries and
    frequencies carry grid noise. A decision and a migration, not new code. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
-6. ~~DFT ghost atoms and counterpoise.~~ Done 2026-11-11
-   (`docs/DFT_COUNTERPOISE.md`).
-7. ~~D3 reported separately in the results JSON.~~ Done 2026-11-10
-   (`docs/RESULTS_JSON_ENERGY_TERMS.md`).
-8. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
-9. **RI-JK validated and usable for routine DFT/HF** (§5, RI-JK and BLAS).
+5. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
+6. **RI-JK validated and usable for routine DFT/HF** (§5, RI-JK and BLAS).
    Nothing has landed and RI-JK has no regression case. Scope: `docs/RI_JK_ROUTINE_SCOPE.md`.
    Take up the other RI work in the same item:
    - **Spherical RI-MP2 gradients.** The RI 3c/2c derivative tensors are
@@ -64,17 +58,13 @@ teaching code) reorders it.
 
 **Expected, with a workaround.**
 
-10. ~~Gating cases for PCM with UHF/UKS, spherical basis and `planck-dft`
-    frequencies.~~ Done 2026-11-10 (`docs/PCM_GATING.md`).
-11. ROHF-MP2 and ROHF coupled cluster; UHF-based versions exist. Matters more
+7. ROHF-MP2 and ROHF coupled cluster; UHF-based versions exist. Matters more
     once CCSD(T) exists. Scope: `docs/ROHF_CORRELATION_SCOPE.md`.
-12. Analytic Hessian; semi-numerical frequencies work, this is cost on large
+8. Analytic Hessian; semi-numerical frequencies work, this is cost on large
     systems. Scope: `docs/ANALYTIC_HESSIAN_SCOPE.md`.
-13. UKS double-hybrid geometry optimization and frequencies; the gradient
-    passes FD, so this is driver wiring and a gate. Scope: `docs/UKS_DH_GEOMOPT_FREQ_SCOPE.md`.
-14. Spherical double-hybrid gradients, frozen-core PT2 in the gradient, RI-DH.
+9. Spherical double-hybrid gradients, frozen-core PT2 in the gradient, RI-DH.
     Necessary if double hybrids are a headline feature; spherical first. Scope: `docs/DH_GRADIENT_EXTENSIONS_SCOPE.md`.
-15. D4 dispersion; D3(BJ) covers most uses. Scope: `docs/DISPERSION_D4_SCOPE.md`.
+10. D4 dispersion; D3(BJ) covers most uses. Scope: `docs/DISPERSION_D4_SCOPE.md`.
 
 **Nice to have.** Imaginary-mode following in `planck-dft` and under PCM;
 HF-D3 and modified D3 damping; counterpoise-corrected gradients and N-body
@@ -142,8 +132,6 @@ further post-HF ghost-atom checks.
   would carry the cavity, but no case gates it). Deferred from step 3:
   tolerance-linked pair screening, and a cheaper φ_el contraction.
 - **Double hybrids** (`docs/DH_IMPLEMENTATION.md` §9):
-  - UKS DH geometry optimization and frequencies are rejected. The gradient
-    they would call already passes FD.
   - The UKS DH gradient is qualified only on small molecules (STO-3G and
     6-31G fixtures; `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md`).
   - O8 response throughput: paired J/K, blocked XC action, then batched

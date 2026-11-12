@@ -2,7 +2,7 @@
 
 Scope, opened 2026-11-10. Nothing here is built. It expires when the work
 lands; rewrite it then as the answer. Status lives in
-`vault/Status/Open Work.md` (priority 9). The speed half (pair-factor cache,
+`vault/Status/Open Work.md` (priority 6). The speed half (pair-factor cache,
 BLAS, RI-K from C_occ) is scoped in `docs/ERI_FOCK_BLAS_SCOPE.md`; this doc
 is about correctness and reach.
 

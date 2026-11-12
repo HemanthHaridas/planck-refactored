@@ -2,7 +2,7 @@
 
 Scope, opened 2026-11-10. Nothing here is built. It expires when the work
 lands; rewrite it then as the answer. Status lives in
-`vault/Status/Open Work.md` (priority 11).
+`vault/Status/Open Work.md` (priority 7).
 
 ## The state
 

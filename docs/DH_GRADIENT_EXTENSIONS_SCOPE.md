@@ -2,7 +2,7 @@
 
 Scope, opened 2026-11-10. Nothing here is built. It expires when the work
 lands; rewrite it then as the answer. Status lives in
-`vault/Status/Open Work.md` (priority 14). Architecture is answered in
+`vault/Status/Open Work.md` (priority 9). Architecture is answered in
 `docs/DH_IMPLEMENTATION.md` (follow its §9 extension rules) and
 `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md`.
 

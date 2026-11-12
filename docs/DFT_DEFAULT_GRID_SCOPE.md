@@ -2,7 +2,7 @@
 
 Scope, opened 2026-11-10. A decision, not new code. It expires when the
 decision is made; rewrite it then as the answer. Status lives in
-`vault/Status/Open Work.md` (priority 5). The grid itself is answered in
+`vault/Status/Open Work.md` (priority 4). The grid itself is answered in
 `docs/DFT_GRID_CONVERGENCE.md`.
 
 ## The question

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Validate RKS DH opt/freq callbacks against fresh standalone DH calculations.
+"""Validate RKS or UKS DH opt/freq callbacks against fresh standalone DH calculations.
+
+The input's scf_type picks RKS or UKS; UKS needs the qualified V4 grid
+(tests/inputs/exploratory/dh_gradient/ho2_uks_b2plyp_v4_workflow_sto3g.hfinp).
 
 Never builds. Uses normal JSON results, no DH diagnostic flags or external QC
 reference. Retains every input, output and the full independent Hessian matrix.
@@ -143,20 +146,6 @@ def main():
                 row["frequencies_cm1"] = frequencies
             report["workflows"].append(row)
             print(json.dumps(row), flush=True)
-        # U0 scope must not accidentally expand to UKS derivatives.
-        uks = (ROOT / "tests/inputs/exploratory/dh_gradient/uks_u0/water_cation_asymmetric_b2plyp_sto3g.hfinp").read_text()
-        usym, upos, uchg, umult = parse_geometry(uks)
-        upos = [[v*ANGSTROM_TO_BOHR for v in r] for r in upos]
-        for workflow in ("geomopt", "freq", "geomoptfreq"):
-            inp = artifacts / f"uks-{workflow}.hfinp"
-            inp.write_text(render(uks, usym, upos, uchg, umult, workflow, args.opt_coords))
-            proc = subprocess.run([str(args.executable.resolve()), str(inp)], env=env,
-                                  capture_output=True, text=True)
-            output = proc.stdout + proc.stderr
-            (artifacts / f"uks-{workflow}.log").write_text(output)
-            if proc.returncode == 0 or "supports only single-point energies for range-separated and double-hybrid functionals" not in output:
-                raise ValueError(f"UKS {workflow} scope rejection failed")
-        report["uks_scope_rejected"] = True
         report["passed"] = True
     except (ValueError, OSError, KeyError, TypeError) as error:
         report["error"] = str(error)

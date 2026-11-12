@@ -2,7 +2,7 @@
 
 Scope, opened 2026-11-10. Nothing here is built. It expires when CI runs
 green; rewrite it then as the answer. Status lives in
-`vault/Status/Open Work.md` (priority 8). The build half is scoped in
+`vault/Status/Open Work.md` (priority 5). The build half is scoped in
 `docs/BUILD_SHARED_OBJECTS_SCOPE.md`.
 
 ## The state

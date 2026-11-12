@@ -8905,6 +8905,48 @@
    ]
   },
   {
+   "id": "ho2_uks_b2plyp_v4_geomoptfreq_sto3g",
+   "input": "tests/inputs/regression/dft/ho2_uks_b2plyp_v4_geomoptfreq_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_note": "UKS double-hybrid geometry optimization + frequencies (docs/UKS_DH_GEOMOPT_FREQ.md). Pinned to Planck after tests/dh_workflow_audit.py passed on this input: callback Hessian vs 18 independent gradients 2.8e-9, energy FD vs gradient at the optimum 2.2e-9 Ha/Bohr. PySCF is not a valid double-hybrid gradient reference. ~6 min at 4 threads.",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 1200,
+   "expected_exit_code": 0,
+   "contains": [
+    "Starting L-BFGS optimizer with analytic double-hybrid gradients",
+    "via analytic double-hybrid gradients",
+    "Geometry Optimization :       Converged in"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "geomopt_final_energy",
+     "expected": -148.6568370557,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1331.76,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 1522.35,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 3567.63,
+     "atol": 0.05
+    }
+   ]
+  },
+  {
    "id": "water_cation_uks_pbe_pcm_swig_gradient_631gd",
    "_note": "UKS PCM analytic gradient (PBE, unpruned 150 x 590, SAD guess). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (docs/PCM_GATING.md), with grid response; Planck agrees to 6e-12. G_pcm -0.1471609990.",
    "input": "tests/inputs/regression/dft/water_cation_uks_pbe_pcm_swig_gradient_631gd.hfinp",

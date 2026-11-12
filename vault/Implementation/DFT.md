@@ -118,7 +118,7 @@ Support is split by workflow:
 - LDA/GGA/global-hybrid: single points, gradients, geomopt, frequencies, geomopt+freq, TDDFT
 - Range-separated hybrids (erf): the same set, including TDDFT
 - RKS global double hybrids: single points, analytic gradients, geomopt, frequencies (FD of analytic gradients), geomopt+freq
-- UKS global double hybrids: single points, analytic gradients only (conventional all-active UMP2, no solvent, qualified V4 grid)
+- UKS global double hybrids: single points, analytic gradients, geomopt, frequencies (FD of analytic gradients), geomopt+freq (conventional all-active UMP2, no solvent, qualified V4 grid)
 - Range-separated double hybrids: single-point energies only
 - Yukawa/Gaussian screened-exchange functionals: rejected by name in every workflow (only the erf kernel is implemented)
 

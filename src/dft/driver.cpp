@@ -3099,11 +3099,15 @@ namespace DFT::Driver
             // Production UKS global-double-hybrid gradients are deliberately
             // narrower than the validation sidecar: only the conventional,
             // all-active UMP2 implementation and the independently qualified
-            // V4 grid are admitted.  Geometry optimization and frequencies
-            // remain RKS-only until their UKS workflow contracts are accepted.
+            // V4 grid are admitted, for the gradient and the geometry
+            // optimization and frequency workflows built on it.
+            const bool gradient_workflow =
+                calculator._calculation == HartreeFock::CalculationType::Gradient ||
+                calculator._calculation == HartreeFock::CalculationType::GeomOpt ||
+                calculator._calculation == HartreeFock::CalculationType::Frequency ||
+                calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency;
             if (functionals.has_double_hybrid_pt2 && !functionals.has_range_separation &&
-                calculator._scf._scf == HartreeFock::SCFType::UHF &&
-                calculator._calculation == HartreeFock::CalculationType::Gradient)
+                calculator._scf._scf == HartreeFock::SCFType::UHF && gradient_workflow)
             {
                 if (calculator._solvation._model != HartreeFock::SolvationModel::None)
                     return std::unexpected("UKS double-hybrid analytic gradients do not implement solvent response.");
@@ -3538,6 +3542,27 @@ namespace DFT::Driver
             return Eigen::MatrixXd(*ks_gradient + pt2_correction->total);
         }
 
+        // UKS counterpart of compute_analytic_dh_gradient: KS gradient plus the
+        // UMP2 correction, both in the current working frame. Returns the whole
+        // result because the validation sidecar reads its pieces.
+        std::expected<UDHGradientResult, std::string> compute_analytic_udh_gradient(
+            HartreeFock::Calculator &calculator,
+            PreparedSystem &prepared,
+            const InitializedFunctionals &functionals,
+            const HartreeFock::Correlation::UMP2Result &pt2)
+        {
+            auto correction = build_udh_gradient_correction(calculator, prepared, functionals.exchange,
+                functionals.correlation, pt2, functionals.perturbative_correlation_coefficient);
+            if (!correction) return std::unexpected(correction.error());
+            auto ks = compute_analytic_ks_gradient(calculator, prepared, functionals);
+            if (!ks) return std::unexpected(ks.error());
+            if (ks->rows() != correction->correction.rows() || ks->cols() != 3 || !ks->allFinite())
+                return std::unexpected("UDH driver: invalid KS/correction result shape");
+            correction->ks = *ks;
+            correction->total = *ks + correction->correction;
+            return correction;
+        }
+
         // Optimizers read current_total_energy() after this callback. Keep the
         // scaled PT2 energy and its full derivative at exactly the same geometry.
         // No C, epsilon, amplitudes, Z or derivative arrays survive a displacement.
@@ -3554,6 +3579,21 @@ namespace DFT::Driver
                 return std::unexpected(result.error());
             if (!result->converged)
                 return std::unexpected("KS-SCF did not converge during analytic gradient evaluation");
+
+            if (functionals.has_double_hybrid_pt2 &&
+                calculator._scf._scf == HartreeFock::SCFType::UHF)
+            {
+                HartreeFock::Correlation::UMP2Result pt2;
+                if (auto applied = apply_post_ks_double_hybrid_correction(
+                        calculator, prepared->shell_pairs, functionals, *result, nullptr, &pt2);
+                    !applied)
+                    return std::unexpected(applied.error());
+                auto udh = compute_analytic_udh_gradient(calculator, *prepared, functionals, pt2);
+                if (!udh)
+                    return std::unexpected(udh.error());
+                calculator._gradient = udh->total;
+                return udh->total;
+            }
 
             HartreeFock::Correlation::RMP2Result pt2_result;
             if (auto correction = apply_post_ks_double_hybrid_correction(
@@ -5238,15 +5278,8 @@ namespace DFT::Driver
                     HartreeFock::Correlation::UMP2Result pt2;
                     if(auto applied=apply_post_ks_double_hybrid_correction(calculator,prepared->shell_pairs,
                         *functionals,*result,nullptr,&pt2); !applied) return std::unexpected(applied.error());
-                    auto correction=build_udh_gradient_correction(calculator,*prepared,functionals->exchange,
-                        functionals->correlation,pt2,functionals->perturbative_correlation_coefficient);
+                    auto correction=compute_analytic_udh_gradient(calculator,*prepared,*functionals,pt2);
                     if(!correction) return std::unexpected(correction.error());
-                    auto ks=compute_analytic_ks_gradient(calculator,*prepared,*functionals);
-                    if(!ks) return std::unexpected(ks.error());
-                    if(ks->rows()!=correction->correction.rows() || ks->cols()!=3 || !ks->allFinite())
-                        return std::unexpected("UDH driver: invalid KS/correction result shape");
-                    correction->ks=*ks;
-                    correction->total=*ks+correction->correction;
                     calculator._gradient=rotate_gradient_to_requested_frame_if_needed(
                         calculator,correction->total,requested_gradient_frame_bohr);
                     if (options.udh_gradient_validation)

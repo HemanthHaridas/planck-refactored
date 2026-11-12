@@ -375,7 +375,8 @@ historical design context, but they are no longer the source of truth for
   nonlinear `get_veff` on a non-idempotent trial density). Validation is
   Planck's gradient against Planck's own energy FD.
 - **UKS global double-hybrid analytic gradient** (`73ce3866`, promoted with the
-  grid in `039bd2df`), `calculation gradient` only. Same Lagrangian with
+  grid in `039bd2df`); geometry optimization and frequencies since
+  2026-11-12 (`docs/UKS_DH_GEOMOPT_FREQ.md`). Same Lagrangian with
   per-spin densities, three amplitude blocks (c, 2c, c), alpha/beta coupling
   only through J and the cross-spin XC kernel, and a joint alpha-then-beta
   Z-vector (`src/dft/udh_*.cpp`). Partly dense (see Open Work).
@@ -449,6 +450,23 @@ historical design context, but they are no longer the source of truth for
     value, because ghosts carry no D3.
 
 ### Recent fixes now considered landed
+
+- **UKS double-hybrid geometry optimization and frequencies (2026-11-12,
+  `docs/UKS_DH_GEOMOPT_FREQ.md`).**
+  - **One gradient for every caller.** The UKS DH assembly moved out of the
+    `Gradient` case into `compute_analytic_udh_gradient`, which the
+    per-geometry callback (optimizer and semi-numerical Hessian) now calls
+    too. Widening the gate alone would have run UKS through the RKS DH path.
+  - **Gates.** `tests/dh_workflow_audit.py` (now RKS or UKS; its UKS-refusal
+    assertion was removed) on HO2 B2PLYP/STO-3G, V4 grid: Hessian vs 18
+    independent gradients 2.8e-9; energy FD vs gradient at the optimum
+    2.2e-9 Ha/Bohr. Water RKS and `scf_type uhf` frequencies agree to every
+    printed digit. Regression `ho2_uks_b2plyp_v4_geomoptfreq_sto3g`
+    (extended, ~6 min) pins E_opt and the three frequencies.
+  - **Found.** OH is a poor fixture: its β hole in a degenerate π pair is a
+    zero mode (λ_min −2.4e-8), and one SCF drifted along it for 168
+    iterations at fixed energy. A property of the molecule, not a
+    convergence defect; HO2 has no such pair.
 
 - **RMP2/UMP2 frequencies, Cartesian and spherical (2026-11-12,
   `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md` step 5).**

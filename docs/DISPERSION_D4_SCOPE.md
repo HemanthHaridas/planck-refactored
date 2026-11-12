@@ -2,7 +2,7 @@
 
 Scope, opened 2026-11-10. Nothing here is built. It expires when the work
 lands; rewrite it then as the answer. Status lives in
-`vault/Status/Open Work.md` (priority 15). D3 is answered in
+`vault/Status/Open Work.md` (priority 10). D3 is answered in
 `docs/DISPERSION_D3.md`.
 
 ## Why it matters, and why it is last
