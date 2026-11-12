@@ -1,6 +1,6 @@
 # What does RI-JK need before it is usable for routine HF and DFT?
 
-Scope, opened 2026-11-10. Steps 0–2 are done (2026-11-12); steps 3–8 are
+Scope, opened 2026-11-10. Steps 0–3 are done (2026-11-12); steps 4–8 are
 scoped below. It expires when the work
 lands; rewrite it then as the answer. Status lives in
 `vault/Status/Open Work.md` (priority 6). The speed half (pair-factor cache,
@@ -102,7 +102,7 @@ Measured before writing: `scf_ri_jk` is checked only by the SCF loops,
 two-electron operator runs with exact integrals on RI orbitals and says
 nothing. In order of cost, cheapest first.
 
-### 3. Refuse the inconsistent gradient (now; ~10 lines)
+### 3. Refuse the inconsistent gradient — done 2026-11-12
 
 `calculation gradient` with `scf_ri_jk` runs today and returns the
 exact-integral gradient at the RI orbitals. Water RHF, def2-universal-JKFIT:
@@ -111,8 +111,9 @@ Ha/Bohr**. That passes the default geometry-optimization threshold (3e-4)
 silently, and with the MP2 RIFIT set (fitting error ~50× larger) it would
 approach it; frequencies inherit it. Refuse `scf_ri_jk` for Gradient,
 GeomOpt, Frequency, GeomOptFrequency and ImaginaryFollow in the existing
-`hf_driver.cpp` gate, naming the reason. Gate: one `*_rijk_gradient_rejected`
-case. Lift when step 7 lands.
+`hf_driver.cpp` gate, naming the reason. Done: the gate refuses all five
+(checked on gradient, geomopt and frequency; energies unchanged), gated by
+`water_rhf_rijk_gradient_rejected` (core). Lift when step 7 lands.
 
 ### 4. SOSCF and stability (HF): use the RI operator, not the dense tensor
 
@@ -201,7 +202,7 @@ measured above; then lift step 3's refusal and add a geomopt case.
 - **`scf_ri_basis`.** Still open (step 1): only worth a second fitting cache
   if a run wants RI-JK and RI-MP2 with different sets.
 
-Recommended order: 3 (correctness, minutes), 5 and 8a (small), 4, 6, 7.
+Recommended order: 5 and 8a (small), 4, 6, 7.
 
 ## Not in this scope
 

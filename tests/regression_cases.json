@@ -808,6 +808,20 @@
    ]
   },
   {
+   "id": "water_rhf_rijk_gradient_rejected",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_gradient_rejected.hfinp",
+   "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 3). Before the refusal, scf_ri_jk + gradient returned the exact-integral gradient at RI orbitals, 9.9e-6 Ha/Bohr off a central FD of the RI energy (water, def2-universal-JKFIT): inside the geomopt threshold, so silent. Lift when the RI-JK gradient (step 7) lands.",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 1,
+   "contains": [
+    "RI-JK SCF (scf_ri_jk) does not support gradients, geometry optimization or frequencies"
+   ]
+  },
+  {
    "id": "nh3_rmp2_sto3g",
    "input": "inputs/examples/hf/mp2_validation/val_nh3.hfinp",
    "tags": [

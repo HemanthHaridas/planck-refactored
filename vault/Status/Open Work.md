@@ -51,10 +51,9 @@ teaching code) reorders it.
    Steps 0–2 done (2026-11-12): HF RI-JK equals PySCF density fitting,
    Cartesian and spherical; JKFIT sets cut the fitting error from ~1e-3 to
    ≤ 9e-5 Eh; the fitted aux follows `basis_type`
-   (`docs/RI_SPHERICAL_AUX.md`). Remaining, scoped as steps 3–8: refuse the
-   RI-JK gradient (today it silently returns the exact-integral gradient,
-   9.9e-6 Ha/Bohr off), RI SOSCF/stability (both build the n⁴ tensor),
-   ROHF, `planck-dft`, the RI-JK gradient.
+   (`docs/RI_SPHERICAL_AUX.md`); derivative workflows refused (no RI-JK
+   gradient). Remaining, steps 4–8: RI SOSCF/stability (both build the n⁴
+   tensor), ROHF, `planck-dft`, the RI-JK gradient.
    Scope: `docs/RI_JK_ROUTINE_SCOPE.md`.
    Take up the other RI work in the same item:
    - **Spherical RI-MP2 gradients.** The RI 3c/2c derivative tensors are
