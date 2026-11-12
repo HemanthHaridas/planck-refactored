@@ -199,7 +199,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.2955800560,
+     "expected": -75.295580056,
      "atol": 1e-07
     }
    ]
@@ -1817,10 +1817,10 @@
    "tags": [
     "extended"
    ],
-   "_note": "Boundary marker, pins guard ORDERING. RI + frequency must fall through the RI-MP2 workflow gate and be rejected by the correlated-frequency guard instead, because that is the accurate reason: the semi-numerical Hessian differentiates the SCF gradient, not the MP2 gradient -- a limitation of every MP2, dense or RI, not something RI-specific. If the RI gate ever swallows freq workflows again the user gets a misleading 'RI does not support frequency' message. Asserts the frequency guard's text, not the RI gate's.",
+   "_note": "Boundary marker, pins guard ORDERING. RI + frequency falls through the RI-MP2 workflow gate to the RI-MP2 frequency guard, which names the accurate reason: dense MP2 frequencies are PySCF-gated, RI-MP2 ones are not validated.",
    "expected_exit_code": 1,
    "contains": [
-    "Correlated (MP2) frequencies are not implemented"
+    "RI-MP2 frequencies are not validated"
    ]
   },
   {
@@ -1829,7 +1829,7 @@
    "tags": [
     "extended"
    ],
-   "_note": "Boundary marker: the MP2 gradient builders have no frozen-core terms (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md), so mp2_frozen + gradient is refused by name.",
+   "_note": "Boundary marker: the MP2 gradient builders have no frozen-core terms (docs/SPHERICAL_MP2_GRADIENTS.md), so mp2_frozen + gradient is refused by name.",
    "expected_exit_code": 1,
    "contains": [
     "frozen-orbital gradients are not implemented"
@@ -1942,16 +1942,73 @@
    ]
   },
   {
-   "id": "water_radical_cation_ump2_freq_rejected",
-   "input": "tests/inputs/regression/open_shell/water_radical_cation_ump2_freq_rejected.hfinp",
+   "id": "water_radical_cation_ump2_freq_sto3g",
+   "input": "tests/inputs/regression/open_shell/water_radical_cation_ump2_freq_sto3g.hfinp",
    "tags": [
     "extended",
     "open_shell"
    ],
-   "_note": "Boundary marker. freq/hessian.cpp finite-differences the SCF gradient (compute_{rhf,uhf,rohf}_gradient) and never calls the MP2 gradient, so correlation rmp2/ump2 + frequency|geomoptfreq|imaginaryfollow would silently report HF frequencies. hf_driver.cpp rejects the combination; this pins that. Remove once the MP2 gradient is wired into the Hessian dispatch.",
-   "expected_exit_code": 1,
+   "timeout_s": 300,
+   "_pyscf_reference": "Cartesian UMP2/STO-3G frequencies, water cation doublet at the input geometry. PySCF 2.15.0 central differences of the analytic UMP2 gradient (h = 5e-3 Bohr, Planck's default) + thermo.harmonic_analysis (tests/pyscf/mp2_frequency_references.py): 1347.71/4689.09/4868.83 cm-1, E(UMP2) -74.6833354374. Planck matches every printed digit. Was water_radical_cation_ump2_freq_rejected until the Hessian loop shared geomopt's per-geometry SCF+MP2+gradient step (Opt::run_scf_gradient).",
+   "expected_exit_code": 0,
    "contains": [
-    "Correlated (MP2) frequencies are not implemented"
+    "Vibrational Frequencies",
+    "Total MP2 Energy                    -74.6833354"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1347.71,
+     "atol": 0.1
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 4689.09,
+     "atol": 0.1
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 4868.83,
+     "atol": 0.1
+    }
+   ]
+  },
+  {
+   "id": "water_rmp2_spherical_freq_631gd",
+   "input": "tests/inputs/regression/spherical/water_rmp2_spherical_freq_631gd.hfinp",
+   "tags": [
+    "extended",
+    "spherical"
+   ],
+   "timeout_s": 300,
+   "_pyscf_reference": "Spherical RMP2/6-31G* frequencies, water at the input geometry. PySCF 2.15.0 cart=False central differences of the analytic RMP2 gradient (h = 5e-3 Bohr) + thermo.harmonic_analysis (tests/pyscf/mp2_frequency_references.py): 1703.73/3919.24/4064.72 cm-1, E(RMP2) -76.1953214676. Planck matches every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Vibrational Frequencies",
+    "Total MP2 Energy                    -76.1953214"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1703.73,
+     "atol": 0.1
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 3919.24,
+     "atol": 0.1
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 4064.72,
+     "atol": 0.1
+    }
    ]
   },
   {
@@ -4837,7 +4894,7 @@
     "core",
     "spherical"
    ],
-   "_note": "Boundary marker: dense spherical MP2 gradients are supported (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md); RI-MP2 gradients stay refused in spherical because the RI 3c/2c derivative tensors are Cartesian-only. Belongs to the RI item in Open Work.",
+   "_note": "Boundary marker: dense spherical MP2 gradients are supported (docs/SPHERICAL_MP2_GRADIENTS.md); RI-MP2 gradients stay refused in spherical because the RI 3c/2c derivative tensors are Cartesian-only. Belongs to the RI item in Open Work.",
    "expected_exit_code": 1,
    "contains": [
     "Spherical Basis :",
@@ -4852,7 +4909,7 @@
     "spherical",
     "gradient"
    ],
-   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 1.4e-8 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
+   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENTS.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 1.4e-8 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
    "expected_exit_code": 0,
    "contains": [
     "Nuclear Gradient (Ha/Bohr) :"
@@ -4895,7 +4952,7 @@
     "spherical",
     "gradient"
    ],
-   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 1.1e-7 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
+   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENTS.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 1.1e-7 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
    "expected_exit_code": 0,
    "contains": [
     "Nuclear Gradient (Ha/Bohr) :"
@@ -4943,7 +5000,7 @@
     "spherical",
     "gradient"
    ],
-   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 1.7e-7 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
+   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENTS.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 1.7e-7 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
    "expected_exit_code": 0,
    "contains": [
     "Nuclear Gradient (Ha/Bohr) :"
@@ -4952,7 +5009,7 @@
     {
      "type": "metric_close",
      "metric": "mp2_total_energy",
-     "expected": -75.7472669950,
+     "expected": -75.747266995,
      "atol": 1e-09
     },
     {
@@ -4986,7 +5043,7 @@
     "spherical",
     "gradient"
    ],
-   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 4.2e-7 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
+   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENTS.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 4.2e-7 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
    "expected_exit_code": 0,
    "contains": [
     "Nuclear Gradient (Ha/Bohr) :"
@@ -5178,7 +5235,7 @@
     "spherical",
     "geomopt"
    ],
-   "_note": "Spherical RMP2 geometry optimization gate (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md step 4), replacing the boundary marker water_rmp2_spherical_geomopt_rejected. Reference: PySCF 2.13.0 geometric GAU_TIGHT minimum, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py): E_opt -76.1955706453, matched to every printed digit. geomopt_grad_tol 1.5e-5 is PySCF's GAU_TIGHT max force.",
+   "_note": "Spherical RMP2 geometry optimization gate (docs/SPHERICAL_MP2_GRADIENTS.md), replacing the boundary marker water_rmp2_spherical_geomopt_rejected. Reference: PySCF 2.13.0 geometric GAU_TIGHT minimum, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py): E_opt -76.1955706453, matched to every printed digit. geomopt_grad_tol 1.5e-5 is PySCF's GAU_TIGHT max force.",
    "expected_exit_code": 0,
    "contains": [
     "Geometry Optimization :"
@@ -7270,13 +7327,13 @@
     {
      "type": "metric_close",
      "metric": "gradient_max",
-     "expected": 3.0433018574e-03,
+     "expected": 0.0030433018574,
      "atol": 1e-07
     },
     {
      "type": "metric_close",
      "metric": "gradient_rms",
-     "expected": 1.7570511466e-03,
+     "expected": 0.0017570511466,
      "atol": 1e-07
     }
    ]
@@ -7297,13 +7354,13 @@
     {
      "type": "metric_close",
      "metric": "gradient_max",
-     "expected": 4.8635659355e-02,
+     "expected": 0.048635659355,
      "atol": 1e-07
     },
     {
      "type": "metric_close",
      "metric": "gradient_rms",
-     "expected": 1.9234832752e-02,
+     "expected": 0.019234832752,
      "atol": 1e-07
     }
    ]
@@ -7379,7 +7436,7 @@
     {
      "type": "metric_close",
      "metric": "vib_freq_1",
-     "expected": 2421.80,
+     "expected": 2421.8,
      "atol": 1.0
     }
    ]
@@ -7401,13 +7458,13 @@
     {
      "type": "metric_close",
      "metric": "gradient_max",
-     "expected": 4.1303019051e-03,
+     "expected": 0.0041303019051,
      "atol": 1e-07
     },
     {
      "type": "metric_close",
      "metric": "gradient_rms",
-     "expected": 2.3846309167e-03,
+     "expected": 0.0023846309167,
      "atol": 1e-07
     }
    ]
@@ -7429,13 +7486,13 @@
     {
      "type": "metric_close",
      "metric": "gradient_max",
-     "expected": 3.9617395647e-03,
+     "expected": 0.0039617395647,
      "atol": 1e-07
     },
     {
      "type": "metric_close",
      "metric": "gradient_rms",
-     "expected": 2.2873114041e-03,
+     "expected": 0.0022873114041,
      "atol": 1e-07
     }
    ]
@@ -7490,7 +7547,7 @@
     {
      "type": "metric_close",
      "metric": "mp2_corr_energy",
-     "expected": -0.1434184970,
+     "expected": -0.143418497,
      "atol": 1e-08
     }
    ]
@@ -8661,13 +8718,13 @@
     {
      "type": "metric_close",
      "metric": "cp_bsse",
-     "expected": -0.0000324781,
+     "expected": -3.24781e-05,
      "atol": 1e-09
     },
     {
      "type": "metric_close",
      "metric": "cp_interaction_energy",
-     "expected": 0.0000630849,
+     "expected": 6.30849e-05,
      "atol": 1e-09
     }
    ]
@@ -8733,7 +8790,7 @@
     {
      "type": "metric_close",
      "metric": "cp_interaction_energy",
-     "expected": -0.0082183790,
+     "expected": -0.008218379,
      "atol": 1e-09
     }
    ]

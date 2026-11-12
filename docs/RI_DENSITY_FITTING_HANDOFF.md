@@ -34,7 +34,7 @@ with system size.
 - `src/post_hf/mp2_gradient.cpp` — RMP2/UMP2 gradient, RI branches
 - `src/post_hf/{rhf,uhf}_response.cpp` — RI-consistent CPHF
 - `src/hf_driver.cpp` — the workflow gate (`ri_workflow_ok`)
-- `src/freq/hessian.cpp` — where correlated frequencies are rejected (not RI-specific)
+- `src/hf_driver.cpp` — where RI-MP2 frequencies are refused (dense MP2 frequencies run through `Opt::run_scf_gradient`)
 - `tests/rmp2_gradient_fd.py` — the FD self-consistency harness
 
 ## What invariants matter

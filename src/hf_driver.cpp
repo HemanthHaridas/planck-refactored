@@ -596,10 +596,8 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     //     FD check against its own RI surface.
     //
     // Frequency / GeomOptFreq / ImaginaryFollow are deliberately NOT rejected
-    // here — they fall through to the correlated-frequency guard below, which
-    // gives the accurate reason (the semi-numerical Hessian differentiates the
-    // SCF gradient, not the MP2 one; a limitation of every MP2, dense or RI, not
-    // something RI-specific). ROHF is excluded: there is no ROHF-MP2 gradient at
+    // here — they fall through to the RI-MP2 frequency guard below, which names
+    // the accurate reason. ROHF is excluded: there is no ROHF-MP2 gradient at
     // all, dense or RI. Basis-agnostic.
     const bool ri_freq_workflow =
         calculator._calculation == HartreeFock::CalculationType::Frequency ||
@@ -658,14 +656,10 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         }
     }
 
-    // ── Correlated frequencies are not implemented ───────────────────────────────
-    // src/freq/hessian.cpp finite-differences the SCF gradient, dispatching on the
-    // reference type only (compute_{rhf,uhf,rohf}_gradient); it never calls the
-    // MP2 gradient. So `correlation rmp2|ump2` + `frequency`/`geomoptfreq`/
-    // `imaginaryfollow` would print the MP2 correlation energy and then report
-    // frequencies built from an *HF* Hessian — a silently wrong answer. Reject it
-    // explicitly until the MP2 gradient is wired into the Hessian dispatch.
-    // (`gradient` and `geomopt` are fine: both call compute_{r,u}mp2_gradient.)
+    // ── RI-MP2 frequencies are not validated ─────────────────────────────────────
+    // The semi-numerical Hessian finite-differences the MP2 gradient through
+    // Opt::run_scf_gradient, the same per-geometry step geometry optimization
+    // uses. Dense RMP2/UMP2 frequencies are PySCF-gated; RI-MP2 ones are not.
     {
         const bool freq_workflow =
             calculator._calculation == HartreeFock::CalculationType::Frequency ||
@@ -674,16 +668,13 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         const bool correlated =
             calculator._correlation == HartreeFock::PostHF::RMP2 ||
             calculator._correlation == HartreeFock::PostHF::UMP2;
-        if (freq_workflow && correlated)
+        if (freq_workflow && correlated && calculator._mp2.use_ri)
         {
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Error, "Frequency :",
-                "Correlated (MP2) frequencies are not implemented: the "
-                "semi-numerical Hessian finite-differences the SCF gradient, not "
-                "the MP2 gradient, so " + map_enum(calculator._calculation) +
-                " with correlation rmp2/ump2 would report HF frequencies. Use "
-                "calculation gradient or geomopt for MP2, or drop the correlation "
-                "keyword for HF frequencies.");
+                "RI-MP2 frequencies are not validated: " + map_enum(calculator._calculation) +
+                " with mp2_use_ri is refused. Disable RI (mp2_use_ri false) for "
+                "MP2 frequencies, or use calculation gradient or geomopt with RI.");
             return EXIT_FAILURE;
         }
     }

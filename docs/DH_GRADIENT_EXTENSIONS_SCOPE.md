@@ -19,7 +19,7 @@ STO-3G/6-31G fixtures. Three gaps, in order.
 but SinglePoint (`water_rks_b2plyp_gradient_spherical_rejected`). DH single
 points already run spherical (PT2 on the spherical ERI tensor), and the KS
 gradient lifts its densities with `to_cartesian`. The PT2 half needs the
-same audit as `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`: which objects are in
+same audit as `docs/SPHERICAL_MP2_GRADIENTS.md`: which objects are in
 the working basis, and where they are lifted. The streamed pair density and
 Eq. 33 contraction consume AO-index quantities; back-transforming with the
 lifted coefficients `Cᵀ C_mo` is the one-mechanism route. Do the MP2 scope

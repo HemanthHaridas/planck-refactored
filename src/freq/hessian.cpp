@@ -16,6 +16,7 @@
 #include "integrals/shellpair.h"
 #include "io/logging.h"
 #include "lookup/elements.h"
+#include "opt/geomopt.h"
 #include "scf/scf.h"
 #include "scf/working_state.h"
 #include "solvation/pcm.h"
@@ -31,103 +32,6 @@
 // CM_INV_TO_HARTREE: 1 cm⁻¹ in Hartree = hc / (Eₕ · 100 m)
 static constexpr double HESSIAN_TO_WAVENUMBER = 5140.487;
 static constexpr double CM_INV_TO_HARTREE = 4.5563352527e-6;
-
-// ─── Single-point SCF + gradient helper ──────────────────────────────────────
-//
-// Mirrors _run_sp_gradient in geomopt.cpp.
-// Rebuilds basis, 1e integrals and SCF for the geometry currently stored in
-// calc._molecule._standard; then computes the analytic gradient.
-// Returns the gradient as a natoms×3 matrix (atom-major).
-
-static std::expected<Eigen::MatrixXd, std::string> _run_sp_gradient_freq_hf(HartreeFock::Calculator &calc)
-{
-    // Sync coordinate frames
-    calc.sync_coordinate_frames_from_standard();
-
-    // Rebuild basis
-    const std::string gbs_path =
-        calc._basis._basis_path + "/" + calc._basis._basis_name;
-    auto basis_res = HartreeFock::BasisFunctions::read_gbs_basis(
-        gbs_path, calc._molecule, calc._basis._basis);
-    if (!basis_res)
-        return std::unexpected("Hessian basis rebuild failed: " + basis_res.error());
-    calc._shells = std::move(*basis_res);
-
-    // Reset SCF state (no SAO blocking during finite-difference steps).
-    // Use working_nbasis() — in Cartesian mode this equals nbasis(); in spherical
-    // mode it is nbasis_sph(), which is the dimension SCF actually allocates
-    // density/Fock matrices at. Passing nbasis() (Cartesian count) in spherical
-    // mode would size the SCF state to the wrong dimension and corrupt every
-    // downstream Fock build.
-    calc._info._scf = HartreeFock::DataSCF(
-        calc._scf._scf != HartreeFock::SCFType::RHF);
-    calc._info._scf.initialize(calc.working_nbasis());
-    calc._scf.set_scf_mode_auto(calc.working_nbasis());
-    calc._info._is_converged = false;
-    calc._use_sao_blocking = false;
-
-    if (auto nuclear_repulsion = calc.recompute_nuclear_repulsion(); !nuclear_repulsion)
-        return std::unexpected("Hessian geometry rebuild failed: " + nuclear_repulsion.error());
-
-    // Rebuild the geometry-derived working state (shell pairs, integral-symmetry
-    // ops, _overlap and _hcore in the working basis). The helper is the
-    // spherical-aware version of the inline block the driver runs once at
-    // startup; calling it here at every displaced geometry keeps the freq
-    // inner loop in lockstep with the driver's spherical setup. See
-    // src/scf/working_state.{h,cpp} for the contract.
-    auto shell_pairs_res = HartreeFock::SCF::rebuild_basis_dependent_state(calc);
-    if (!shell_pairs_res)
-        return std::unexpected("Hessian working-state rebuild failed: " + shell_pairs_res.error());
-    std::vector<HartreeFock::ShellPair> shell_pairs = std::move(*shell_pairs_res);
-
-    // The PCM cavity moves with the atoms, so it is rebuilt at every geometry
-    // (a disabled state without solvation). Its gradient term is added below.
-    auto pcm = HartreeFock::Solvation::build_pcm_state(calc);
-    if (!pcm)
-        return std::unexpected("Hessian PCM setup failed: " + pcm.error());
-
-    std::expected<void, std::string> scf_res;
-    if (calc._scf._scf == HartreeFock::SCFType::UHF)
-        scf_res = HartreeFock::SCF::run_uhf(calc, shell_pairs, &*pcm);
-    else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
-        scf_res = HartreeFock::SCF::run_rohf(calc, shell_pairs, &*pcm);
-    else
-        scf_res = HartreeFock::SCF::run_rhf(calc, shell_pairs, &*pcm);
-
-    if (!scf_res)
-        return std::unexpected("Hessian SCF failed: " + scf_res.error());
-
-    Eigen::MatrixXd grad;
-    if (calc._scf._scf == HartreeFock::SCFType::UHF)
-    {
-        auto grad_res = HartreeFock::Gradient::compute_uhf_gradient(calc, shell_pairs);
-        if (!grad_res)
-            return std::unexpected("Hessian UHF gradient failed: " + grad_res.error());
-        grad = std::move(*grad_res);
-    }
-    else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
-    {
-        auto grad_res = HartreeFock::Gradient::compute_rohf_gradient(calc, shell_pairs);
-        if (!grad_res)
-            return std::unexpected("Hessian ROHF gradient failed: " + grad_res.error());
-        grad = std::move(*grad_res);
-    }
-    else
-    {
-        auto grad_res = HartreeFock::Gradient::compute_rhf_gradient(calc, shell_pairs);
-        if (!grad_res)
-            return std::unexpected("Hessian RHF gradient failed: " + grad_res.error());
-        grad = std::move(*grad_res);
-    }
-
-    auto pcm_grad = HartreeFock::Gradient::pcm_gradient(calc, shell_pairs, &*pcm);
-    if (!pcm_grad)
-        return std::unexpected("Hessian PCM gradient failed: " + pcm_grad.error());
-    grad += *pcm_grad;
-
-    calc._gradient = grad;
-    return grad;
-}
 
 // ─── Eckart translation+rotation basis ───────────────────────────────────────
 //
@@ -311,7 +215,10 @@ void HartreeFock::Freq::vibrational_analysis(
 std::expected<HartreeFock::Freq::HessianResult, std::string>
 HartreeFock::Freq::compute_hessian(HartreeFock::Calculator &calc)
 {
-    return compute_hessian(calc, _run_sp_gradient_freq_hf);
+    // Cold start at every displacement: a warm start would make the +h and -h
+    // SCFs start from different densities.
+    return compute_hessian(calc, [](HartreeFock::Calculator &c)
+                           { return HartreeFock::Opt::run_scf_gradient(c, false); });
 }
 
 std::expected<HartreeFock::Freq::HessianResult, std::string>

@@ -1,4 +1,4 @@
-"""References for the spherical MP2 gradient gates (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md).
+"""References for the spherical MP2 gradient gates (docs/SPHERICAL_MP2_GRADIENTS.md).
 
 For tests/inputs/regression/spherical/*mp2_spherical_gradient_631gd.hfinp:
 PySCF RMP2/UMP2 with cart following the input's basis_type, Planck's GBS and

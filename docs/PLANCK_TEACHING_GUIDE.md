@@ -4677,8 +4677,9 @@ Hessian from the three-center factors, and the Lagrangian `imat` is built by
 \(N^4\) ERI.
 
 The payoff is that RI-MP2 gradients and geometry optimizations are available for
-both RHF and UHF references. RI-MP2 *frequencies* are not implemented and are
-explicitly rejected rather than silently computed from a mismatched Hessian.
+both RHF and UHF references. RI-MP2 *frequencies* are refused by name: the
+Hessian loop would run them, but unlike dense MP2 frequencies they have no
+validating gate yet.
 
 Functions: `compute_3c_eri_deriv`, `compute_2c_eri_deriv`, `build_ri_gamma3_ov`,
 `build_ri_gamma3_from_ao_dm2`, `build_ri_two_electron_gradient`,
@@ -8446,6 +8447,25 @@ with step size \(h\) (default \(5 \times 10^{-3}\) Bohr, stored in
 `_hessian_step`). This requires \(2 \times 3N\) SCF+gradient calculations.
 The symmetry of the Hessian is enforced by averaging \((H_{ij} + H_{ji})/2\).
 
+Each displaced point needs exactly what one geometry-optimization step needs:
+rebuild the basis and the PCM cavity, run the SCF, run MP2 if requested, and
+take the analytic gradient. Planck has one routine for that,
+`Opt::run_scf_gradient` (`src/opt/geomopt.cpp`), and both loops call it. The
+two used to have separate copies, and only the optimizer's handled MP2: the
+Hessian chose its gradient from the SCF type alone, so an MP2 frequency run
+would have printed MP2 energies next to HF frequencies. The driver refused
+that combination until the copies became one. The lesson is general: when two
+loops each "compute the energy and gradient here", a feature added to one is
+silently missing from the other.
+
+The one difference is the starting guess. The optimizer warm-starts each SCF
+from the previous step's density. The Hessian starts cold, so the \(+h\) and
+\(-h\) SCFs begin from the same guess. RMP2 and UMP2 frequencies match PySCF
+to every printed digit, in Cartesian and spherical bases. The reference takes
+central differences of PySCF's analytic MP2 gradient at the same \(h\). The
+cost is \(6N\) MP2 gradients, each with its own SCF and Z-vector solve, so MP2
+frequencies are for small molecules.
+
 ### Mass-Weighting and Eckart Projection
 
 The mass-weighted Hessian is:
@@ -10687,7 +10707,8 @@ driver.cpp
 | RI-routed CASSCF and FCI | Complete (the active-space transform routes through `transform_eri_ri` under `mp2_use_ri`; PySCF DF-CASSCF and DF-FCI gated to \(\sim10^{-9}\) Eh) |
 | RI-consistent analytic MP2 gradient (RMP2 and UMP2) | Complete (3-center and 2-center derivative integrals, fitted 3-index 2-particle density \(\Gamma^3\), RI-fitted CPHF orbital Hessian, RI Lagrangian; every stage of the gradient is fitted, so the gradient is the exact derivative of the RI energy). Finite-difference gated to \(\sim3\times10^{-7}\) |
 | RI-MP2 geometry optimization (RHF and UHF references) | Complete |
-| RI-MP2 frequencies | Not implemented (explicitly rejected; boundary marker `water_ri_rmp2_freq_rejected`) |
+| RMP2 / UMP2 frequencies (dense) | Complete, Cartesian and spherical (semi-numerical Hessian of the analytic MP2 gradient; PySCF-gated by `water_radical_cation_ump2_freq_sto3g` and `water_rmp2_spherical_freq_631gd`) |
+| RI-MP2 frequencies | Not validated (refused by name; boundary marker `water_ri_rmp2_freq_rejected`) |
 | RCCSD single-point energy | Complete |
 | UCCSD single-point energy | Teaching-oriented small-system determinant-space prototype |
 | RCCSDT single-point energy | Determinant prototype for tiny systems plus tensor production/optimized entry points for larger restricted references; size-based default selected by `choose_rccsdt_backend`, optional override via `PLANCK_RCCSDT_BACKEND` |
@@ -10727,7 +10748,7 @@ driver.cpp
 | Restricted global-double-hybrid analytic gradient | Complete for Cartesian AOs and LDA/GGA XC-II: gradient, geometry optimization, frequencies (central differences of analytic gradients) and geomopt+frequency. Water and C1 H2O2 B2PLYP/STO-3G energy-FD validated at two steps (Section 15). Range separation, solvent response, and DH response (TDDFT) workflows remain excluded |
 | UKS global-double-hybrid analytic gradient | Complete for `calculation gradient` only, with conventional all-active UMP2 (stored T2, no RI, no frozen core, no level shift), no solvent, and the qualified grid `grid_policy g4-3-v4` + `grid_radial_points 135` with no angular override. UKS DH geometry optimization and frequencies are rejected |
 | Range-separated double hybrids (for example \(\omega\)B2PLYP) | Complete for single-point energies |
-| Spherical harmonic basis | Complete for `hartree-fock` (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF, RHF/UHF/ROHF gradients, geomopt and frequencies, PCM). `planck-dft` runs spherical RKS/UKS single points, gradients, geomopt, frequencies, TDDFT, SOSCF, stability, checkpoint restart and PCM (`docs/SPHERICAL_DFT.md`). Dense RMP2/UMP2 gradients and geometry optimization run spherical too (Section 15). Spherical RI-MP2 and double-hybrid gradients, and MP2 frequencies in any basis, are rejected |
+| Spherical harmonic basis | Complete for `hartree-fock` (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF, RHF/UHF/ROHF gradients, geomopt and frequencies, PCM). `planck-dft` runs spherical RKS/UKS single points, gradients, geomopt, frequencies, TDDFT, SOSCF, stability, checkpoint restart and PCM (`docs/SPHERICAL_DFT.md`). Dense RMP2/UMP2 gradients, geometry optimization and frequencies run spherical too (Section 15). Spherical RI-MP2 and double-hybrid gradients are rejected |
 | C-PCM solvation (RHF/UHF/RKS/UKS, Cartesian and spherical) | Complete: energies, analytic gradients, geometry optimization and frequencies (imaginary-mode following rejected) |
 | ESP-derived charges (CHELPG, RESP) | Complete for HF and DFT, optionally including the PCM reaction field |
 | PCM coupling to post-HF (MP2, CC, CASSCF) | Not implemented |

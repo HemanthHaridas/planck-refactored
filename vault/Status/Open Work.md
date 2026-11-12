@@ -9,7 +9,7 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-11-11 (DFT counterpoise done; UKS DH step list 2026-11-10;
+Last updated: 2026-11-12 (MP2 frequencies done; DFT counterpoise 2026-11-11; UKS DH step list 2026-11-10;
 rewrite at `8570139a` on 2026-11-08, then the Yukawa and `hcore` decisions and
 the CI blocker).
 
@@ -43,9 +43,8 @@ teaching code) reorders it.
 3. **Meta-GGA**, at least SCF energies with a by-name refusal everywhere else,
    then gradients (§2, DFT). r2SCAN, ωB97M-V, M06-2X and TPSSh are rejected
    today. Scope: `docs/META_GGA_SCOPE.md`.
-4. **MP2 frequencies** (§2, HF and post-HF). Spherical MP2/UMP2 gradients and
-   geomopt are done (2026-11-11). What is left of this item is MP2
-   frequencies, in either basis (step 5 of `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`).
+4. ~~MP2 frequencies.~~ Done 2026-11-12, both bases
+   (`docs/SPHERICAL_MP2_GRADIENTS.md`).
 5. **Default DFT grid qualified for gradients** (§2, DFT). `legacy` fails the
    rotational-covariance check, so default-settings geometries and
    frequencies carry grid noise. A decision and a migration, not new code. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
@@ -59,7 +58,7 @@ teaching code) reorders it.
    Take up the other RI work in the same item:
    - **Spherical RI-MP2 gradients.** The RI 3c/2c derivative tensors are
      Cartesian-only, and the spherical-gate refusal stays until then
-     (`docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`).
+     (`docs/SPHERICAL_MP2_GRADIENTS.md`).
    - **RI-DH** (O9 in §2).
    - **G6**, the RI 2c/3c derivative profile (§5).
 
@@ -188,12 +187,9 @@ further post-HF ghost-atom checks.
   Roothaan Fock, which does not exist in the tree. ROHF CASSCF and RASSCF
   support only a closed inactive core, and the parity guard rejects a
   spin-polarized one. ROHF is also outside full-symmetry direct SCF.
-- **MP2 frequencies** (either basis; step 5 of
-  `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`). The Hessian loop picks the
-  gradient by SCF type only and never calls the MP2 gradient, so they are
-  refused. The fix is to share geomopt's per-geometry SCF → MP2 → gradient
-  routine with the Hessian loop. Spherical MP2 gradients and geomopt are
-  done; spherical RI-MP2 gradients belong to the RI item (priority 9).
+- **RI-MP2 frequencies** are refused by name (`water_ri_rmp2_freq_rejected`).
+  Dense RMP2/UMP2 frequencies are gated; lifting the RI refusal needs only a
+  gate against an FD of the RI-MP2 gradient.
 - **PySCF < 2.15 analytic MP2 gradients miss their own energy FD** by up to
   4.2e-7 Ha/Bohr on C1 fixtures. It is fixed in PySCF 2.15.0 by its Krylov /
   CPHF early-termination fix (pyscf/pyscf#3334); 2.14.0 still has it.

@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-11-10
+Last updated: 2026-11-12
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -449,6 +449,22 @@ historical design context, but they are no longer the source of truth for
     value, because ghosts carry no D3.
 
 ### Recent fixes now considered landed
+
+- **RMP2/UMP2 frequencies, Cartesian and spherical (2026-11-12,
+  `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md` step 5).**
+  - **One per-geometry routine.** Geometry optimization and the
+    semi-numerical Hessian each had their own SCF → gradient step, and only
+    the geomopt one ran MP2. Both now call `Opt::run_scf_gradient`
+    (`src/opt/geomopt.cpp`). Geomopt warm-starts it; the Hessian runs it
+    cold. `frequency`, `geomoptfreq` and `imaginaryfollow` work with
+    `correlation rmp2|ump2`.
+  - **Gates.** Both match PySCF 2.15.0 to every printed digit: central
+    differences of its analytic MP2 gradient at h = 5e-3 Bohr.
+    - `water_radical_cation_ump2_freq_sto3g` (Cartesian UMP2; was the
+      `_rejected` case)
+    - `water_rmp2_spherical_freq_631gd` (spherical RMP2)
+  - **Still refused.** RI-MP2 frequencies (`water_ri_rmp2_freq_rejected`,
+    now with its own message).
 
 - **Spherical RMP2/UMP2 gradients and geometry optimization (2026-11-11,
   `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md` steps 1–4).**
