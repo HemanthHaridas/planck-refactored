@@ -215,10 +215,16 @@ void HartreeFock::Freq::vibrational_analysis(
 std::expected<HartreeFock::Freq::HessianResult, std::string>
 HartreeFock::Freq::compute_hessian(HartreeFock::Calculator &calc)
 {
-    // Cold start at every displacement: a warm start would make the +h and -h
-    // SCFs start from different densities.
-    return compute_hessian(calc, [](HartreeFock::Calculator &c)
-                           { return HartreeFock::Opt::run_scf_gradient(c, false); });
+    // Warm start every displacement from the converged reference density,
+    // restored before each call. Never chain from the previous displacement:
+    // the +h and -h SCFs must start from the same density.
+    const Eigen::MatrixXd reference_alpha = calc._info._scf.alpha.density;
+    const Eigen::MatrixXd reference_beta = calc._info._scf.beta.density;
+    return compute_hessian(calc, [&](HartreeFock::Calculator &c)
+                           {
+                               c._info._scf.alpha.density = reference_alpha;
+                               c._info._scf.beta.density = reference_beta;
+                               return HartreeFock::Opt::run_scf_gradient(c, true); });
 }
 
 std::expected<HartreeFock::Freq::HessianResult, std::string>
