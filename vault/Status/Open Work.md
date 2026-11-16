@@ -348,10 +348,11 @@ None of these blocks correctness. Take each up only with a current profile.
     identical trajectories. Two SC-NEVPT2 estimates differ by 19 mEh.
   - Low-weight parents account for 93–96% of visits across three Cr₂
     profiles. Opt-in probabilistic spawning passed the November 16
-    current-build correctness and thread-identity checks. Finish the
-    five-seed CAS(12,10) comparison against exact CI at equal wall time.
-    Timing calibration was stopped because another calculation was using
-    the host. Recalibrate when the host is available.
+    current-build correctness and thread-identity checks. Five CAS(12,10)
+    pairs are complete: projected RMSE 2.48 → 1.40 mEh, shift RMSE
+    5.92 → 6.45 mEh, with 3.14% more mean wall time. Keep it experimental.
+    Next: matched CAS(12,18) cost pilot. Default adoption needs tighter
+    runtime matching and more exact-control seeds.
 - **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
   `docs/CCGEN_KERNEL_PERFORMANCE.md`):
   - Re-profile the generated production configuration, separating

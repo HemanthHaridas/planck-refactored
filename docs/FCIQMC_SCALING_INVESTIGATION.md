@@ -254,13 +254,22 @@ The experimental input `fciqmc_sample_low_weight_parents true` samples each inco
 
 The short control passed with the new setting both enabled and disabled. Sampling excitation draws fell from 44,415,456 to 32,919,880 (25.9%). The three focused CTests and five molecular regressions passed on the current tree. With the option enabled, raw trajectories matched at 1, 2, 4 and 8 threads. With zero granularity, enabling the option reproduced the default trajectory. The mean-step unit check also verifies that diagonal propagation and the initiator decision use the original weight. [Current-build qualification and work counters](../tests/benchmarks/fciqmc/cr2_low_weight_qualification_m3_r3.json)
 
-The five-seed comparison remains incomplete. The November 9 series stopped after two matched pairs. On November 16, the user reported another calculation using the machine, and we stopped the rerun during timing calibration. Those timings are excluded from performance conclusions. The option remains experimental and defaults to false.
+The fresh five-seed comparison completed on November 16. The earlier interrupted timings are excluded. Cr₂ CAS(12,10) used 25,000 target walkers, four spawn attempts, threshold zero, timestep 0.0005 and 110,000 equilibration steps. Seed 20250901 calibrated the candidate sampling length from unprofiled process times: 125.869 s for the baseline at 50,000 steps, 106.888 s for the candidate at 50,000, and 139.995 s at 100,000. This selected 79,000 candidate sampling steps. Seeds 20250904–20250908 then ran in alternating order against exact CASCI (−2064.494323848 Eh).
 
-Resume with Cr₂ CAS(12,10), 25,000 target walkers, four spawn attempts, threshold zero, timestep 0.0005 and 110,000 equilibration steps. The baseline samples for 50,000 steps. Use seed 20250901 to set the candidate sampling length from fresh process timings with profiling disabled. Measure candidate sampling cost from 50,000 and 100,000 steps, then choose a length that matches baseline total wall time. Evaluate seeds 20250904–20250908 with alternating run order against exact CASCI (−2064.494323848 Eh). Each estimator's root mean squared error (RMSE) includes its signed bias and seed-to-seed variation.
+| Five-seed result | Baseline | Low-weight sampling |
+|---|---:|---:|
+| Sampling steps | 50,000 | 79,000 |
+| Mean total wall time, s | 123.14 | 127.01 |
+| Projected RMSE, mEh | 2.48 | 1.40 |
+| Shift RMSE, mEh | 5.92 | 6.45 |
+| Mean signed projected error, mEh | −0.833 | −0.829 |
+| Mean signed shift error, mEh | −2.972 | −2.882 |
+
+All runs retained the seeded reference and accepted every projected sample. Peak RSS was at most 57.7 MiB. Baseline energies and reported errors reproduced the archived controls. The candidate used 3.14% more wall time on average, with individual pair differences of 0.31–7.18%, so this is a near-equal-time comparison. Projected RMSE improved while shift RMSE worsened; five seeds do not establish a general accuracy-per-time improvement. The option remains experimental and defaults to false. [Calibration, per-seed results and summary](../tests/benchmarks/fciqmc/cr2_low_weight_sampling_m3_r3.json)
 
 ## Next steps
 
-For scaling, finish the calibrated five-seed comparison when the host is available. Check the actual wall-time ratios before comparing both estimators' RMSE. The current build has passed the correctness and reproducibility checks above. Advance to the CAS(12,18) cost pilot after evaluating energy error at equal time.
+For scaling, run the matched CAS(12,18) cost pilot with low-weight sampling enabled and disabled. Use unprofiled alternating pairs for timing and separate profiled controls for excitation counts, memory and reference statistics. Keep the option experimental: the CAS(12,10) result supports a target-size pilot, but mixed estimator errors and the runtime mismatch leave default adoption unresolved. Any adoption claim needs tighter runtime matching and additional independent seeds on an exact-control problem.
 
 For accuracy, compare the current single-determinant projection with a fixed multideterminant trial on the same CAS(12,18) walker trajectories. Build the trial in Planck's determinant basis and check its Rayleigh quotient on the shared Hamiltonian. Track the signed trial overlap and usable samples across seeds. This separates sensitivity to the projected estimator from changes to the walker dynamics.
 
