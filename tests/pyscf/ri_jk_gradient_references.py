@@ -41,7 +41,7 @@ def setup(path):
     return symbols, xyz, opts
 
 
-def rijk(symbols, xyz, opts):
+def rijk(symbols, xyz, opts, dm0=None):
     mol = gto.M(atom=list(zip(symbols, xyz.tolist())), unit=BOHR_ANGSTROM, verbose=0,
                 cart=opts["cart"], charge=opts["charge"], spin=opts["spin"], basis=opts["basis"])
     mf = {"rhf": scf.RHF, "uhf": scf.UHF, "rohf": scf.ROHF}[opts["ref"]](mol)
@@ -49,7 +49,18 @@ def rijk(symbols, xyz, opts):
     mf.init_guess = "1e"
     mf.conv_tol = 1e-12
     mf.conv_tol_grad = 1e-9
-    mf.kernel()
+    mf.max_cycle = 300  # conv_tol_grad 1e-9 outlasts the default 50 on H2O2+ UHF
+    mf.kernel(dm0)
+    # From 1e, H2O2+ UHF lands on a saddle 0.023 Eh up; Planck's hcore run
+    # reaches the stable minimum. Follow internal instabilities, as
+    # ri_jk_references.py does.
+    if opts["ref"] == "uhf":
+        for _ in range(5):
+            mo, _, stable, _ = mf.stability(return_status=True)
+            if stable:
+                break
+            mf.kernel(mf.make_rdm1(mo, mf.mo_occ))
+        assert stable
     assert mf.converged
     return mf
 
@@ -65,7 +76,10 @@ def run(path):
             for m in (-2, -1, 1, 2):
                 x = xyz.copy()
                 x[a, k] += m * STEP * BOHR_ANGSTROM
-                e[m] = rijk(symbols, x, opts).e_tot
+                # Start from the central density so every point stays on the
+                # same UHF surface; from 1e, displaced H2O2+ points changed
+                # basin and the FD came out 1.18 off.
+                e[m] = rijk(symbols, x, opts, dm0=mf.make_rdm1()).e_tot
             fd[a, k] = (8 * (e[1] - e[-1]) - (e[2] - e[-2])) / (12 * STEP)
     print(f"{path.stem}: E(RI-JK) = {mf.e_tot:.10f}")
     print("  PySCF analytic:")

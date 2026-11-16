@@ -55,9 +55,9 @@ teaching code) reorders it.
    gradient); ROHF, SOSCF and stability on the fitted operator. 2026-11-16:
    `planck-dft` refuses `scf_ri_jk` (it ignored it), the RI derivative
    contraction is streamed, RI-MP2 frequencies are gated (steps 6–8), and
-   the Cartesian RHF RI-JK gradient, geomopt and frequencies equal PySCF
-   (step 9). Remaining, in dependency order: UHF/ROHF RI-JK gradients (10),
-   the B0 pair-factor cache (11), KS RI-J/K and consumers (12–14),
+   Cartesian RHF/UHF/ROHF RI-JK gradients, geomopt and frequencies equal
+   PySCF (steps 9–10). Remaining, in dependency order: the B0 pair-factor
+   cache (11), KS RI-J/K and consumers (12–14),
    the KS RI-JK gradient (15), spherical RI gradients for HF, KS and RI-MP2
    (16). Scope: `docs/RI_JK_ROUTINE_SCOPE.md`.
    After it: **RI-DH** (O9 in §2) and **G6**, the RI 2c/3c derivative

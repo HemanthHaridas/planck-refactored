@@ -480,8 +480,8 @@ historical design context, but they are no longer the source of truth for
   (RI-MP2's CPHF route and `transform_eri_ri`); before, SOSCF rebuilt the AO
   tensor every step and stability used the exact Hessian. Eigenvalues equal
   PySCF stability on a density-fitted SCF (RHF and UHF).
-- **RI-JK RHF gradient, geometry optimization and frequencies (2026-11-16,
-  `docs/RI_JK_ROUTINE_SCOPE.md` step 9).** One helper,
+- **RI-JK HF gradient, geometry optimization and frequencies (2026-11-16,
+  `docs/RI_JK_ROUTINE_SCOPE.md` steps 9–10).** One helper,
   `build_ri_scf_two_electron_gradient`, gives the fitted 2e term for the Γ
   RHF, UHF, ROHF and RKS share; the three SCF gradients call it under
   `scf_ri_jk`. Cartesian RHF is gated: water and C1 H2O2 gradients, water
@@ -493,8 +493,10 @@ historical design context, but they are no longer the source of truth for
     function; it had been gated only with the better-conditioned RIFIT sets.
   - **Memory.** Benzene 6-31G*/JKFIT peaks at 243 MiB; the stored derivative
     tensors alone would have been 1.04 GiB.
-  - **Still refused:** UHF/ROHF (step 10), spherical (16), correlated and PCM
-    RI-JK derivatives.
+  - **UHF and ROHF (step 10, same day).** Already wired through the same
+    helper; gated on water⁺ UHF/ROHF and C1 H2O2⁺ UHF, every printed digit
+    against PySCF.
+  - **Still refused:** spherical (16), correlated and PCM RI-JK derivatives.
 
 - **RI-MP2 frequencies, and a streamed RI derivative contraction
   (2026-11-16, `docs/RI_JK_ROUTINE_SCOPE.md` steps 6–8).**

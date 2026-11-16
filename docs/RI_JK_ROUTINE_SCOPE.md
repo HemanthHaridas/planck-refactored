@@ -15,9 +15,9 @@ included. With a JKFIT set the fitting error is ≤ 2.2e-5 Eh per atom
 (def2-universal-JKFIT) and ≤ 1.5e-5 (cc-pVTZ-JKFIT), 40–60× below the MP2
 RIFIT set. SOSCF and stability use the fitted operator.
 
-**RHF gradients, geometry optimization and frequencies work** for a
-Cartesian basis, equal to PySCF's density-fitted gradient to every printed
-digit. UHF, ROHF and spherical RI-JK derivatives are still refused by name.
+**RHF, UHF and ROHF gradients, geometry optimization and frequencies work**
+for a Cartesian basis, equal to PySCF's density-fitted gradient to every
+printed digit. Spherical RI-JK derivatives are still refused by name.
 `planck-dft` refuses `scf_ri_jk` (it used to ignore it).
 
 | | Status |
@@ -29,8 +29,8 @@ digit. UHF, ROHF and spherical RI-JK derivatives are still refused by name.
 | SOSCF, stability | **Done**, eigenvalues = PySCF DF (step 4) |
 | Streamed RI derivative contraction | **Done**, shared with RI-MP2 (step 7) |
 | RI-MP2 frequencies | **Done** (step 8) |
-| RI-JK RHF gradient, geomopt, frequencies (Cartesian) | **Done**, = PySCF (step 9) |
-| RI-JK UHF/ROHF and spherical derivatives | **Refused** by name; steps 10, 16 |
+| RI-JK RHF/UHF/ROHF gradient, geomopt, frequencies (Cartesian) | **Done**, = PySCF (steps 9–10) |
+| RI-JK spherical derivatives | **Refused** by name; step 16 |
 | `planck-dft` | **Refused** by name (step 6); steps 11–15 |
 | Full point-group symmetry | Refused; out of scope |
 
@@ -45,7 +45,7 @@ working-basis matrices: `compute_3c_eri` already transforms the orbital
 indices to the spherical working basis.
 
 The boundaries: the RI-JK gate in `src/hf_driver.cpp` (full symmetry, and
-derivative workflows other than Cartesian RHF without correlation or PCM) and the refusal at the top of `DFT::Driver::run`. HF
+derivative workflows other than Cartesian HF without correlation or PCM) and the refusal at the top of `DFT::Driver::run`. HF
 SOSCF and stability check the flag (step 4). Post-HF methods (MP2, CC,
 CASSCF) on RI-JK orbitals keep exact integrals, which is a legitimate
 combination.
@@ -54,24 +54,14 @@ combination.
 
 | Step | What | Needs |
 |---|---|---|
-| 10 | RI-JK gradient, UHF and ROHF | — |
 | 11 | B0: cache the RI pair factors | — |
 | 12 | KS RI-J, pure functionals | 6, 11 |
 | 13 | KS RI-K, global hybrids | 12 |
 | 14 | KS SOSCF and stability on RI; refusals for TDDFT and DH | 13 |
 | 15 | KS RI-JK gradient, Cartesian | 13 |
-| 16 | Spherical RI gradients: RI-JK HF and KS, and RI-MP2 | 10, 15 |
+| 16 | Spherical RI gradients: RI-JK HF and KS, and RI-MP2 | 15 |
 
-10 and 11 have no open prerequisites; 11 is on the critical path to KS.
-
-### 10. RI-JK gradient, UHF and ROHF
-
-Already wired: `compute_uhf_gradient` and `compute_rohf_gradient` call step
-9's `build_ri_scf_two_electron_gradient(calc, P_a, P_b)` under `_ri_jk`. What
-is missing is the gate. Gates on water⁺ (UHF, ROHF) and C1 H2O2⁺ (UHF) with
-`tests/pyscf/ri_jk_gradient_references.py` (it already reads `scf_type`);
-then narrow the `hf_driver.cpp` refusal and replace
-`water_cation_uhf_rijk_gradient_rejected`.
+11 is next: it has no open prerequisites and every KS step needs it.
 
 ### 11. B0: cache the RI pair factors
 
@@ -375,6 +365,34 @@ All 37 RI cases pass.
 Memory: benzene 6-31G*/JKFIT (nb = 102, naux = 654) peaks at 243 MiB for the
 whole gradient run; the stored derivative tensors of step 7 would have been
 1.04 GiB on their own. 29 s, almost all in the serial derivative loops (G6).
+
+### 10. RI-JK gradient, UHF and ROHF
+
+No code beyond the gate: the UHF and ROHF gradients already called step 9's
+helper with (P_a, P_b), and ROHF needs nothing more because its
+energy-weighted density comes from the spin Fock matrices the RI SCF stores.
+The `hf_driver.cpp` refusal now covers spherical, correlated and PCM RI-JK
+derivatives only.
+
+| Case (6-31G*, def2-universal-JKFIT) | PySCF analytic vs its own FD | Planck |
+|---|---|---|
+| water⁺ UHF gradient | 4.9e-11 | every printed digit |
+| water⁺ ROHF gradient | 8.5e-11 | every printed digit |
+| C1 H2O2⁺ UHF gradient, 12 components | 1.4e-9 | every printed digit; Planck's own FD 3.7e-8 |
+
+Gated by `water_cation_uhf_rijk_gradient_631gd` (was
+`water_cation_uhf_rijk_gradient_rejected`),
+`water_cation_rohf_rijk_gradient_631gd`, `h2o2_cation_uhf_rijk_gradient_631gd`
+(core) and the new boundary marker
+`water_rhf_rijk_spherical_gradient_rejected`. Forcing the closed-shell
+shortcut (2 P_a X P_a, ignoring P_b) fails all three open-shell cases and
+leaves RHF green. All 40 RI cases pass.
+
+Found on the way, in the reference script only: PySCF's `1e` guess puts
+H2O2⁺ UHF on a saddle, so the script follows the instability. Its
+displaced-geometry SCFs then changed basin and its FD came out 1.18 off;
+seeding them from the central density fixed that (1.4e-9). Its SCF also needs
+more than the default 50 cycles to reach `conv_tol_grad` 1e-9.
 
 ## Not in this scope
 

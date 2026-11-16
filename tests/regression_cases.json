@@ -1107,17 +1107,155 @@
    ]
   },
   {
-   "id": "water_cation_uhf_rijk_gradient_rejected",
-   "input": "tests/inputs/regression/ri/water_cation_uhf_rijk_gradient_rejected.hfinp",
+   "id": "water_cation_uhf_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_uhf_rijk_gradient_631gd.hfinp",
    "tags": [
     "core",
     "extended",
-    "ri"
+    "ri",
+    "open_shell"
    ],
-   "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 9): the RI-JK gradient is gated for Cartesian RHF only. Lift when UHF/ROHF are gated (step 10).",
+   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 4.9e-11). RI-JK UHF gradient (docs/RI_JK_ROUTINE_SCOPE.md step 10), def2-universal-JKFIT; Planck equals PySCF to every printed digit. Was water_cation_uhf_rijk_gradient_rejected.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.6033375269,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.0988229167
+      ],
+      [
+       -0.075368717,
+       0.0,
+       -0.0494114583
+      ],
+      [
+       0.075368717,
+       0.0,
+       -0.0494114583
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_rohf_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_rohf_rijk_gradient_631gd.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 8.5e-11). RI-JK ROHF gradient (step 10); Planck equals PySCF to every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.5989675667,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.0982693749
+      ],
+      [
+       -0.0747870819,
+       0.0,
+       -0.0491346875
+      ],
+      [
+       0.0747870819,
+       0.0,
+       -0.0491346875
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uhf_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_gradient_631gd.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 1.4e-9 with displaced SCFs seeded from the central density). C1 H2O2 cation UHF, all 12 components independent (step 10); Planck equals PySCF to every printed digit, and Planck's own 5-point energy FD to 3.7e-8. PySCF from 1e lands on a saddle; the script follows the instability.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.3691838375,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.0237477185,
+       0.0314877619,
+       -0.0290440048
+      ],
+      [
+       0.0246942156,
+       -0.0080101925,
+       -0.0254836713
+      ],
+      [
+       0.0186956789,
+       -0.0090002184,
+       0.0200386311
+      ],
+      [
+       -0.019642176,
+       -0.014477351,
+       0.034489045
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_rijk_spherical_gradient_rejected",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_spherical_gradient_rejected.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "spherical"
+   ],
+   "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 10): RI-JK derivatives in a spherical basis are refused until step 16.",
    "expected_exit_code": 1,
    "contains": [
-    "does not support gradients, geometry optimization or frequencies with a UHF or ROHF reference"
+    "does not support gradients, geometry optimization or frequencies with a spherical basis"
    ]
   },
   {
