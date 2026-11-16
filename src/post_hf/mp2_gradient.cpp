@@ -146,12 +146,11 @@ namespace
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const Eigen::MatrixXd &density)
     {
-        // RI-consistent veff G = J - 1/2 K when MP2 RI is enabled (Step RG3.2).
-        // build_ri_fock_rhf returns the same J - 1/2 K as _compute_2e_fock, so
-        // the caller factor (2· at veff_corr, projector sandwich at vhf_s1occ)
-        // is unchanged. Density is symmetric at both call sites.
-        if (calculator._mp2.use_ri)
-            return HartreeFock::Correlation::RI::build_ri_fock_rhf(calculator, density);
+        // veff of the relaxed density differentiates the SCF, so it uses the
+        // SCF's own operator (fitted only under RI-JK), even for RI-MP2, whose
+        // fit covers the correlation energy only
+        // (docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md). Density is symmetric at
+        // both call sites.
         return HartreeFock::SCF::two_electron_fock(calculator, shell_pairs, density);
     }
 
@@ -161,14 +160,8 @@ namespace
         const Eigen::MatrixXd &density_alpha,
         const Eigen::MatrixXd &density_beta)
     {
-        // RI-consistent unrestricted veff {J(Pa+Pb) - K(Pa), ... - K(Pb)} when
-        // MP2 RI is enabled (Step RG4.2). build_ri_fock_uhf returns the same
-        // quantity as _compute_2e_fock_uhf, so no caller factor changes. Both
-        // call sites pass symmetric densities (one symmetrizes explicitly, the
-        // other is C·(symmetric MO block)·Cᵀ), which build_ri_j requires.
-        if (calculator._mp2.use_ri)
-            return HartreeFock::Correlation::RI::build_ri_fock_uhf(
-                calculator, density_alpha, density_beta);
+        // As build_veff_from_density: the SCF's own operator. Both call sites
+        // pass symmetric densities.
         return HartreeFock::SCF::two_electron_fock_uhf(calculator, shell_pairs, density_alpha, density_beta);
     }
 

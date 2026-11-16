@@ -54,6 +54,13 @@ Step 4 of the RI-JK scope later widened `fitted_response` to include
 
 ## Fix
 
+**Done (2026-11-16) by the recommended route; F1–F3 landed.** Both response
+consumers go through `SCF::two_electron_fock{,_uhf}`, which is exact unless
+the SCF ran RI-JK. RI-MP2 gradients now meet their own energy FD at 3e-7
+Ha/Bohr (water RI-RMP2 6-31G* 1.3e-7, water⁺ RI-UMP2 1.2e-7; spherical
+1.1e-7 / 1.5e-7), and spherical RI-MP2 gradients are no longer refused.
+Status and gates: `docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md`.
+
 **Recommended route:** `docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md`. It
 makes `SCF::two_electron_fock{,_uhf}` the one place the fitted/exact choice
 is made, and puts RHF and UHF on one matrix-free orbital-Hessian operator.

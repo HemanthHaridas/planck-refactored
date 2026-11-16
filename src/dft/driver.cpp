@@ -2393,7 +2393,7 @@ namespace DFT::Driver
             // reference orbitals persisted every iteration; the (a,i)
             // gradient/Hessian are evaluated in the PREVIOUS iteration's MO
             // basis against THIS iteration's Fock. Packing convention:
-            // build_uhf_cphf_matrix's [0,nova) alpha + [nova,nova+novb)
+            // OrbitalHessian's UHF [0,nova) alpha + [nova,nova+novb)
             // beta, virtual-major (a*n_occ + i) within each block -- NOT a
             // third convention.
             Eigen::MatrixXd Ca_soscf_prev, Cb_soscf_prev;

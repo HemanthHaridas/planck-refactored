@@ -96,7 +96,7 @@ namespace DFT::Driver
     // virtual-major order pack_hessian_vector_product_cphf_order (F3.5)
     // already uses -- idx(a,i) = a*n_occ + i. This is the RKS analogue of
     // the single line `A(ai,ai) += eps(a) - eps(i)` inside
-    // HartreeFock::Correlation::build_rhf_cphf_matrix
+    // HartreeFock::Correlation::OrbitalHessian
     // (src/post_hf/rhf_response.cpp) -- it has no XC-functional dependence
     // at all (it is pure orbital-energy bookkeeping), so it is correct for
     // RHF and RKS alike given the same C/eps. Pure plumbing: no grid, no

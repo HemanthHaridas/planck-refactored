@@ -15,9 +15,8 @@
 #include "io/logging.h"
 #include "post_hf/casscf/aug-hessian.h"
 #include "post_hf/casscf/orbital.h"
-#include "post_hf/rhf_response.h"
+#include "post_hf/orbital_hessian.h"
 #include "post_hf/ri/ri_eri.h"
-#include "post_hf/uhf_response.h"
 #include "sad.h"
 #include "scf.h"
 #include "symmetry/fock_symmetrization.h"
@@ -361,6 +360,15 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::SCF::two_electron_fock(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &density)
 {
+    // The SCF's own operator: fitted when the SCF ran RI-JK
+    // (docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md). The RI builders work in
+    // the working basis, so no lift.
+    if (calc._scf._ri_jk)
+    {
+        if (calc._ri_pair_factors.size() == 0)
+            return std::unexpected("two_electron_fock: RI-JK cache is not ready.");
+        return HartreeFock::Correlation::RI::build_ri_fock_rhf(calc, density);
+    }
     auto D = HartreeFock::BasisFunctions::to_cartesian(calc._shells, density);
     if (!D)
         return std::unexpected(D.error());
@@ -376,6 +384,12 @@ std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string> HartreeF
     const Eigen::MatrixXd &density_alpha,
     const Eigen::MatrixXd &density_beta)
 {
+    if (calc._scf._ri_jk) // as two_electron_fock
+    {
+        if (calc._ri_pair_factors.size() == 0)
+            return std::unexpected("two_electron_fock_uhf: RI-JK cache is not ready.");
+        return HartreeFock::Correlation::RI::build_ri_fock_uhf(calc, density_alpha, density_beta);
+    }
     auto Da = HartreeFock::BasisFunctions::to_cartesian(calc._shells, density_alpha);
     auto Db = HartreeFock::BasisFunctions::to_cartesian(calc._shells, density_beta);
     if (!Da || !Db)
@@ -902,11 +916,11 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
             // diagonalization of F happens on a SOSCF iteration at all.
             const int n_occ_i = static_cast<int>(n_occ);
             const int n_virt_i = static_cast<int>(nbasis) - n_occ_i;
-            auto A_res = HartreeFock::Correlation::build_rhf_cphf_matrix(
-                calculator, shell_pairs, C_soscf_prev, eps_soscf_prev);
-            if (!A_res)
-                return std::unexpected("SOSCF: " + A_res.error());
-            const Eigen::MatrixXd &Amat = *A_res;
+            // The orbital Hessian as an operator, one Fock build per action
+            // (docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md); "Amat" below is
+            // this A.
+            const auto Amat = HartreeFock::Correlation::OrbitalHessian::rhf(
+                calculator, shell_pairs, C_soscf_prev, eps_soscf_prev, n_occ_i);
 
             // g_ai = F_mo(a,i), paired with Amat UNSCALED -- settled by a
             // direct finite-difference measurement against the ACTUAL RHF
@@ -918,7 +932,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
             // A Newton step depends only on the RATIO g/H, and 4*F_mo/(4*Amat)
             // = F_mo/Amat exactly -- so using g=F_mo against Amat unscaled
             // reproduces the true step at 1/4 the arithmetic, without ever
-            // needing to touch build_rhf_cphf_matrix (which stays exactly
+            // needing to touch the orbital Hessian (which stays exactly
             // the form the MP2 Z-vector path already depends on). The two
             // earlier attempts (g=4*F_mo/Amat, ratio 4; g=2*F_mo/Amat, ratio
             // 2) were both wrong because they were derived by pattern-matching
@@ -932,7 +946,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
                     g(a * n_occ_i + i) = F_mo(n_occ_i + a, i);
 
             const auto h_op = [&Amat](const Eigen::VectorXd &x) -> Eigen::VectorXd
-            { return Amat * x; };
+            { return Amat(x); };
             const auto g_op = [&g]() -> Eigen::VectorXd
             { return g; };
 
@@ -1589,11 +1603,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             // half the arithmetic, exactly RHF's own reasoning.
             const int n_virt_a_i = static_cast<int>(nbasis) - n_alpha;
             const int n_virt_b_i = static_cast<int>(nbasis) - n_beta;
-            auto A_res = HartreeFock::Correlation::build_uhf_cphf_matrix(
+            // Operator, as in run_rhf's SOSCF ("Amat" below is this A).
+            const auto Amat = HartreeFock::Correlation::OrbitalHessian::uhf(
                 calculator, shell_pairs, Ca_prev, Cb_prev, epsa_prev, epsb_prev, n_alpha, n_beta);
-            if (!A_res)
-                return std::unexpected("SOSCF: " + A_res.error());
-            const Eigen::MatrixXd &Amat = *A_res;
             const int nova = n_virt_a_i * n_alpha;
             const int novb = n_virt_b_i * n_beta;
 
@@ -1608,7 +1620,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
                     g(nova + a * n_beta + i) = Fb_mo(n_beta + a, i);
 
             const auto h_op = [&Amat](const Eigen::VectorXd &x) -> Eigen::VectorXd
-            { return Amat * x; };
+            { return Amat(x); };
             const auto g_op = [&g]() -> Eigen::VectorXd
             { return g; };
 

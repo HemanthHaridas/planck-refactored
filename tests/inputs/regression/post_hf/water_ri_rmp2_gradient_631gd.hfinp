@@ -1,0 +1,33 @@
+# RI-RMP2 analytic gradient vs FD of the RI-RMP2 energy at 3e-7 Ha/Bohr
+# (docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md F2). The exact-SCF response must be
+# exact; a fitted CPHF/veff misses by ~4e-6.
+%begin_control
+    basis       6-31g*
+    calculation gradient
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation rmp2
+    mp2_use_ri      .true.
+    mp2_ri_basis    cc-pVDZ-RIFIT
+    guess       hcore
+    max_cycles  100
+    tol_energy  1.0e-12
+    tol_density 1.0e-11
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.117176
+H     0.000000     0.757200    -0.468704
+H     0.000000    -0.757200    -0.468704
+%end_coords

@@ -4,6 +4,85 @@ Scope, opened 2026-11-16. It expires when the work lands; rewrite it then as
 the answer. Companion to `docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`: doing
 this first makes that fix fall out of it (see "Order").
 
+## Status (2026-11-16)
+
+**Steps 1–5 of "Order" are done and gated; the work is uncommitted.** The
+RHF and UHF orbital Hessians are one matrix-free operator
+(`Correlation::OrbitalHessian`), every consumer applies it, the four explicit
+builders are deleted, and the fitted/exact choice is made in one place
+(`SCF::two_electron_fock{,_uhf}`, keyed on `scf_ri_jk`). That fixed the
+RI-MP2 gradient, and spherical RI-MP2 gradients now run.
+
+| Gate | Result |
+|---|---|
+| 1: operator vs dense A (`planck-ri-cphf-matrix`, post-deletion build) | exact 4.5e-16; fitted vs exact 7.0e-5 (fitting error, as required); UHF on [x, x] vs RHF 0. Before the deletions, fitted operator vs the old `build_rhf_cphf_matrix_ri` was 1.2e-15 |
+| 2: every MP2 gradient/geomopt/freq, HF/KS SOSCF and stability, and RI case (100) | 99 pass; the one failure is `water_ri_rmp2_spherical_gradient_rejected`, whose input was renamed during the run (that case is retired, see below) |
+| 3: RI-MP2 gradient vs its own energy FD at 3e-7 Ha/Bohr | water RI-RMP2 6-31G* 1.3e-7 (was 3.9e-6); water⁺ RI-UMP2 1.2e-7 (was 1.6e-6); the STO-3G FD gates, tightened from 3e-4 to 3e-7, measure 2.4e-7 / 1.6e-7 |
+| Spherical RI-MP2 (refusal removed) | water RI-RMP2 1.1e-7 (was 3.5e-6); water⁺ RI-UMP2 1.5e-7 (was 1.6e-6) |
+
+On the final build (refusal removed): `--suite core` 174/174, and the six
+RI-MP2 FD gates plus the RI-MP2 geomopt and frequency pins 10/10, no
+re-pins needed.
+
+## What remains
+
+1. **Cost.** Time RHF SOSCF and an RMP2 gradient before (`712a299c`) and
+   after on water/6-31G* (conventional) and a water cluster/cc-pVDZ
+   (direct), on an idle machine. If the small conventional case regresses
+   noticeably, decide whether `two_electron_fock` should contract a cached
+   `_eri`.
+2. **Docs.**
+   - Rewrite this file and `docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md` as
+     answers.
+   - Update `docs/RI_JK_ROUTINE_SCOPE.md` "Still open" (and line ~518, which
+     names the retired `_rejected` case), the teaching-guide RI-MP2 row
+     (regenerate `docs/index.html` with `python3 docs/build_teaching_site.py`),
+     and `docs/SPHERICAL_MP2_GRADIENTS.md` (line ~153 lists the refusal as
+     kept).
+   - Vault: a `Completion.md` entry (and fix line ~609, which cites the
+     retired case), and the RI item in `Open Work.md`.
+3. **Commit**, staging only this work's files (below).
+
+## Working tree
+
+Everything is **uncommitted** on `research/wpbeh-smooth`; the last commit is
+`712a299c`. The tree also holds the user's unrelated, uncommitted FCIQMC work
+(`README.md`, `docs/FCIQMC_SCALING_INVESTIGATION.md`, `src/base/types.h`,
+`src/io/io.cpp`, `src/post_hf/ci/fciqmc*`, `src/post_hf/fciqmc_driver.cpp`,
+`tests/fciqmc_walkers.cpp`, `docs/RYDBERG_ORBITALS_SCOPE.md`) and a Rydberg
+hunk in `vault/Status/Open Work.md` (~line 137). **Do not stage those.**
+When staging shared files, stage hunks by header and stop on any mismatch;
+a staging slip once committed the Rydberg hunk and had to be amended out.
+
+### Changes in source
+
+| Order step | Change | Files |
+|---|---|---|
+| 1 | `SCF::two_electron_fock{,_uhf}` return `build_ri_fock_rhf/uhf` when the SCF ran RI-JK (error if the RI cache is not primed); header comment says it is the one place the choice is made | `src/scf/scf.{h,cpp}` |
+| 2 | `Correlation::OrbitalHessian`: `rhf()`/`uhf()` factories, `operator()` (one `two_electron_fock{,_uhf}` call; NaN on failure), `diagonal()`, `materialize()` | `src/post_hf/orbital_hessian.{h,cpp}` (new), added to `POSTHF_DFT_SRC` in `CMakeLists.txt` |
+| 3 | `solve_rhf_cphf`: the operator plus GMRES (diagonal preconditioner, 1e-10, as `solve_uhf_cphf`), with the same RHF/closed-shell/shape checks. `PLANCK_DEBUG_RHF_RESPONSE=1` still dumps A (via `materialize()`), rhs and z. `solve_uhf_cphf` uses `OrbitalHessian::uhf`. RHF and UHF SOSCF use the operator as `h_op` (`scf.cpp`, run_rhf ~line 920, run_uhf ~1605) | `src/post_hf/{rhf,uhf}_response.{h,cpp}`, `src/scf/scf.cpp` |
+| 4 | Deleted `build_rhf_cphf_matrix`, `build_rhf_cphf_matrix_ri`, `build_uhf_cphf_matrix`, the old `UHFOrbitalHessian` and `RI::fitted_response`. `build_veff_from_density{,_spin_densities}` call `two_electron_fock{,_uhf}` with no RI branch. Comments that named the deleted functions now name `OrbitalHessian` | `src/post_hf/mp2_gradient.cpp`, `src/post_hf/ri/ri_eri.h`, `src/dft/{analytic_hessian.h,response_packing.h,driver.cpp}`, three `tests/dft_*.cpp` comments |
+| Gate 1 | `tests/ri_cphf_matrix.cpp` compares the operator with a dense A it builds from `transform_eri`. The target `planck-ri-cphf-matrix` now builds from the full-stack lists (as `planck-udh-validation`, plus `BSSE_SRC`, which the DFT driver's counterpoise call needs to link) | `tests/ri_cphf_matrix.cpp`, `CMakeLists.txt` |
+| 5 | Removed the spherical RI-MP2 gradient refusal (and the now-unused `needs_gradient` block) | `src/hf_driver.cpp` |
+| Gates 3, 5 | New inputs `post_hf/water_ri_rmp2_gradient_631gd`, `open_shell/water_cation_ri_ump2_gradient_631gd`, `spherical/water_cation_ri_ump2_spherical_gradient_631gd`; `spherical/water_ri_rmp2_spherical_gradient_rejected` renamed (`git mv`) to `..._gradient_631gd`. Cases `*_ri_*mp2_*gradient_631gd_fd` (four, extended, `--atol 3e-7`) replace `water_ri_rmp2_spherical_gradient_rejected`; the two STO-3G RI-MP2 FD cases get `--atol 3e-7` | `tests/inputs/regression/...`, `tests/regression_cases.json` |
+
+### If something fails
+
+- **A dense MP2 gradient moves by more than ~1e-9:** check the GMRES
+  residual (`solve->true_residuals`). The old path solved A exactly by QR,
+  and the operator equals that A to 4.5e-16 (gate 1), so a difference can
+  only come from the solve.
+- **An RI-JK SOSCF or stability case moves:** the fitted operator now comes
+  from `two_electron_fock` under `scf_ri_jk`, which equals the old fitted A
+  to 1.2e-15. Check that the RI cache is primed at that point (the new error
+  message says so if it is not).
+- **An RI-MP2 FD gate misses by ~4e-6 again:** a response consumer reaches a
+  fitted operator. `git grep build_ri_fock` should show only `scf.cpp`
+  (inside `two_electron_fock`) and the RI-JK SCF loop.
+
+The sections below are the original scope: the answer, design and plan that
+steps 1–5 implemented.
+
 ## Answer
 
 **Yes, and nothing in production needs the explicit matrix.** Every

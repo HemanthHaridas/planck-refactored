@@ -550,6 +550,8 @@ set(POSTHF_DFT_SRC
     ${SRC_DIR}/post_hf/rhf_response.cpp
     ${SRC_DIR}/post_hf/uhf_response.h
     ${SRC_DIR}/post_hf/uhf_response.cpp
+    ${SRC_DIR}/post_hf/orbital_hessian.h
+    ${SRC_DIR}/post_hf/orbital_hessian.cpp
     ${SRC_DIR}/post_hf/casscf/orbital.h
     ${SRC_DIR}/post_hf/casscf/orbital.cpp
     ${SRC_DIR}/post_hf/casscf/aug-hessian.h
@@ -2030,22 +2032,9 @@ if(BUILD_TESTING)
     # RG3.1: RI-fitted RHF CPHF orbital Hessian vs dense A.
     add_executable(planck-ri-cphf-matrix
         ${CMAKE_SOURCE_DIR}/tests/ri_cphf_matrix.cpp
-        ${SRC_DIR}/post_hf/rhf_response.cpp
-        ${SRC_DIR}/post_hf/integrals.cpp
-        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
-        ${SRC_DIR}/basis/gaussian.cpp
-        ${SRC_DIR}/basis/rifit.cpp
-        ${SRC_DIR}/basis/gbs_parser.cpp
-        ${SRC_DIR}/basis/basis.cpp
-        ${SRC_DIR}/basis/spherical.cpp
-        ${SRC_DIR}/basis/spherical_recurrence.cpp
-        ${SRC_DIR}/integrals/os.cpp
-        ${SRC_DIR}/integrals/hgp.cpp
-        ${SRC_DIR}/integrals/rys.cpp
-        ${SRC_DIR}/integrals/rys_roots.cpp
-        ${SRC_DIR}/integrals/screening.cpp
-        ${SRC_DIR}/integrals/shellpair.cpp
-        ${LOOKUP_SRC}
+        ${BASE_SRC} ${DFT_LIB_SRC} ${LOOKUP_SRC} ${SYMM_SRC} ${BASIS_SRC}
+        ${INT_SRC} ${IO_SRC} ${SCF_SRC} ${SOLVATION_SRC} ${POPULATIONS_SRC} ${BSSE_SRC}
+        ${POSTHF_DFT_SRC} ${GRADIENT_SRC} ${OPT_SRC} ${FREQ_SRC}
         ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
@@ -2518,10 +2507,16 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
-    target_include_directories(planck-ri-cphf-matrix PRIVATE
-        ${SRC_DIR}
-        ${eigen_SOURCE_DIR}
-    )
+    # Full stack: the orbital-Hessian operator goes through SCF::two_electron_fock.
+    target_include_directories(planck-ri-cphf-matrix PRIVATE ${SRC_DIR} ${CMAKE_BINARY_DIR}
+        ${MSYM_INSTALL_DIR}/include ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-ri-cphf-matrix ${MSYM_INSTALL_DIR}/lib/libmsym.a ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-ri-cphf-matrix libmsym libxc)
+    target_compile_definitions(planck-ri-cphf-matrix PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER}
+        PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower} PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-ri-cphf-matrix OpenMP::OpenMP_CXX)
+    endif()
 
     target_include_directories(planck-ri-two-electron-gradient PRIVATE
         ${SRC_DIR}

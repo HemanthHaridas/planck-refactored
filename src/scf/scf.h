@@ -81,7 +81,9 @@ namespace HartreeFock
 
         // Coulomb two-electron Fock G[P] (J - ½K for RHF; {J - K_α, J - K_β}
         // for UHF) of a density in the WORKING basis, returned in the working
-        // basis. The integral builders are Cartesian: P is lifted with
+        // basis: the SCF's own two-electron operator, fitted when the SCF ran
+        // RI-JK (scf_ri_jk), exact otherwise. The one place response and
+        // gradient code chooses between them. The integral builders are Cartesian: P is lifted with
         // to_cartesian and G brought back with to_working, both the identity
         // in Cartesian mode. For response and gradient code; the SCF's own
         // direct build adds incremental-Fock state on top of the same steps.

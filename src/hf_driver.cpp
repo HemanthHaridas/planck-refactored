@@ -515,36 +515,10 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             calculator._scf._scf != HartreeFock::SCFType::UHF &&
             calculator._scf._scf != HartreeFock::SCFType::ROHF)
             return reject("SCF type " + map_enum(calculator._scf._scf));
-        // Every gradient-consuming workflow inherits the gradient-side
-        // restrictions: ROHF analytic gradients are unimplemented Cartesian-side
-        // too, and RMP2/UMP2 gradients still need the response-machinery audit
-        // before the spherical lift is wired in (Phase 2). Reject those
-        // combinations explicitly so a user that asks for `correlation rmp2 /
-        // calculation geomopt` in spherical mode gets a clear message instead
-        // of a wrong number.
-        const bool needs_gradient =
-            calculator._calculation == HartreeFock::CalculationType::Gradient ||
-            calculator._calculation == HartreeFock::CalculationType::GeomOpt ||
-            calculator._calculation == HartreeFock::CalculationType::Frequency ||
-            calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency ||
-            calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow;
-        if (needs_gradient)
-        {
-            // ROHF spherical gradients: enabled (compute_rohf_gradient builds W
-            // in the spherical basis then lifts once — see gradient.cpp).
-            // Dense RMP2/UMP2 gradients: enabled (mp2_gradient.cpp keeps the
-            // Lagrangian in the working basis and lifts the derivative-kernel
-            // inputs once; docs/SPHERICAL_MP2_GRADIENT_SCOPE.md). RI-MP2 stays
-            // refused: the RI derivative contraction lifts to Cartesian exactly
-            // (docs/RI_JK_ROUTINE_SCOPE.md step 16), but the RI-MP2 gradient
-            // misses its own energy FD by ~4e-6 Ha/Bohr (Cartesian too, 6-31G*/
-            // cc-pVDZ-RIFIT; dense MP2 1.5e-7), so spherical is not extended
-            // until that is fixed.
-            if ((calculator._correlation == HartreeFock::PostHF::RMP2 ||
-                 calculator._correlation == HartreeFock::PostHF::UMP2) &&
-                calculator._mp2.use_ri)
-                return reject("RI-MP2 analytic gradient");
-        }
+        // ROHF, dense and RI RMP2/UMP2 gradients all run in the spherical basis:
+        // the MP2 Lagrangian stays in the working basis and the derivative-kernel
+        // inputs are lifted once (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md,
+        // docs/RI_JK_ROUTINE_SCOPE.md step 16).
         // Post-HF energy paths consume only the SCF's spherical AO ERI and spherical
         // MO coefficients: the AO→MO transform is self-consistent in the spherical
         // basis (no C needed), and every AO/MO dimension keys off working_nbasis().

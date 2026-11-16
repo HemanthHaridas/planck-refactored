@@ -232,7 +232,7 @@ namespace
     // D2.2.0 (docs/SOSCF_DFT.md): orbital_energy_difference_diagonal
     // is the RKS analogue of the single line
     // `A(ai,ai) += eps(n_occ+a) - eps(i)` inside
-    // HartreeFock::Correlation::build_rhf_cphf_matrix
+    // HartreeFock::Correlation::OrbitalHessian
     // (src/post_hf/rhf_response.cpp) -- pure orbital-energy bookkeeping, no
     // XC dependence, so it is correct for RHF and RKS alike given the same
     // eps/n_occ. Verified against an independent hand-written loop (not the
