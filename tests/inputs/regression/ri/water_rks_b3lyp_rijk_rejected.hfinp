@@ -1,6 +1,5 @@
-# Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 6): planck-dft has no
-# RI-JK path, and before this refusal it ignored scf_ri_jk and ran exact
-# integrals silently. Lift when KS RI-J lands (step 12).
+# Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 12): RI-JK in planck-dft
+# covers pure functionals only; global hybrids (RI-K) are step 13.
 %begin_control
     basis       6-31g*
     calculation energy
@@ -21,8 +20,11 @@
 %end_scf
 
 %begin_dft
-    exchange            pbe
-    correlation         pbe
+    grid                fine
+    grid_radial_points  150
+    grid_angular_points 590
+    exchange            b3lyp
+    correlation         lyp
     print_grid_summary  .false.
 %end_dft
 

@@ -18,7 +18,11 @@ RIFIT set. SOSCF and stability use the fitted operator.
 **RHF, UHF and ROHF gradients, geometry optimization and frequencies work**
 for a Cartesian basis, equal to PySCF's density-fitted gradient to every
 printed digit. Spherical RI-JK derivatives are still refused by name.
-`planck-dft` refuses `scf_ri_jk` (it used to ignore it).
+
+**Kohn-Sham: pure-functional single points work** (RI-J), RKS and UKS,
+Cartesian and spherical, equal to PySCF to every printed digit. Hybrids,
+derivatives, TDDFT, SOSCF, stability, PCM and counterpoise with RI-JK are
+refused by name in `planck-dft`.
 
 | | Status |
 |---|---|
@@ -32,7 +36,8 @@ printed digit. Spherical RI-JK derivatives are still refused by name.
 | RI-MP2 frequencies | **Done** (step 8) |
 | RI-JK RHF/UHF/ROHF gradient, geomopt, frequencies (Cartesian) | **Done**, = PySCF (steps 9–10) |
 | RI-JK spherical derivatives | **Refused** by name; step 16 |
-| `planck-dft` | **Refused** by name (step 6); steps 11–15 |
+| `planck-dft` pure-functional energies (RI-J) | **Done**, = PySCF (step 12) |
+| `planck-dft` hybrids, derivatives, SOSCF, stability | **Refused** by name; steps 13–15 |
 | Full point-group symmetry | Refused; out of scope |
 
 ## How `scf_ri_jk` is wired
@@ -46,7 +51,11 @@ working-basis matrices: `compute_3c_eri` already transforms the orbital
 indices to the spherical working basis.
 
 The boundaries: the RI-JK gate in `src/hf_driver.cpp` (full symmetry, and
-derivative workflows other than Cartesian HF without correlation or PCM) and the refusal at the top of `DFT::Driver::run`. HF
+derivative workflows other than Cartesian HF without correlation or PCM)
+and `validate_ri_jk_support` in `src/dft/driver.cpp` (everything but
+pure-functional single points; counterpoise at the top of
+`DFT::Driver::run`). In `planck-dft`, `assemble_current_ks_potential` adds
+the RI J in the working basis after projecting the other KS terms. HF
 SOSCF and stability check the flag (step 4). Post-HF methods (MP2, CC,
 CASSCF) on RI-JK orbitals keep exact integrals, which is a legitimate
 combination.
@@ -55,37 +64,12 @@ combination.
 
 | Step | What | Needs |
 |---|---|---|
-| 12 | KS RI-J, pure functionals | — |
-| 13 | KS RI-K, global hybrids | 12 |
+| 13 | KS RI-K, global hybrids | — |
 | 14 | KS SOSCF and stability on RI; refusals for TDDFT and DH | 13 |
 | 15 | KS RI-JK gradient, Cartesian | 13 |
 | 16 | Spherical RI gradients: RI-JK HF and KS, and RI-MP2 | 15 |
 
 12 is next; every remaining step follows from it.
-
-### 12. KS RI-J, pure functionals
-
-In the KS assembly (`src/dft/driver.cpp`, the `_compute_2e_j_direct` call),
-under `_ri_jk` replace the direct Coulomb by `build_ri_j(calculator,
-P_working_total)`. Prime the cache once with `ensure_ri_3c_ready` before the
-SCF loop, as `scf.cpp` does. Narrow step 6's refusal to what is still
-missing: hybrids, and gradient, geomopt and frequency workflows (the exact KS
-gradient at RI orbitals would be inconsistent, as it was for HF in step 3).
-
-- **Basis.** KS J, K and V_xc are built in Cartesian from lifted densities
-  and projected to the working basis at the end. The RI builders work in the
-  working basis, so the RI branch takes the working densities
-  (`calculator._info._scf`) and adds its J *after* the projection. Feeding it
-  the lifted densities, or projecting its J again, is wrong.
-  `combine_ks_potential` needs the Coulomb passed separately, or the
-  projection loop must skip it.
-- **MPI.** The RI builders have no MPI distribution, so under `planck-mpi`
-  every rank does the whole RI build: correct, no speed-up. Record it; do not
-  block on it.
-
-Gates against PySCF `dft.RKS/UKS(...).density_fit()` on Planck's unpruned
-grid convention (as the PCM and DH scripts do): water PBE RKS, water⁺ PBE
-UKS, one spherical.
 
 ### 13. KS RI-K, global hybrids
 
@@ -423,6 +407,36 @@ the raw parse), and the test passes at 1e-10. The script itself was never
 in the repository (`.gitignore` ignores `scripts/*` except an allowlist), so
 on a fresh clone the test could not even find its oracle; it is now on the
 allowlist.
+
+### 12. KS RI-J, pure functionals
+
+`assemble_current_ks_potential` skips the direct Coulomb build under
+`scf_ri_jk` and, after the Cartesian-to-working projection of the other KS
+terms, adds `build_ri_j` of the stored working density (alpha + beta for UKS)
+to `coulomb`, `alpha` and `beta`. The SCF energy uses ½ Σ P·`coulomb`, so it
+follows with no other change. The cache is primed there (a no-op after the
+first call). The only other exact J/K builders in `planck-dft` are TDDFT and
+the KS orbital Hessian (SOSCF, stability), both refused.
+
+`validate_ri_jk_support` (next to `validate_workflow_support`, once the
+functional is known) admits only pure-functional single points: hybrids,
+double hybrids, every non-single-point workflow, SOSCF, stability and PCM
+are refused by name, and counterpoise at the top of `DFT::Driver::run`.
+Under `planck-mpi` every rank builds the whole RI J: correct, no speed-up.
+
+| Case (6-31G*, def2-universal-JKFIT, unpruned 150 × 590) | PySCF RI | exact | Planck |
+|---|---|---|---|
+| water RKS PBE | −76.3126823494 | −76.3126584396 | every printed digit |
+| water⁺ UKS PBE | −75.8534904952 | −75.8534653188 | every printed digit |
+| water RKS PBE, spherical | −76.3107746348 | −76.3107325601 | every printed digit |
+
+The 2.4–4.2e-5 Eh gap to the exact energy shows the RI branch is the one
+running. Gated by `water_rks_pbe_rijk_631gd` (was
+`water_rks_pbe_rijk_rejected`), `water_cation_uks_pbe_rijk_631gd`,
+`water_rks_pbe_rijk_spherical_631gd`, and the markers
+`water_rks_b3lyp_rijk_rejected` and `water_rks_pbe_rijk_gradient_rejected`
+(the KS gradient would otherwise use exact J at RI orbitals, the step-3
+defect). References: `tests/pyscf/ri_jk_dft_references.py`.
 
 ## Not in this scope
 

@@ -2,6 +2,7 @@
 
 #include "analytic_hessian.h"
 #include "bsse/counterpoise.h"
+#include "post_hf/ri/ri_eri.h"
 #include "dispersion.h"
 #include "ks_orbital_hessian.h"
 #include "tddft_exchange.h"
@@ -3041,6 +3042,39 @@ namespace DFT::Driver
             return {};
         }
 
+        // RI-JK in planck-dft (docs/RI_JK_ROUTINE_SCOPE.md steps 12-15): the
+        // fitted Coulomb matrix replaces the direct one for pure functionals.
+        // Everything that would still build exact J or K, or differentiate the
+        // energy, is refused by name until its step lands.
+        std::expected<void, std::string> validate_ri_jk_support(
+            const HartreeFock::Calculator &calculator, const InitializedFunctionals &functionals)
+        {
+            if (!calculator._scf._ri_jk)
+                return {};
+            const auto refuse = [](const std::string &what) -> std::expected<void, std::string>
+            {
+                return std::unexpected("RI-JK (scf_ri_jk) in planck-dft supports pure-functional "
+                                       "single-point energies only so far, not " + what +
+                                       ". Disable RI-JK (scf_ri_jk false).");
+            };
+            if (calculator._mp2.ri_basis_name.empty())
+                return std::unexpected("RI-JK SCF (scf_ri_jk) needs an auxiliary basis: set mp2_ri_basis.");
+            if (functionals.has_double_hybrid_pt2)
+                return refuse("a double-hybrid functional");
+            if (functionals.has_range_separation ||
+                std::abs(functionals.implemented_exact_exchange_coefficient) > 1.0e-14)
+                return refuse("a hybrid functional (exact exchange)");
+            if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+                return refuse(workflow_label(calculator._calculation));
+            if (calculator._scf._scf_soscf_diis_tol > 0.0 || calculator._scf._scf_soscf_start > 0)
+                return refuse("SOSCF");
+            if (calculator._scf._stability_check || calculator._scf._stability_follow)
+                return refuse("stability analysis");
+            if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+                return refuse("PCM");
+            return {};
+        }
+
         std::expected<void, std::string> validate_workflow_support(
             const HartreeFock::Calculator &calculator,
             const InitializedFunctionals &functionals,const Options &options)
@@ -4690,15 +4724,21 @@ namespace DFT::Driver
         //
         // Raw J — no coefficient. See the prefactor contract in
         // fock_accumulate.h.
-        const Eigen::MatrixXd coulomb = _compute_2e_j_direct(
-            prepared.shell_pairs,
-            total_density,
-            calculator._shells.nbasis(),
-            calculator._integral._engine,
-            HartreeFock::ERIKernel::Coulomb,
-            0.0,
-            calculator._integral._tol_eri,
-            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        //
+        // RI-JK: the fitted J is built in the working basis below, after the
+        // projection, so the direct build is skipped here.
+        const bool ri_j = calculator._scf._ri_jk;
+        const Eigen::MatrixXd coulomb =
+            ri_j ? Eigen::MatrixXd(Eigen::MatrixXd::Zero(nbasis, nbasis))
+                 : _compute_2e_j_direct(
+                       prepared.shell_pairs,
+                       total_density,
+                       calculator._shells.nbasis(),
+                       calculator._integral._engine,
+                       HartreeFock::ERIKernel::Coulomb,
+                       0.0,
+                       calculator._integral._tol_eri,
+                       calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
 
         const double full_range_exchange_coefficient = xc_grid.full_range_exchange_coefficient;
         const double short_range_exchange_coefficient = xc_grid.short_range_exchange_coefficient;
@@ -4806,6 +4846,22 @@ namespace DFT::Driver
                     return std::unexpected("KS potential: " + M_w.error());
                 *M = std::move(*M_w);
             }
+
+        // RI-J (docs/RI_JK_ROUTINE_SCOPE.md step 12). The RI builders take and
+        // return working-basis matrices, so this uses the stored working
+        // densities and is added after the projection above, never before it.
+        if (ri_j)
+        {
+            if (auto ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calculator); !ready)
+                return std::unexpected("RI-J: " + ready.error());
+            Eigen::MatrixXd P_working = calculator._info._scf.alpha.density;
+            if (calculator._scf._scf == HartreeFock::SCFType::UHF)
+                P_working += calculator._info._scf.beta.density;
+            const Eigen::MatrixXd J = HartreeFock::Correlation::RI::build_ri_j(calculator, P_working);
+            potential.coulomb += J;
+            potential.alpha += J;
+            potential.beta += J;
+        }
         return potential;
     }
 
@@ -5214,6 +5270,8 @@ namespace DFT::Driver
 
         if (auto workflow_support = validate_workflow_support(calculator, *functionals,options); !workflow_support)
             return std::unexpected(workflow_support.error());
+        if (auto ri = validate_ri_jk_support(calculator, *functionals); !ri)
+            return std::unexpected(ri.error());
 
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,
@@ -5551,13 +5609,13 @@ namespace DFT::Driver
 
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Input Parsing :", "Successful");
 
-        // RI-JK is parsed by the shared input layer but no Kohn-Sham path uses
-        // it: without this refusal a KS run with scf_ri_jk would silently use
-        // exact integrals (docs/RI_JK_ROUTINE_SCOPE.md step 6; lifted by 12).
-        if (calculator._scf._ri_jk)
+        // RI-JK: the workflow checks live in validate_ri_jk_support, which runs
+        // once the functional is known. Counterpoise is refused here, before the
+        // sub-calculations (ghost atoms carry no fitting functions yet).
+        if (calculator._scf._ri_jk && calculator._bsse._enabled)
             return std::unexpected(
-                "RI-JK SCF (scf_ri_jk) is not supported in planck-dft yet: Kohn-Sham "
-                "J and K are built with exact integrals. Disable RI-JK (scf_ri_jk false).");
+                "RI-JK SCF (scf_ri_jk) does not support counterpoise in planck-dft yet. "
+                "Disable RI-JK (scf_ri_jk false).");
 
         // Counterpoise: the shared five-calculation driver, each sub-calculation
         // a KS single point (docs/DFT_COUNTERPOISE.md §1).
