@@ -488,8 +488,10 @@ historical design context, but they are no longer the source of truth for
   digit (6-31G*, def2-universal-JKFIT). KS SOSCF and stability use the
   fitted operator (step 14): stability eigenvalues equal PySCF on
   `density_fit()` to all seven digits; the exact-integral Hessian was up to
-  6.7e-6 off. Range-separated functionals, derivatives, TDDFT, PCM and
-  counterpoise with `scf_ri_jk` are refused by name.
+  6.7e-6 off. Cartesian RKS/UKS gradients and geomopt (step 15) equal
+  PySCF's density-fitted gradient with grid response to ≤ 7e-11 Ha/Bohr and
+  E_opt to every digit. Range-separated functionals, spherical derivatives,
+  TDDFT, PCM and counterpoise with `scf_ri_jk` are refused by name.
 
 - **RI pair factors cached per geometry (2026-11-16, B0;
   `docs/RI_JK_ROUTINE_SCOPE.md` step 11).** B = J V^{-1/2} is built once by

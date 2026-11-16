@@ -808,14 +808,25 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
         return 2.0 * P_t(ii, jj) * P_t(kk, ll) -
                cx_total * (2.0 * P_a(ii, kk) * P_a(jj, ll) + 2.0 * P_b(ii, kk) * P_b(jj, ll));
     };
-    accumulate_shell_pair_eri_gradient(
-        calc,
-        shell_pairs,
-        shell_atom,
-        bf_shell,
-        schwarz_q,
-        two_electron,
-        gamma_fn);
+    if (calc._scf._ri_jk)
+    {
+        // RI-JK: the fitted operator's 2e term for the same Gamma
+        // (docs/RI_JK_ROUTINE_SCOPE.md step 15). Range separation is refused
+        // under RI, so cx_total is the full-range fraction.
+        auto ri = HartreeFock::Correlation::RI::build_ri_scf_two_electron_gradient(calc, P_a, P_b, cx_total);
+        if (!ri)
+            return std::unexpected(ri.error());
+        two_electron = *ri;
+    }
+    else
+        accumulate_shell_pair_eri_gradient(
+            calc,
+            shell_pairs,
+            shell_atom,
+            bf_shell,
+            schwarz_q,
+            two_electron,
+            gamma_fn);
 
     Eigen::MatrixXd exchange_long_range_correction =
         Eigen::MatrixXd::Zero(natoms, 3);

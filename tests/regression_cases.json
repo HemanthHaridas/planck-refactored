@@ -1495,8 +1495,8 @@
    ]
   },
   {
-   "id": "water_rks_pbe_rijk_gradient_rejected",
-   "input": "tests/inputs/regression/ri/water_rks_pbe_rijk_gradient_rejected.hfinp",
+   "id": "water_rks_pbe_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_rks_pbe_rijk_gradient_631gd.hfinp",
    "executable": "planck-dft",
    "tags": [
     "core",
@@ -1504,10 +1504,181 @@
     "ri",
     "dft"
    ],
-   "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 12): a KS gradient with RI-J would use exact J at RI orbitals (the step-3 defect for HF). Refused until the KS RI-JK gradient lands (step 15).",
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit().nuc_grad_method() with grid response, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590, conv_tol_grad 1e-9 (tests/pyscf/ri_jk_dft_references.py). Planck matches every component to <= 7e-11 Ha/Bohr. KS RI-JK gradient (docs/RI_JK_ROUTINE_SCOPE.md step 15). Was water_rks_pbe_rijk_gradient_rejected (step 12).",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3126823494,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.0970587312
+      ],
+      [
+       -0.0518047078,
+       0.0,
+       -0.0485293656
+      ],
+      [
+       0.0518047078,
+       0.0,
+       -0.0485293656
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rks_b3lyp_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_rks_b3lyp_rijk_gradient_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit().nuc_grad_method() with grid response, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590, conv_tol_grad 1e-9 (tests/pyscf/ri_jk_dft_references.py). Planck matches every component to <= 7e-11 Ha/Bohr. C1 H2O2 B3LYP: RI-K through the exchange fraction.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -151.5278433929,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.0295825789,
+       -0.0225488393,
+       -0.0218448412
+      ],
+      [
+       0.0227562077,
+       0.0381457757,
+       -0.0224515221
+      ],
+      [
+       0.0301253374,
+       0.0009681803,
+       0.0170656227
+      ],
+      [
+       -0.0232989661,
+       -0.0165651168,
+       0.0272307406
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_b3lyp_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_uks_b3lyp_rijk_gradient_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft",
+    "open_shell"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.UKS(...).density_fit().nuc_grad_method() with grid response, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590, conv_tol_grad 1e-9 (tests/pyscf/ri_jk_dft_references.py). Planck matches every component to <= 7e-11 Ha/Bohr. UKS B3LYP.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.9401245123,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.1221574758
+      ],
+      [
+       -0.0905998929,
+       0.0,
+       -0.0610787379
+      ],
+      [
+       0.0905998929,
+       0.0,
+       -0.0610787379
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_rijk_geomopt_631gd",
+   "input": "tests/inputs/regression/ri/water_rks_pbe_rijk_geomopt_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 geometric GAU_TIGHT on dft.RKS(...).density_fit(), optimizing with grid response on (the Gradients object is passed to optimize), PBE, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590 (tests/pyscf/ri_jk_dft_references.py): E_opt -76.3225206089. Planck matches every printed digit. geomopt_grad_tol 1.5e-5 is GAU_TIGHT's max force.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Geometry Optimization :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "geomopt_final_energy",
+     "expected": -76.3225206089,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_rijk_spherical_gradient_rejected",
+   "input": "tests/inputs/regression/ri/water_rks_pbe_rijk_spherical_gradient_rejected.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft",
+    "spherical"
+   ],
+   "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 15): RI-JK KS derivatives in a spherical basis are refused until step 16.",
    "expected_exit_code": 1,
    "contains": [
-    "single-point energies only so far, not analytic gradients"
+    "not analytic gradients in a spherical basis"
    ]
   },
   {

@@ -20,9 +20,10 @@ for a Cartesian basis, equal to PySCF's density-fitted gradient to every
 printed digit. Spherical RI-JK derivatives are still refused by name.
 
 **Kohn-Sham: pure and global-hybrid single points work** (RI-J, RI-K), RKS
-and UKS, equal to PySCF to every printed digit, and SOSCF and stability use
-the fitted operator. Range-separated functionals, derivatives, TDDFT, PCM and
-counterpoise with RI-JK are refused by name in `planck-dft`.
+and UKS, equal to PySCF to every printed digit; SOSCF and stability use the
+fitted operator; Cartesian gradients and geometry optimization equal PySCF's
+density-fitted gradient. Range-separated functionals, spherical derivatives,
+TDDFT, PCM and counterpoise with RI-JK are refused by name in `planck-dft`.
 
 | | Status |
 |---|---|
@@ -35,10 +36,10 @@ counterpoise with RI-JK are refused by name in `planck-dft`.
 | RI pair factors cached per geometry (B0) | **Done** (step 11) |
 | RI-MP2 frequencies | **Done** (step 8) |
 | RI-JK RHF/UHF/ROHF gradient, geomopt, frequencies (Cartesian) | **Done**, = PySCF (steps 9–10) |
-| RI-JK spherical derivatives | **Refused** by name; step 16 |
 | `planck-dft` pure and global-hybrid energies (RI-J, RI-K) | **Done**, = PySCF (steps 12–13) |
 | `planck-dft` SOSCF, stability | **Done**, eigenvalues = PySCF DF (step 14) |
-| `planck-dft` derivatives | **Refused** by name; step 15 |
+| `planck-dft` Cartesian gradients, geomopt (RKS, UKS) | **Done**, = PySCF (step 15) |
+| Spherical RI derivatives (HF, KS, RI-MP2) | **Refused** by name; step 16 |
 | `planck-dft` range-separated with RI-JK | **Refused** by name; out of scope (attenuated RI) |
 | Full point-group symmetry | Refused; out of scope |
 
@@ -66,18 +67,9 @@ combination.
 
 | Step | What | Needs |
 |---|---|---|
-| 15 | KS RI-JK gradient, Cartesian | — |
-| 16 | Spherical RI gradients: RI-JK HF and KS, and RI-MP2 | 15 |
+| 16 | Spherical RI gradients: RI-JK HF and KS, and RI-MP2 | — |
 
-15 is next; 16 lifts the spherical refusals for HF, KS and RI-MP2 together.
-
-### 15. KS RI-JK gradient, Cartesian
-
-Already wired for global hybrids: `compute_rks_gradient` passes its exact-
-exchange fraction to the closed-shell builder, whose RI branch calls step 9's
-helper with it; the UKS gradient needs the same. The XC terms are untouched. Gate: PySCF
-`density_fit()` KS gradients and an FD of the RI energy. Lift the KS
-derivative-workflow refusal kept since step 12.
+16 is the last step; it lifts the spherical refusals for HF, KS and RI-MP2 together.
 
 ### 16. Spherical RI gradients
 
@@ -464,6 +456,32 @@ atol 2e-7, which the exact-integral Hessian fails on every eigenvalue (the
 existing KS stability gates' 1e-6 would miss the triplet's 5e-7). The SOSCF
 energy check cannot tell the two Hessians apart: both converge to the RI
 minimum.
+
+### 15. KS RI-JK gradient, Cartesian
+
+Both KS gradients already had the Γ step 9's helper covers,
+2 P_t⊗P_t − 2c (P_a·P_a + P_b·P_b). `compute_rks_gradient` reached it
+through the closed-shell builder's RI branch with its exchange fraction since
+step 9; `compute_uks_gradient` gets the same branch now. The XC terms and the
+grid response are unchanged. `validate_ri_jk_support` admits gradient,
+geomopt, frequency and geomopt+frequency workflows, and refuses them in a
+spherical basis by name (step 16). (The DFT gradient debug breakdown still
+splits Coulomb and exchange with exact integrals; it is a diagnostic print,
+not part of the gradient.)
+
+| Case (6-31G*, def2-universal-JKFIT, 150 × 590) | Reference | Planck |
+|---|---|---|
+| water RKS PBE gradient | PySCF DF analytic, grid response | ≤ 7e-11 Ha/Bohr, every component |
+| C1 H2O2 RKS B3LYP gradient, 12 components | same | ≤ 7e-11 |
+| water⁺ UKS B3LYP gradient | same | ≤ 7e-11 |
+| water RKS PBE geomopt | PySCF geometric GAU_TIGHT, E_opt −76.3225206089 | identical |
+
+PySCF's `geometric_solver.optimize(mf)` builds its own gradient object with
+grid response off, so the reference passes the configured Gradients object
+instead. Gated by `water_rks_pbe_rijk_gradient_631gd` (was
+`water_rks_pbe_rijk_gradient_rejected`), `h2o2_rks_b3lyp_rijk_gradient_631gd`,
+`water_cation_uks_b3lyp_rijk_gradient_631gd`, `water_rks_pbe_rijk_geomopt_631gd`
+and the marker `water_rks_pbe_rijk_spherical_gradient_rejected`.
 
 ## Not in this scope
 

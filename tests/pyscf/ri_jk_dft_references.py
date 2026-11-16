@@ -7,7 +7,11 @@ prints the exact (non-fitted) energy, so the fitting error is on record. For
 an input with stability_check, also the lowest eigenvalues of PySCF's orbital
 Hessian on the density-fitted SCF, in Planck's conventions (as
 spherical_ks_stability_references.py): RKS singlet gen_g_hop_rhf/2, triplet
-rhf_external, UKS gen_g_hop_uhf.
+rhf_external, UKS gen_g_hop_uhf. For a `calculation gradient` input, also the
+analytic gradient of the density-fitted SCF with grid response, as Planck's
+KS gradient includes it (conv_tol_grad 1e-9: PySCF's default sqrt(conv_tol)
+leaves ~3e-8 in gradients). For a `calculation geomopt` input, E_opt at
+PySCF's geometric GAU_TIGHT minimum, optimized with grid response on.
   tests/pyscf/.venv/bin/python tests/pyscf/ri_jk_dft_references.py INPUT ...
 """
 import pathlib
@@ -72,11 +76,27 @@ def run(path):
             mf = mf.density_fit(auxbasis={e: parse_gaussian.load(aux, e) for e in elements})
         mf.init_guess = "1e"  # Planck guess hcore
         mf.conv_tol = 1e-12
+        mf.conv_tol_grad = 1e-9
         mf.kernel()
         assert mf.converged, path.stem
         energies.append(mf.e_tot)
         if fitted and field(text, "stability_check") == ".true.":
             print_stability(mf, mult)
+        if fitted and field(text, "calculation") == "geomopt":
+            from pyscf.geomopt.geometric_solver import optimize
+            g = mf.nuc_grad_method()
+            g.grid_response = True
+            mol_eq = optimize(g, convergence_set="GAU_TIGHT", maxsteps=100)  # g, not mf: keeps grid response
+            mf2 = mf.copy()
+            mf2.reset(mol_eq)
+            mf2.kernel()
+            print(f"  E_opt = {mf2.e_tot:.10f}")
+        if fitted and field(text, "calculation") == "gradient":
+            g = mf.nuc_grad_method()
+            g.grid_response = True
+            print("  gradient (Ha/Bohr):")
+            for row in g.kernel():
+                print("   " + "  ".join(f"{v:15.10f}" for v in row))
     print(f"{path.stem:40s} E_RI = {energies[0]:.10f}  E_exact = {energies[1]:.10f}  "
           f"fit error = {energies[0] - energies[1]:.3e}")
 

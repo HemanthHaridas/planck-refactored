@@ -1,11 +1,10 @@
-# Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 12): the KS gradient
-# would use exact J at RI orbitals, inconsistent with the RI energy, so
-# RI-JK KS derivative workflows are refused until step 15.
+# Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 15): RI-JK KS derivatives
+# in a spherical basis stay refused until step 16.
 %begin_control
     basis       6-31g*
     calculation gradient
     verbosity   normal
-    basis_type  cartesian
+    basis_type  spherical
 %end_control
 
 %begin_scf
