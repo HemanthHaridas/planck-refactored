@@ -1084,9 +1084,6 @@ namespace HartreeFock::Correlation::RI
         {
             if (!calculator._ri_aux_basis)
                 return std::unexpected("RI 3-center derivative: RI auxiliary basis is not loaded.");
-            if (calculator._shells._spherical)
-                return std::unexpected("RI 3-center derivative: spherical basis not supported yet "
-                                       "(Cartesian only; docs/RI_JK_ROUTINE_SCOPE.md step 16).");
 
             const auto shell_pairs = build_shellpairs(calculator._shells);
             std::size_t aux_col = 0;
@@ -1125,10 +1122,9 @@ namespace HartreeFock::Correlation::RI
         {
             if (!calculator._ri_aux_basis)
                 return std::unexpected("RI 2-center derivative: RI auxiliary basis is not loaded.");
+            // Cartesian components on both legs, even for a spherical aux basis:
+            // callers lift to the fitted space (build_ri_two_electron_gradient).
             const HartreeFock::AuxBasis &aux = *calculator._ri_aux_basis;
-            if (aux.cart_to_sph.size())
-                return std::unexpected("RI 2-center derivative: spherical auxiliary basis not supported "
-                                       "(it follows a spherical orbital basis; Cartesian only).");
 
             const std::size_t nshells = aux.shells.size();
             for (std::size_t K = 0; K < nshells; ++K)
@@ -1291,12 +1287,18 @@ namespace HartreeFock::Correlation::RI
         const Eigen::MatrixXd &x_proj,
         bool bra_prefolded)
     {
+        // gamma3 and x_proj live in the working (fitted) space: working AO
+        // pairs × fitted aux functions, spherical when the run is. The
+        // derivative loops are Cartesian on both legs, so wg and γ_PQ are
+        // lifted to Cartesian below (docs/RI_JK_ROUTINE_SCOPE.md step 16).
         const std::size_t natoms = calculator._molecule.natoms;
-        const std::size_t nb = calculator._shells.nbasis();
+        const std::size_t nb = calculator.working_nbasis();
         const auto npair = static_cast<Eigen::Index>(nb * (nb + 1) / 2);
+        if (!calculator._ri_aux_basis)
+            return std::unexpected("build_ri_two_electron_gradient: RI auxiliary basis is not loaded.");
         if (gamma3.rows() != npair || x_proj.rows() != npair || gamma3.cols() != x_proj.cols())
             return std::unexpected("build_ri_two_electron_gradient: gamma3/x_proj shape does not "
-                                   "match the Cartesian AO pair count.");
+                                   "match the working AO pair count.");
 
         // Bra pair weight. When gamma3's bra is a SINGLE ordering (μ≥ν only, e.g.
         // a bra-symmetric density), off-diagonal packed pairs stand in for both
@@ -1315,10 +1317,39 @@ namespace HartreeFock::Correlation::RI
         // (μν|λσ) = J V^{-1} Jᵀ, so d(μν|λσ) pairs dJ with (V^{-1}Jᵀ) and dV with
         // (J V^{-1})…(V^{-1}Jᵀ). gamma3 = Σ_{λσ} Γ·X (X = J V^{-1}) carries one
         // V^{-1}; x_proj is the raw X factors (the other leg of the metric fold).
-        const Eigen::MatrixXd wg = w.asDiagonal() * gamma3; // w · Σ Γ·X, bra fold
+        Eigen::MatrixXd wg = w.asDiagonal() * gamma3; // w · Σ Γ·X, bra fold
 
         // Metric-derivative charge γ_{PQ} = Σ_{(μν)} w·x_{(μν),P}·gamma3_{(μν),Q}.
-        const Eigen::MatrixXd gamma_pq = (w.asDiagonal() * x_proj).transpose() * gamma3;
+        Eigen::MatrixXd gamma_pq = (w.asDiagonal() * x_proj).transpose() * gamma3;
+
+        // Spherical orbital basis: Σ_{μν} G_Q(μν) d(μν|Q) with d_sph = C d_cart Cᵀ
+        // equals Σ_{ab} (Cᵀ G_Q C)(ab) d_cart(ab|Q). Unpack each column to the
+        // symmetric full G_Q (the packed sum w·gamma3 over μ≥ν, halved off the
+        // diagonal), lift it, and repack with the Cartesian pair weight.
+        if (calculator._shells._spherical)
+        {
+            const Eigen::MatrixXd &C = calculator._shells._cart_to_sph; // n_sph × n_cart
+            const Eigen::Index nc = C.cols();
+            Eigen::MatrixXd wg_cart(nc * (nc + 1) / 2, wg.cols());
+            for (Eigen::Index Q = 0; Q < wg.cols(); ++Q)
+            {
+                Eigen::MatrixXd G(static_cast<Eigen::Index>(nb), static_cast<Eigen::Index>(nb));
+                for (Eigen::Index mu = 0, r = 0; mu < static_cast<Eigen::Index>(nb); ++mu)
+                    for (Eigen::Index nu = 0; nu <= mu; ++nu, ++r)
+                        G(mu, nu) = G(nu, mu) = (mu == nu ? 1.0 : 0.5) * wg(r, Q);
+                const Eigen::MatrixXd Gc = C.transpose() * G * C;
+                for (Eigen::Index a = 0, r = 0; a < nc; ++a)
+                    for (Eigen::Index b = 0; b <= a; ++b, ++r)
+                        wg_cart(r, Q) = (a == b ? 1.0 : 2.0) * Gc(a, b);
+            }
+            wg = std::move(wg_cart);
+        }
+        // Spherical aux: d(·|P)_sph = Σ_c T_Pc d(·|c)_cart, dV_sph = T dV_cart Tᵀ.
+        if (const Eigen::MatrixXd &T = calculator._ri_aux_basis->cart_to_sph; T.size())
+        {
+            wg = wg * T;
+            gamma_pq = T.transpose() * gamma_pq * T;
+        }
 
         // Streamed: each derivative element is contracted the moment it is
         // computed, so the 3·natoms × npair × naux derivative tensor is never
@@ -1443,11 +1474,10 @@ namespace HartreeFock::Correlation::RI
         const Eigen::MatrixXd &Pb,
         double exchange_coefficient)
     {
-        const auto n = static_cast<Eigen::Index>(calculator._shells.nbasis());
+        // Working-basis densities: the fitted factors X are in the working
+        // basis, and build_ri_two_electron_gradient lifts to Cartesian.
+        const auto n = static_cast<Eigen::Index>(calculator.working_nbasis());
         const Eigen::Index npair = n * (n + 1) / 2;
-        if (calculator._shells._spherical)
-            return std::unexpected("RI-JK gradient: spherical basis not supported yet "
-                                   "(docs/RI_JK_ROUTINE_SCOPE.md step 16).");
         if (!calculator._ri_metric_factor || calculator._ri_j3c.rows() != npair)
             return std::unexpected("RI-JK gradient: the RI cache is not ready for this basis.");
         if (Pa.rows() != n || Pa.cols() != n || Pb.rows() != n || Pb.cols() != n)

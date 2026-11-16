@@ -70,6 +70,5 @@ derivatives can run.
 
 ## Not in this scope
 
-Auxiliary-basis derivatives in a spherical orbital basis (spherical RI-MP2
-gradients, `docs/SPHERICAL_MP2_GRADIENTS.md`), and default fitting sets per
-orbital basis.
+Default fitting sets per orbital basis. (Auxiliary-basis derivatives in a
+spherical basis landed later, as `docs/RI_JK_ROUTINE_SCOPE.md` step 16.)

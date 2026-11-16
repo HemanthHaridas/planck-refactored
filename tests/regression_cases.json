@@ -1244,18 +1244,97 @@
    ]
   },
   {
-   "id": "water_rhf_rijk_spherical_gradient_rejected",
-   "input": "tests/inputs/regression/ri/water_rhf_rijk_spherical_gradient_rejected.hfinp",
+   "id": "water_rhf_rijk_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_spherical_gradient_631gd.hfinp",
    "tags": [
     "core",
     "extended",
     "ri",
     "spherical"
    ],
-   "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 10): RI-JK derivatives in a spherical basis are refused until step 16.",
-   "expected_exit_code": 1,
+   "_pyscf_reference": "PySCF 2.15.0 mf.density_fit().nuc_grad_method(), cart=False, 6-31G* and def2-universal-JKFIT (spherical aux) from Planck's GBS (tests/pyscf/ri_jk_gradient_references.py; PySCF's analytic gradient matches its own energy FD to 9.0e-11). Planck matches every printed digit. Spherical RI derivative lift (docs/RI_JK_ROUTINE_SCOPE.md step 16). Was water_rhf_rijk_spherical_gradient_rejected (step 10).",
+   "expected_exit_code": 0,
    "contains": [
-    "does not support gradients, geometry optimization or frequencies with a spherical basis"
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0052219694,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.0665729831
+      ],
+      [
+       -0.0303712792,
+       0.0,
+       -0.0332864915
+      ],
+      [
+       0.0303712792,
+       0.0,
+       -0.0332864915
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uhf_rijk_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_spherical_gradient_631gd.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "spherical",
+    "open_shell"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 mf.density_fit().nuc_grad_method(), cart=False, 6-31G* and def2-universal-JKFIT (spherical aux) from Planck's GBS (tests/pyscf/ri_jk_gradient_references.py; PySCF's analytic gradient matches its own energy FD to 9.7e-10). Planck matches every printed digit. Spherical RI derivative lift (docs/RI_JK_ROUTINE_SCOPE.md step 16). C1 H2O2 cation UHF, all 12 components independent.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.3667155884,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.0227793861,
+       0.0311545078,
+       -0.0286381358
+      ],
+      [
+       0.0239217301,
+       -0.0077328588,
+       -0.0248903555
+      ],
+      [
+       0.0180311708,
+       -0.008860471,
+       0.0196110557
+      ],
+      [
+       -0.0191735149,
+       -0.014561178,
+       0.0339174357
+      ]
+     ],
+     "atol": 2e-08
+    }
    ]
   },
   {
@@ -1665,8 +1744,8 @@
    ]
   },
   {
-   "id": "water_rks_pbe_rijk_spherical_gradient_rejected",
-   "input": "tests/inputs/regression/ri/water_rks_pbe_rijk_spherical_gradient_rejected.hfinp",
+   "id": "water_rks_pbe_rijk_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_rks_pbe_rijk_spherical_gradient_631gd.hfinp",
    "executable": "planck-dft",
    "tags": [
     "core",
@@ -1675,10 +1754,39 @@
     "dft",
     "spherical"
    ],
-   "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 15): RI-JK KS derivatives in a spherical basis are refused until step 16.",
-   "expected_exit_code": 1,
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit().nuc_grad_method() with grid response, cart=False, PBE, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590 (tests/pyscf/ri_jk_dft_references.py). Planck matches every component to ~1e-12. Spherical KS RI-JK gradient (docs/RI_JK_ROUTINE_SCOPE.md step 16). Was water_rks_pbe_rijk_spherical_gradient_rejected (step 15).",
+   "expected_exit_code": 0,
    "contains": [
-    "not analytic gradients in a spherical basis"
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3107746348,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.0961294035
+      ],
+      [
+       -0.0518437078,
+       0.0,
+       -0.0480647018
+      ],
+      [
+       0.0518437078,
+       0.0,
+       -0.0480647018
+      ]
+     ],
+     "atol": 2e-08
+    }
    ]
   },
   {
@@ -6079,7 +6187,7 @@
     "core",
     "spherical"
    ],
-   "_note": "Boundary marker: dense spherical MP2 gradients are supported (docs/SPHERICAL_MP2_GRADIENTS.md); RI-MP2 gradients stay refused in spherical because the RI 3c/2c derivative tensors are Cartesian-only. Belongs to the RI item in Open Work.",
+   "_note": "Boundary marker: dense spherical MP2 gradients are supported (docs/SPHERICAL_MP2_GRADIENTS.md). Spherical RI-MP2 gradients stay refused: the spherical RI derivative lift is exact (docs/RI_JK_ROUTINE_SCOPE.md step 16, HF/KS equal PySCF), but the RI-MP2 gradient misses its own energy FD by ~4e-6 Ha/Bohr in Cartesian too (6-31G*/cc-pVDZ-RIFIT water; dense MP2 1.5e-7), so it is not extended to spherical until that is fixed.",
    "expected_exit_code": 1,
    "contains": [
     "Spherical Basis :",

@@ -3057,7 +3057,7 @@ namespace DFT::Driver
             const auto refuse = [](const std::string &what) -> std::expected<void, std::string>
             {
                 return std::unexpected("RI-JK (scf_ri_jk) in planck-dft supports pure and global-hybrid "
-                                       "functionals, Cartesian derivatives, SOSCF and stability, not " + what +
+                                       "functionals, derivatives, SOSCF and stability, not " + what +
                                        ". Disable RI-JK (scf_ri_jk false).");
             };
             if (calculator._mp2.ri_basis_name.empty())
@@ -3067,7 +3067,7 @@ namespace DFT::Driver
             if (functionals.has_range_separation)
                 return refuse("a range-separated functional (the RI integrals are Coulomb-kernel only)");
             // Gradients, geomopt and frequencies: the KS gradient takes the
-            // fitted 2e term under RI (step 15), Cartesian only until step 16.
+            // fitted 2e term under RI (steps 15-16), Cartesian or spherical.
             const auto calc = calculator._calculation;
             const bool derivative =
                 calc == HartreeFock::CalculationType::Gradient ||
@@ -3076,8 +3076,6 @@ namespace DFT::Driver
                 calc == HartreeFock::CalculationType::GeomOptFrequency;
             if (calc != HartreeFock::CalculationType::SinglePoint && !derivative)
                 return refuse(workflow_label(calc));
-            if (derivative && calculator._basis._basis == HartreeFock::BasisType::Spherical)
-                return refuse(workflow_label(calc) + " in a spherical basis");
             // SOSCF and stability: the KS orbital Hessian takes the fitted J/K
             // under RI (KsOrbitalHessianInputs::ri, step 14).
             if (calculator._solvation._model != HartreeFock::SolvationModel::None)

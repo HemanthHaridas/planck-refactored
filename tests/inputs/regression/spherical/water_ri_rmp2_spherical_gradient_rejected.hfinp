@@ -1,5 +1,6 @@
-# Boundary marker: spherical RI-MP2 gradients stay refused (the RI derivative
-# tensors are Cartesian-only; docs/SPHERICAL_MP2_GRADIENTS.md).
+# Boundary marker: spherical RI-MP2 gradients stay refused. The spherical RI
+# derivative lift is exact (docs/RI_JK_ROUTINE_SCOPE.md step 16), but the RI-MP2
+# gradient itself misses its own energy FD by ~4e-6 Ha/Bohr, Cartesian too.
 %begin_control
     basis       6-31g*
     calculation gradient

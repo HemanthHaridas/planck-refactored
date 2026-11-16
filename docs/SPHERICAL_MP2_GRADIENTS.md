@@ -177,8 +177,10 @@ frequency references rely on.
 
 - **Frozen-core MP2 gradients**: what they need is above. The next
   most-asked MP2 feature; it gets its own scope.
-- **Spherical RI-MP2 gradients**: the RI 3-centre derivative tensors are
-  Cartesian-only (`compute_3c_eri_deriv` refuses a spherical basis). Part of
-  the combined RI item in Open Work.
+- **Spherical RI-MP2 gradients**: the RI derivative contraction is no
+  longer the obstacle; it lifts to Cartesian exactly
+  (`docs/RI_JK_ROUTINE_SCOPE.md` step 16). They stay refused because the
+  RI-MP2 gradient misses its own energy FD by ~4e-6 Ha/Bohr in Cartesian too
+  (that doc, "Still open").
 - **RI-MP2 frequencies**: done 2026-11-16 (`docs/RI_JK_ROUTINE_SCOPE.md`
   step 8).

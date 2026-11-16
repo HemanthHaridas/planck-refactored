@@ -534,8 +534,12 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             // in the spherical basis then lifts once — see gradient.cpp).
             // Dense RMP2/UMP2 gradients: enabled (mp2_gradient.cpp keeps the
             // Lagrangian in the working basis and lifts the derivative-kernel
-            // inputs once; docs/SPHERICAL_MP2_GRADIENT_SCOPE.md). The RI 3c/2c
-            // derivative tensors are Cartesian-only, so RI-MP2 stays refused.
+            // inputs once; docs/SPHERICAL_MP2_GRADIENT_SCOPE.md). RI-MP2 stays
+            // refused: the RI derivative contraction lifts to Cartesian exactly
+            // (docs/RI_JK_ROUTINE_SCOPE.md step 16), but the RI-MP2 gradient
+            // misses its own energy FD by ~4e-6 Ha/Bohr (Cartesian too, 6-31G*/
+            // cc-pVDZ-RIFIT; dense MP2 1.5e-7), so spherical is not extended
+            // until that is fixed.
             if ((calculator._correlation == HartreeFock::PostHF::RMP2 ||
                  calculator._correlation == HartreeFock::PostHF::UMP2) &&
                 calculator._mp2.use_ri)
@@ -630,12 +634,12 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     // RHF, UHF and ROHF (whose Roothaan Fock is assembled from the same
     // (Ga, Gb)) are wired. They have no symmetry-orbit folding.
     // Derivative workflows: the RI-JK gradient (build_ri_scf_two_electron_
-    // gradient) is gated for Cartesian RHF, UHF and ROHF
-    // (docs/RI_JK_ROUTINE_SCOPE.md steps 9-10). Everything else stays refused,
-    // because the exact-integral gradient at RI orbitals is inconsistent with
-    // the RI energy (water/def2-universal-JKFIT: 9.9e-6 Ha/Bohr off its FD,
-    // inside the geomopt threshold): spherical until step 16, a correlated
-    // gradient (its reference terms assume exact integrals), and PCM (not gated).
+    // gradient) is gated for RHF, UHF and ROHF, Cartesian and spherical
+    // (docs/RI_JK_ROUTINE_SCOPE.md steps 9-10, 16). Everything else stays
+    // refused, because the exact-integral gradient at RI orbitals is
+    // inconsistent with the RI energy (water/def2-universal-JKFIT: 9.9e-6
+    // Ha/Bohr off its FD, inside the geomopt threshold): a correlated gradient
+    // (its reference terms assume exact integrals), and PCM (not gated).
     // Reject rather than silently returning a wrong answer; each names its reason.
     if (calculator._scf._ri_jk)
     {
@@ -647,9 +651,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             calc == HartreeFock::CalculationType::GeomOptFrequency ||
             calc == HartreeFock::CalculationType::ImaginaryFollow;
         const char *derivative_gap =
-            calculator._shells._spherical
-                ? "spherical basis"
-            : calculator._correlation != HartreeFock::PostHF::None
+            calculator._correlation != HartreeFock::PostHF::None
                 ? "correlated gradient"
             : calculator._solvation._model != HartreeFock::SolvationModel::None
                 ? "PCM"
@@ -659,7 +661,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             reason = "full point-group symmetry (RI J/K does not fold symmetry orbits)";
         else if (derivative_workflow && derivative_gap != nullptr)
             reason = std::string("gradients, geometry optimization or frequencies with a ") +
-                     derivative_gap + " (the RI-JK gradient covers Cartesian RHF, UHF and ROHF only so far)";
+                     derivative_gap + " (the RI-JK gradient covers HF references without correlation or PCM)";
         if (!reason.empty())
         {
             HartreeFock::Logger::logging(

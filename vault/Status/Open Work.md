@@ -58,13 +58,20 @@ teaching code) reorders it.
    Cartesian RHF/UHF/ROHF RI-JK gradients, geomopt and frequencies equal
    PySCF (steps 9–10); the B0 pair-factor cache landed (11); `planck-dft`
    pure and global-hybrid single points use RI-J/K, KS SOSCF and stability
-   the fitted operator, and Cartesian KS gradients/geomopt equal PySCF
-   (12–15). Remaining, in dependency
-   order: KS RI-J/K and consumers (12–14),
-   the KS RI-JK gradient (15), spherical RI gradients for HF, KS and RI-MP2
-   (16). Scope: `docs/RI_JK_ROUTINE_SCOPE.md`.
-   After it: **RI-DH** (O9 in §2) and **G6**, the RI 2c/3c derivative
-   profile (§5).
+   the fitted operator, KS gradients/geomopt equal PySCF (12–15), and RI
+   gradients run in a spherical basis too (16). The scope is answered:
+   `docs/RI_JK_ROUTINE_SCOPE.md`. Still open:
+   - **The RI-MP2 gradient misses its own energy FD by ~4e-6 Ha/Bohr**
+     (water 6-31G*/cc-pVDZ-RIFIT, Cartesian too; dense MP2 1.5e-7). It
+     ships in Cartesian; spherical RI-MP2 gradients stay refused until it is
+     fixed. The old gate (STO-3G, tolerance 3e-4) could not see it. Cause
+     found: the CPHF Hessian and relaxed-density `veff` use the fitted
+     operator for an exact SCF (scope: `docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`).
+     Recommended route: one matrix-free RHF/UHF orbital-Hessian operator over
+     an `SCF::two_electron_fock` that honors `scf_ri_jk`
+     (`docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md`).
+   - **RI-DH** (O9 in §2), **G6** (the serial RI derivative loops, §5),
+     and attenuated RI-K for range-separated functionals.
 
 **Expected, with a workaround.**
 

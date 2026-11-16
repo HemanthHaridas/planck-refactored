@@ -480,6 +480,16 @@ historical design context, but they are no longer the source of truth for
   (RI-MP2's CPHF route and `transform_eri_ri`); before, SOSCF rebuilt the AO
   tensor every step and stability used the exact Hessian. Eigenvalues equal
   PySCF stability on a density-fitted SCF (RHF and UHF).
+- **Spherical RI gradients (2026-11-16, `docs/RI_JK_ROUTINE_SCOPE.md`
+  step 16; that scope is now answered).** `build_ri_two_electron_gradient`
+  lifts the working-basis three-index density to the Cartesian derivative
+  loops (orbital Cᵀ G C per aux column, aux × T_aux, metric T_auxᵀ γ T_aux).
+  Spherical water RHF, C1 H2O2⁺ UHF and water RKS PBE gradients equal PySCF
+  density fitting to every printed digit.
+  - **Found, not fixed:** the RI-MP2 gradient misses its own energy FD by
+    ~4e-6 Ha/Bohr, Cartesian too (dense MP2 1.5e-7, FD-step independent), so
+    spherical RI-MP2 gradients stay refused with that reason.
+
 - **RI-JK in `planck-dft` for pure and global-hybrid single points
   (2026-11-16, `docs/RI_JK_ROUTINE_SCOPE.md` steps 12–13).** The KS assembly
   adds the fitted J and K in the working basis after projecting the other
@@ -596,7 +606,8 @@ historical design context, but they are no longer the source of truth for
     (≤ 1e-8, every component). Water RMP2 geomopt E_opt −76.1955706453
     equals PySCF `geometric` GAU_TIGHT to every printed digit.
   - **Refusals.** Spherical RI-MP2 gradients stay refused
-    (`water_ri_rmp2_spherical_gradient_rejected`). MP2 frequencies stay
+    (`water_ri_rmp2_spherical_gradient_rejected`; reason updated 2026-11-16,
+    see the spherical RI gradients entry). MP2 frequencies stay
     refused in every basis (step 5).
   - **Found.** PySCF < 2.15's analytic `mp2.Gradients` misses its own
     energy FD by up to 4.2e-7 Ha/Bohr on C1 fixtures, so it was not used as

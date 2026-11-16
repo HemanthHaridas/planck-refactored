@@ -164,8 +164,9 @@ namespace HartreeFock::Correlation::RI
     // shares, Γ = 2 Pt⊗Pt − 2k (Pa·Pa + Pb·Pb) (Pt = Pa + Pb; RHF passes
     // Pa = Pb = P/2; k = 1 for HF, the exact-exchange fraction for a global
     // hybrid). The same quantity two_electron_gradient computes with
-    // exact integrals, so it replaces it one for one. Cartesian AO densities;
-    // needs the RI cache primed at the current geometry (the SCF does it).
+    // exact integrals, so it replaces it one for one. Working-basis densities
+    // (spherical when the run is; the derivative contraction lifts to
+    // Cartesian); needs the RI cache primed at the current geometry.
     std::expected<Eigen::MatrixXd, std::string> build_ri_scf_two_electron_gradient(
         const HartreeFock::Calculator &calculator,
         const Eigen::MatrixXd &Pa,

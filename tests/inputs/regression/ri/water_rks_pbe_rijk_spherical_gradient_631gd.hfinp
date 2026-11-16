@@ -1,5 +1,6 @@
-# Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 10): RI-JK derivatives
-# in a spherical basis stay refused until step 16.
+# RI-JK spherical KS gradient gate (docs/RI_JK_ROUTINE_SCOPE.md step 16): RKS PBE,
+# def2-universal-JKFIT, unpruned 150 x 590, against PySCF density-fitted
+# gradient with grid response, cart=False (tests/pyscf/ri_jk_dft_references.py).
 %begin_control
     basis       6-31g*
     calculation gradient
@@ -18,6 +19,15 @@
     mp2_ri_basis      def2-universal-JKFIT
     mp2_ri_basis_path basis-sets
 %end_scf
+
+%begin_dft
+    grid                fine
+    grid_radial_points  150
+    grid_angular_points 590
+    exchange            pbe
+    correlation         pbe
+    print_grid_summary  .false.
+%end_dft
 
 %begin_geom
     coord_type  cartesian

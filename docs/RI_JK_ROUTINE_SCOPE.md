@@ -1,29 +1,31 @@
 # What does RI-JK need before it is usable for routine HF and DFT?
 
-Scope, opened 2026-11-10, last revised 2026-11-16. It expires when the work
-lands; rewrite it then as the answer. Status lives in
-`vault/Status/Open Work.md` (priority 6). The speed half (BLAS, RI-K from
-C_occ) is in `docs/ERI_FOCK_BLAS_SCOPE.md`; this doc is about correctness
-and reach, plus the one speed item (B0) that KS RI-JK cannot do without.
+The answer, as of 2026-11-16 (scoped 2026-11-10; steps 0–16 landed). Status
+lives in `vault/Status/Completion.md` and `vault/Status/Open Work.md`
+(priority 6). The speed half (BLAS, RI-K from C_occ) is in
+`docs/ERI_FOCK_BLAS_SCOPE.md`; this doc is about correctness and reach, plus
+the one speed item (B0) that KS RI-JK could not do without.
 
-## Where it stands (2026-11-16)
+## Answer
 
-**HF energies are done and exact against PySCF.** `scf_ri_jk` gives RHF, UHF
-and ROHF energies, Cartesian or spherical, equal to PySCF density fitting to
-every printed digit on every gate molecule, heavy elements with ECPs
-included. With a JKFIT set the fitting error is ≤ 2.2e-5 Eh per atom
+**Nothing more, for HF and for pure and global-hybrid DFT.** With
+`scf_ri_jk`, every one of these equals PySCF density fitting to every printed
+digit on its gate molecules, Cartesian and spherical:
+
+- **HF** (RHF, UHF, ROHF): energies, SOSCF, stability, analytic gradients,
+  geometry optimization and frequencies; heavy elements with ECPs included.
+- **Kohn-Sham** (RKS, UKS), pure and global-hybrid functionals: energies,
+  SOSCF, stability, analytic gradients and geometry optimization.
+
+With a JKFIT set the fitting error is ≤ 2.2e-5 Eh per atom
 (def2-universal-JKFIT) and ≤ 1.5e-5 (cc-pVTZ-JKFIT), 40–60× below the MP2
-RIFIT set. SOSCF and stability use the fitted operator.
+RIFIT set.
 
-**RHF, UHF and ROHF gradients, geometry optimization and frequencies work**
-for a Cartesian basis, equal to PySCF's density-fitted gradient to every
-printed digit. Spherical RI-JK derivatives are still refused by name.
-
-**Kohn-Sham: pure and global-hybrid single points work** (RI-J, RI-K), RKS
-and UKS, equal to PySCF to every printed digit; SOSCF and stability use the
-fitted operator; Cartesian gradients and geometry optimization equal PySCF's
-density-fitted gradient. Range-separated functionals, spherical derivatives,
-TDDFT, PCM and counterpoise with RI-JK are refused by name in `planck-dft`.
+**Refused by name**, each for a stated reason: range-separated functionals
+(the RI integrals are Coulomb-kernel only), TDDFT, PCM and counterpoise with
+RI-JK; full point-group symmetry; a correlated gradient on RI-JK orbitals;
+and spherical RI-MP2 gradients, which wait on the RI-MP2 gradient defect
+found in step 16 (below).
 
 | | Status |
 |---|---|
@@ -35,13 +37,13 @@ TDDFT, PCM and counterpoise with RI-JK are refused by name in `planck-dft`.
 | Streamed RI derivative contraction | **Done**, shared with RI-MP2 (step 7) |
 | RI pair factors cached per geometry (B0) | **Done** (step 11) |
 | RI-MP2 frequencies | **Done** (step 8) |
-| RI-JK RHF/UHF/ROHF gradient, geomopt, frequencies (Cartesian) | **Done**, = PySCF (steps 9–10) |
+| RI-JK RHF/UHF/ROHF gradient, geomopt, frequencies | **Done**, = PySCF, Cartesian and spherical (steps 9–10, 16) |
 | `planck-dft` pure and global-hybrid energies (RI-J, RI-K) | **Done**, = PySCF (steps 12–13) |
 | `planck-dft` SOSCF, stability | **Done**, eigenvalues = PySCF DF (step 14) |
-| `planck-dft` Cartesian gradients, geomopt (RKS, UKS) | **Done**, = PySCF (step 15) |
-| Spherical RI derivatives (HF, KS, RI-MP2) | **Refused** by name; step 16 |
-| `planck-dft` range-separated with RI-JK | **Refused** by name; out of scope (attenuated RI) |
-| Full point-group symmetry | Refused; out of scope |
+| `planck-dft` gradients, geomopt (RKS, UKS) | **Done**, = PySCF, Cartesian and spherical (steps 15–16) |
+| Spherical RI-MP2 gradients | **Refused**: the RI-MP2 gradient misses its own FD by ~4e-6 (Cartesian too) |
+| `planck-dft` range-separated with RI-JK | **Refused** by name (attenuated RI not implemented) |
+| Full point-group symmetry | Refused |
 
 ## How `scf_ri_jk` is wired
 
@@ -54,39 +56,38 @@ working-basis matrices: `compute_3c_eri` already transforms the orbital
 indices to the spherical working basis.
 
 The boundaries: the RI-JK gate in `src/hf_driver.cpp` (full symmetry, and
-derivative workflows other than Cartesian HF without correlation or PCM)
-and `validate_ri_jk_support` in `src/dft/driver.cpp` (everything but
-pure and global-hybrid single points; counterpoise at the top of
-`DFT::Driver::run`). In `planck-dft`, `assemble_current_ks_potential` adds
+derivative workflows with correlation or PCM), and `validate_ri_jk_support`
+in `src/dft/driver.cpp` (range separation, double hybrids, TDDFT, PCM;
+counterpoise at the top of `DFT::Driver::run`). Every SCF and KS gradient
+takes its 2e term from `build_ri_scf_two_electron_gradient` under RI, and
+`build_ri_two_electron_gradient` lifts the working-basis three-index density
+to the Cartesian derivative loops. In `planck-dft`, `assemble_current_ks_potential` adds
 the RI J and K in the working basis after projecting the other KS terms. HF
 SOSCF and stability check the flag (step 4). Post-HF methods (MP2, CC,
 CASSCF) on RI-JK orbitals keep exact integrals, which is a legitimate
 combination.
 
-## Remaining, in dependency order
+## Still open
 
-| Step | What | Needs |
-|---|---|---|
-| 16 | Spherical RI gradients: RI-JK HF and KS, and RI-MP2 | — |
-
-16 is the last step; it lifts the spherical refusals for HF, KS and RI-MP2 together.
-
-### 16. Spherical RI gradients
-
-The derivative loops refuse a spherical orbital basis (`for_each_3c_deriv`)
-and a spherical aux basis (`for_each_2c_deriv`). Lift γ3 on the orbital
-index (Tᵀ γ T per aux column) and apply T_auxᵀ on the aux index before the
-Cartesian contraction; both contractions are linear. Done once in step 7's
-contraction, it serves RI-JK HF, RI-JK KS and RI-MP2 alike. Lift the
-spherical refusals together, including
-`water_ri_rmp2_spherical_gradient_rejected`.
-
-### After this scope
-
+- **The RI-MP2 gradient misses its own energy FD by ~4e-6 Ha/Bohr**, found
+  in step 16. Cartesian water, 6-31G*/cc-pVDZ-RIFIT: RMP2 3.9e-6, UMP2
+  1.6e-6, independent of the FD step (4.16/3.93/3.93e-6 at 2e-3/1e-3/5e-4
+  Bohr); dense RMP2 on the same input 1.5e-7. So the error is in the
+  RI-specific terms (RI Lagrangian, RI CPHF or the 2e term's RI-MP2
+  density), not in the derivative integrals or the spherical lift, which the
+  HF/KS gates pin exactly. The existing gate (`water_ri_rmp2_gradient_fd`,
+  STO-3G, tolerance 3e-4) was too loose to see it. Cartesian RI-MP2
+  gradients ship with it today; spherical stays refused until it is fixed.
+  Cause found: the CPHF Hessian and `veff` use the fitted operator while the
+  SCF is exact; keying them on `scf_ri_jk` brings both to the FD floor
+  (1.3e-7 / 1.2e-7). Scope: `docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`.
+- **RI-DH (O9)**: RI-JK in `planck-dft` and the streamed contraction are
+  in place.
 - **G6, profile the RI 2c/3c integrals**
   (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`). The derivative loops are still
   serial: benzene 6-31G*/JKFIT takes 29 s for one gradient (step 9).
-- **RI-DH (O9)**: needs steps 12–15.
+- **Attenuated (range-separated) RI-K**, so range-separated functionals can
+  use RI-JK.
 - **`scf_ri_basis`**: see step 1.
 
 ## Done
@@ -482,6 +483,39 @@ instead. Gated by `water_rks_pbe_rijk_gradient_631gd` (was
 `water_rks_pbe_rijk_gradient_rejected`), `h2o2_rks_b3lyp_rijk_gradient_631gd`,
 `water_cation_uks_b3lyp_rijk_gradient_631gd`, `water_rks_pbe_rijk_geomopt_631gd`
 and the marker `water_rks_pbe_rijk_spherical_gradient_rejected`.
+
+### 16. Spherical RI gradients
+
+`build_ri_two_electron_gradient` now takes the three-index density in the
+working space (working AO pairs × fitted aux) and lifts it before streaming:
+each aux column is unpacked to the symmetric G_Q (the packed `w·γ3`,
+halved off the diagonal, so pre-folded and single-ordering densities give the
+same G), lifted Cᵀ G_Q C, and repacked with the Cartesian pair weight; the
+aux index is multiplied by T_aux; and the metric charge becomes
+T_auxᵀ γ_PQ T_aux. In a Cartesian run both lifts are skipped. The derivative
+loops no longer refuse spherical bases, and `build_ri_scf_two_electron_gradient`
+takes the stored working-basis densities (the gradient's P is the Cartesian
+lift; in a Cartesian run they are the same matrix).
+
+| Case (6-31G*, def2-universal-JKFIT, spherical) | Reference | Planck |
+|---|---|---|
+| water RHF gradient | PySCF DF analytic, `cart=False` (= its FD to 9.0e-11) | every printed digit |
+| C1 H2O2⁺ UHF gradient, 12 components | same (= its FD to 9.7e-10) | every printed digit |
+| water RKS PBE gradient (150 × 590) | PySCF DF analytic with grid response | ~1e-12 |
+
+Gated by `water_rhf_rijk_spherical_gradient_631gd` (was
+`water_rhf_rijk_spherical_gradient_rejected`),
+`h2o2_cation_uhf_rijk_spherical_gradient_631gd` and
+`water_rks_pbe_rijk_spherical_gradient_631gd` (was
+`water_rks_pbe_rijk_spherical_gradient_rejected`). Doubling the off-diagonal
+unpack factor fails both HF spherical cases and leaves the Cartesian ones
+green.
+
+**Spherical RI-MP2 stays refused.** The lift serves it too (its γ3 comes
+from the working-basis pair density), but its FD check failed by 3.5e-6
+(RMP2) / 1.6e-6 (UMP2), and the same check in a Cartesian basis fails by the
+same amount: the RI-MP2 gradient itself is off (see Still open).
+`water_ri_rmp2_spherical_gradient_rejected` now names that reason.
 
 ## Not in this scope
 

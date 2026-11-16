@@ -295,9 +295,10 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
 
     if (calc._scf._ri_jk)
     {
-        // RI-JK: the fitted operator's 2e term for the same Γ, with P split
-        // into equal spin halves (docs/RI_JK_ROUTINE_SCOPE.md step 9).
-        const Eigen::MatrixXd half = 0.5 * P;
+        // RI-JK: the fitted operator's 2e term for the same Γ, with the stored
+        // working-basis P split into equal spin halves (steps 9, 16 of
+        // docs/RI_JK_ROUTINE_SCOPE.md; P here is the Cartesian lift).
+        const Eigen::MatrixXd half = 0.5 * calc._info._scf.alpha.density;
         auto ri = HartreeFock::Correlation::RI::build_ri_scf_two_electron_gradient(
             calc, half, half, ri_exchange_coefficient);
         if (!ri)
@@ -572,7 +573,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
     {
         // RI-JK: the fitted operator's 2e term for the same Γ
         // (docs/RI_JK_ROUTINE_SCOPE.md steps 9-10).
-        auto ri = HartreeFock::Correlation::RI::build_ri_scf_two_electron_gradient(calc, P_a, P_b);
+        auto ri = HartreeFock::Correlation::RI::build_ri_scf_two_electron_gradient(
+            calc, calc._info._scf.alpha.density, calc._info._scf.beta.density); // working basis
         if (!ri)
             return std::unexpected(ri.error());
         grad += *ri;
@@ -695,7 +697,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rohf_
     {
         // RI-JK: the fitted operator's 2e term for the same Γ
         // (docs/RI_JK_ROUTINE_SCOPE.md steps 9-10).
-        auto ri = HartreeFock::Correlation::RI::build_ri_scf_two_electron_gradient(calc, P_a, P_b);
+        auto ri = HartreeFock::Correlation::RI::build_ri_scf_two_electron_gradient(
+            calc, calc._info._scf.alpha.density, calc._info._scf.beta.density); // working basis
         if (!ri)
             return std::unexpected(ri.error());
         grad += *ri;
@@ -813,7 +816,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
         // RI-JK: the fitted operator's 2e term for the same Gamma
         // (docs/RI_JK_ROUTINE_SCOPE.md step 15). Range separation is refused
         // under RI, so cx_total is the full-range fraction.
-        auto ri = HartreeFock::Correlation::RI::build_ri_scf_two_electron_gradient(calc, P_a, P_b, cx_total);
+        auto ri = HartreeFock::Correlation::RI::build_ri_scf_two_electron_gradient(
+            calc, calc._info._scf.alpha.density, calc._info._scf.beta.density, cx_total); // working basis
         if (!ri)
             return std::unexpected(ri.error());
         two_electron = *ri;
