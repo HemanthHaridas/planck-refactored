@@ -3,7 +3,7 @@
 Answered 2026-11-12: yes, and it is not an option but the rule. **The fitted
 auxiliary functions follow `basis_type`**, as in PySCF: a spherical orbital
 basis fits with a spherical aux basis, a Cartesian one with a Cartesian aux.
-No keyword. Context: `docs/RI_JK_ROUTINE_SCOPE.md` step 2.
+No keyword. Context: `docs/RI_JK_ROUTINE.md` step 2.
 
 ## Why
 
@@ -71,4 +71,4 @@ derivatives can run.
 ## Not in this scope
 
 Default fitting sets per orbital basis. (Auxiliary-basis derivatives in a
-spherical basis landed later, as `docs/RI_JK_ROUTINE_SCOPE.md` step 16.)
+spherical basis landed later, as `docs/RI_JK_ROUTINE.md` step 16.)

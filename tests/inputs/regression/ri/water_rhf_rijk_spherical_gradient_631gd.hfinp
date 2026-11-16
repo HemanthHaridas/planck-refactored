@@ -1,4 +1,4 @@
-# RI-JK spherical gradient gate (docs/RI_JK_ROUTINE_SCOPE.md step 16): RHF,
+# RI-JK spherical gradient gate (docs/RI_JK_ROUTINE.md step 16): RHF,
 # def2-universal-JKFIT, against PySCF mf.density_fit().nuc_grad_method(), cart=False
 # (tests/pyscf/ri_jk_gradient_references.py).
 %begin_control

@@ -1,4 +1,4 @@
-# RI-JK SOSCF and stability (docs/RI_JK_ROUTINE_SCOPE.md step 4): both use the
+# RI-JK SOSCF and stability (docs/RI_JK_ROUTINE.md step 4): both use the
 # fitted operator under scf_ri_jk (no dense AO ERI tensor). Stability eigenvalues
 # equal PySCF's stability analysis on a density_fit() SCF (same GBS bases).
 %begin_control

@@ -1,4 +1,4 @@
-# RI-JK frequency gate (docs/RI_JK_ROUTINE_SCOPE.md step 9): semi-numerical
+# RI-JK frequency gate (docs/RI_JK_ROUTINE.md step 9): semi-numerical
 # Hessian of the RI-JK gradient, def2-universal-JKFIT, against central
 # differences of PySCF mf.density_fit() gradients at Planck's 5e-3 Bohr step
 # (tests/pyscf/ri_jk_gradient_references.py).

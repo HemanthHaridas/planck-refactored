@@ -1,4 +1,4 @@
-# RI-JK gradient gate (docs/RI_JK_ROUTINE_SCOPE.md step 10): C1 H2O2 cation UHF
+# RI-JK gradient gate (docs/RI_JK_ROUTINE.md step 10): C1 H2O2 cation UHF
 # analytic gradient on the fitted operator, def2-universal-JKFIT, against
 # PySCF mf.density_fit().nuc_grad_method() (tests/pyscf/ri_jk_gradient_references.py).
 %begin_control

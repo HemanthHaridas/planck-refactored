@@ -8,7 +8,7 @@ and Cartesian RMP2/UMP2 now run `gradient`, `geomopt`, `frequency`,
 `geomoptfreq` and `imaginaryfollow`, all gated against PySCF. Refused by
 name: frozen-core MP2 gradients (every basis) and spherical RI-MP2
 gradients. RI-MP2 frequencies were added on 2026-11-16
-(`docs/RI_JK_ROUTINE_SCOPE.md` step 8). Status lives in `vault/Status/`.
+(`docs/RI_JK_ROUTINE.md` step 8). Status lives in `vault/Status/`.
 
 ## The design: Lagrangian in the working basis, lifted at the skin
 
@@ -153,7 +153,7 @@ solve, so MP2 frequencies are for small molecules.
 **Refusals:** none left. Spherical RI-MP2 gradients were refused
 (`water_ri_rmp2_spherical_gradient_rejected`) until the RI-MP2 response was
 fixed (`docs/RI_MP2_GRADIENT_RESPONSE.md`); RI-MP2 frequencies until
-`docs/RI_JK_ROUTINE_SCOPE.md` step 8.
+`docs/RI_JK_ROUTINE.md` step 8.
 
 ### Why the gradient reference was PySCF's energy FD
 
@@ -180,8 +180,8 @@ frequency references rely on.
 - **Frozen-core MP2 gradients**: what they need is above. The next
   most-asked MP2 feature; it gets its own scope.
 - **Spherical RI-MP2 gradients**: done 2026-11-16. The RI derivative
-  contraction lifts to Cartesian exactly (`docs/RI_JK_ROUTINE_SCOPE.md`
+  contraction lifts to Cartesian exactly (`docs/RI_JK_ROUTINE.md`
   step 16), and the RI-MP2 response defect is fixed
   (`docs/RI_MP2_GRADIENT_RESPONSE.md`).
-- **RI-MP2 frequencies**: done 2026-11-16 (`docs/RI_JK_ROUTINE_SCOPE.md`
+- **RI-MP2 frequencies**: done 2026-11-16 (`docs/RI_JK_ROUTINE.md`
   step 8).

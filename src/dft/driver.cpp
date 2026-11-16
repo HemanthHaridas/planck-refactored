@@ -3044,7 +3044,7 @@ namespace DFT::Driver
             return {};
         }
 
-        // RI-JK in planck-dft (docs/RI_JK_ROUTINE_SCOPE.md steps 12-15): the
+        // RI-JK in planck-dft (docs/RI_JK_ROUTINE.md steps 12-15): the
         // fitted J and K replace the direct ones for pure and global-hybrid
         // functionals.
         // Everything that would still build exact J or K, or differentiate the
@@ -4858,7 +4858,7 @@ namespace DFT::Driver
                 *M = std::move(*M_w);
             }
 
-        // RI-J and RI-K (docs/RI_JK_ROUTINE_SCOPE.md steps 12-13). The RI
+        // RI-J and RI-K (docs/RI_JK_ROUTINE.md steps 12-13). The RI
         // builders take and return working-basis matrices, so this uses the
         // stored working densities and is added after the projection above,
         // never before it. K is unscaled from build_ri_k; the prefactors and

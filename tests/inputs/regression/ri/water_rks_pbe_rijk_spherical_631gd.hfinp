@@ -1,4 +1,4 @@
-# RI-J Kohn-Sham gate (docs/RI_JK_ROUTINE_SCOPE.md step 12): water RKS PBE, spherical,
+# RI-J Kohn-Sham gate (docs/RI_JK_ROUTINE.md step 12): water RKS PBE, spherical,
 # def2-universal-JKFIT, unpruned 150 x 590 grid, against PySCF
 # dft.RKS/UKS(...).density_fit() (tests/pyscf/ri_jk_dft_references.py).
 %begin_control

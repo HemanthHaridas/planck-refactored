@@ -1,4 +1,4 @@
-"""References for the RI-JK SCF gates (docs/RI_JK_ROUTINE_SCOPE.md).
+"""References for the RI-JK SCF gates (docs/RI_JK_ROUTINE.md).
 
 PySCF density fitting on each tests/inputs/regression/ri/*_rijk_* input: the
 orbital basis and the auxiliary basis (mp2_ri_basis) both read from Planck's

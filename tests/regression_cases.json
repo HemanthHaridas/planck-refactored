@@ -586,7 +586,7 @@
   {
    "id": "water_rhf_rijk_631gd",
    "input": "tests/inputs/regression/ri/water_rhf_rijk_631gd.hfinp",
-   "_note": "RI-JK SCF gate (docs/RI_JK_ROUTINE_SCOPE.md step 0): scf_ri_jk with cc-pVDZ-RIFIT, equal to PySCF density_fit with the same GBS-read orbital and auxiliary bases to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -76.0066326441; the MP2 fitting set costs -1.00e-03 Eh, the motivation for JKFIT sets (step 1).",
+   "_note": "RI-JK SCF gate (docs/RI_JK_ROUTINE.md step 0): scf_ri_jk with cc-pVDZ-RIFIT, equal to PySCF density_fit with the same GBS-read orbital and auxiliary bases to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -76.0066326441; the MP2 fitting set costs -1.00e-03 Eh, the motivation for JKFIT sets (step 1).",
    "tags": [
     "core",
     "extended",
@@ -608,7 +608,7 @@
   {
    "id": "water_cation_uhf_rijk_631gd",
    "input": "tests/inputs/regression/ri/water_cation_uhf_rijk_631gd.hfinp",
-   "_note": "RI-JK SCF gate (docs/RI_JK_ROUTINE_SCOPE.md step 0): scf_ri_jk with cc-pVDZ-RIFIT, equal to PySCF density_fit with the same GBS-read orbital and auxiliary bases to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -75.6033570420; the MP2 fitting set costs -1.03e-03 Eh, the motivation for JKFIT sets (step 1).",
+   "_note": "RI-JK SCF gate (docs/RI_JK_ROUTINE.md step 0): scf_ri_jk with cc-pVDZ-RIFIT, equal to PySCF density_fit with the same GBS-read orbital and auxiliary bases to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -75.6033570420; the MP2 fitting set costs -1.03e-03 Eh, the motivation for JKFIT sets (step 1).",
    "tags": [
     "core",
     "extended",
@@ -630,7 +630,7 @@
   {
    "id": "h2o2_rhf_rijk_631gd",
    "input": "tests/inputs/regression/ri/h2o2_rhf_rijk_631gd.hfinp",
-   "_note": "RI-JK SCF gate (docs/RI_JK_ROUTINE_SCOPE.md step 0): scf_ri_jk with cc-pVDZ-RIFIT, equal to PySCF density_fit with the same GBS-read orbital and auxiliary bases to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -150.7539338384; the MP2 fitting set costs -1.56e-03 Eh, the motivation for JKFIT sets (step 1).",
+   "_note": "RI-JK SCF gate (docs/RI_JK_ROUTINE.md step 0): scf_ri_jk with cc-pVDZ-RIFIT, equal to PySCF density_fit with the same GBS-read orbital and auxiliary bases to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -150.7539338384; the MP2 fitting set costs -1.56e-03 Eh, the motivation for JKFIT sets (step 1).",
    "tags": [
     "core",
     "extended",
@@ -652,7 +652,7 @@
   {
    "id": "h2o2_cation_uhf_rijk_631gd",
    "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_631gd.hfinp",
-   "_note": "RI-JK SCF gate (docs/RI_JK_ROUTINE_SCOPE.md step 0): scf_ri_jk with cc-pVDZ-RIFIT, equal to PySCF density_fit with the same GBS-read orbital and auxiliary bases to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -150.3692659085; the MP2 fitting set costs -1.69e-03 Eh, the motivation for JKFIT sets (step 1).",
+   "_note": "RI-JK SCF gate (docs/RI_JK_ROUTINE.md step 0): scf_ri_jk with cc-pVDZ-RIFIT, equal to PySCF density_fit with the same GBS-read orbital and auxiliary bases to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -150.3692659085; the MP2 fitting set costs -1.69e-03 Eh, the motivation for JKFIT sets (step 1).",
    "tags": [
     "core",
     "extended",
@@ -674,7 +674,7 @@
   {
    "id": "water_rhf_rijk_jkfit_631gd",
    "input": "tests/inputs/regression/ri/water_rhf_rijk_jkfit_631gd.hfinp",
-   "_note": "RI-JK with def2-universal-JKFIT (docs/RI_JK_ROUTINE_SCOPE.md step 1): contracted auxiliary shells, equal to PySCF density_fit with the same GBS-read bases to every printed digit (tests/pyscf/ri_jk_references.py def2-universal-JKFIT). Exact energy -76.0066326441; fitting error 2.67e-05 Eh, against ~1e-3 with cc-pVDZ-RIFIT.",
+   "_note": "RI-JK with def2-universal-JKFIT (docs/RI_JK_ROUTINE.md step 1): contracted auxiliary shells, equal to PySCF density_fit with the same GBS-read bases to every printed digit (tests/pyscf/ri_jk_references.py def2-universal-JKFIT). Exact energy -76.0066326441; fitting error 2.67e-05 Eh, against ~1e-3 with cc-pVDZ-RIFIT.",
    "tags": [
     "core",
     "extended",
@@ -696,7 +696,7 @@
   {
    "id": "h2o2_cation_uhf_rijk_jkfit_631gd",
    "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_jkfit_631gd.hfinp",
-   "_note": "RI-JK with def2-universal-JKFIT (docs/RI_JK_ROUTINE_SCOPE.md step 1): contracted auxiliary shells, equal to PySCF density_fit with the same GBS-read bases to every printed digit (tests/pyscf/ri_jk_references.py def2-universal-JKFIT). Exact energy -150.3692659085; fitting error 8.21e-05 Eh, against ~1e-3 with cc-pVDZ-RIFIT.",
+   "_note": "RI-JK with def2-universal-JKFIT (docs/RI_JK_ROUTINE.md step 1): contracted auxiliary shells, equal to PySCF density_fit with the same GBS-read bases to every printed digit (tests/pyscf/ri_jk_references.py def2-universal-JKFIT). Exact energy -150.3692659085; fitting error 8.21e-05 Eh, against ~1e-3 with cc-pVDZ-RIFIT.",
    "tags": [
     "core",
     "extended",
@@ -718,7 +718,7 @@
   {
    "id": "water_rhf_rijk_spherical_631gd",
    "input": "tests/inputs/regression/ri/water_rhf_rijk_spherical_631gd.hfinp",
-   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE_SCOPE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -76.0052429766; fitting error 2.10e-05 Eh.",
+   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -76.0052429766; fitting error 2.10e-05 Eh.",
    "tags": [
     "core",
     "extended",
@@ -741,7 +741,7 @@
   {
    "id": "water_cation_uhf_rijk_spherical_631gd",
    "input": "tests/inputs/regression/ri/water_cation_uhf_rijk_spherical_631gd.hfinp",
-   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE_SCOPE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -75.6016116469; fitting error 1.63e-05 Eh.",
+   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -75.6016116469; fitting error 1.63e-05 Eh.",
    "tags": [
     "core",
     "extended",
@@ -764,7 +764,7 @@
   {
    "id": "h2o2_rhf_rijk_spherical_631gd",
    "input": "tests/inputs/regression/ri/h2o2_rhf_rijk_spherical_631gd.hfinp",
-   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE_SCOPE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -150.7516121007; fitting error 9.31e-05 Eh.",
+   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -150.7516121007; fitting error 9.31e-05 Eh.",
    "tags": [
     "core",
     "extended",
@@ -787,7 +787,7 @@
   {
    "id": "h2o2_cation_uhf_rijk_spherical_631gd",
    "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_spherical_631gd.hfinp",
-   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE_SCOPE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -150.3668036892; fitting error 8.81e-05 Eh.",
+   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -150.3668036892; fitting error 8.81e-05 Eh.",
    "tags": [
     "core",
     "extended",
@@ -810,7 +810,7 @@
   {
    "id": "water_cation_rohf_rijk_631gd",
    "input": "tests/inputs/regression/ri/water_cation_rohf_rijk_631gd.hfinp",
-   "_note": "RI-JK ROHF (docs/RI_JK_ROUTINE_SCOPE.md step 5), def2-universal-JKFIT: equal to PySCF ROHF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -75.5989868950; fitting error 1.93e-05 Eh.",
+   "_note": "RI-JK ROHF (docs/RI_JK_ROUTINE.md step 5), def2-universal-JKFIT: equal to PySCF ROHF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -75.5989868950; fitting error 1.93e-05 Eh.",
    "tags": [
     "core",
     "extended",
@@ -832,7 +832,7 @@
   {
    "id": "water_cation_rohf_rijk_spherical_631gd",
    "input": "tests/inputs/regression/ri/water_cation_rohf_rijk_spherical_631gd.hfinp",
-   "_note": "RI-JK ROHF (docs/RI_JK_ROUTINE_SCOPE.md step 5), def2-universal-JKFIT: equal to PySCF ROHF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -75.5972480819; fitting error 1.56e-05 Eh.",
+   "_note": "RI-JK ROHF (docs/RI_JK_ROUTINE.md step 5), def2-universal-JKFIT: equal to PySCF ROHF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -75.5972480819; fitting error 1.56e-05 Eh.",
    "tags": [
     "core",
     "extended",
@@ -855,7 +855,7 @@
   {
    "id": "agcl_rhf_rijk_def2svp_ecp",
    "input": "tests/inputs/regression/ri/agcl_rhf_rijk_def2svp_ecp.hfinp",
-   "_note": "RI-JK heavy-element gate (docs/RI_JK_ROUTINE_SCOPE.md step 8a): AgCl def2-SVP with the Ag ECP, spherical, def2-universal-JKFIT, whose Ag set has two l=6 shells (383 aux functions). Equal to PySCF density_fit with ECP and both bases read from Planck's GBS to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -605.4799989662; fitting error 4.92e-05 Eh.",
+   "_note": "RI-JK heavy-element gate (docs/RI_JK_ROUTINE.md step 8a): AgCl def2-SVP with the Ag ECP, spherical, def2-universal-JKFIT, whose Ag set has two l=6 shells (383 aux functions). Equal to PySCF density_fit with ECP and both bases read from Planck's GBS to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -605.4799989662; fitting error 4.92e-05 Eh.",
    "tags": [
     "core",
     "extended",
@@ -880,7 +880,7 @@
   {
    "id": "water_rhf_rijk_soscf_stability_631gd",
    "input": "tests/inputs/regression/ri/water_rhf_rijk_soscf_stability_631gd.hfinp",
-   "_note": "RI-JK SOSCF + stability (docs/RI_JK_ROUTINE_SCOPE.md step 4). Under scf_ri_jk the SOSCF Hessian and the stability MO blocks come from the RI factors; before, SOSCF rebuilt the dense AO ERI tensor every SOSCF step and stability diagonalized the exact Hessian at RI orbitals (~1e-6 off). Eigenvalues equal PySCF stability on mf.density_fit() (def2-universal-JKFIT; PySCF rhf_internal is 4x Planck's real-internal value: 1.5301167/4).",
+   "_note": "RI-JK SOSCF + stability (docs/RI_JK_ROUTINE.md step 4). Under scf_ri_jk the SOSCF Hessian and the stability MO blocks come from the RI factors; before, SOSCF rebuilt the dense AO ERI tensor every SOSCF step and stability diagonalized the exact Hessian at RI orbitals (~1e-6 off). Eigenvalues equal PySCF stability on mf.density_fit() (def2-universal-JKFIT; PySCF rhf_internal is 4x Planck's real-internal value: 1.5301167/4).",
    "tags": [
     "core",
     "extended",
@@ -924,7 +924,7 @@
   {
    "id": "h2o2_cation_uhf_rijk_soscf_stability_631gd",
    "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_soscf_stability_631gd.hfinp",
-   "_note": "RI-JK SOSCF + stability (docs/RI_JK_ROUTINE_SCOPE.md step 4). Under scf_ri_jk the SOSCF Hessian and the stability MO blocks come from the RI factors; before, SOSCF rebuilt the dense AO ERI tensor every SOSCF step and stability diagonalized the exact Hessian at RI orbitals (~1e-6 off). Eigenvalues equal PySCF stability on mf.density_fit() (def2-universal-JKFIT; PySCF uhf_internal is 2x Planck's: 0.14645447/2).",
+   "_note": "RI-JK SOSCF + stability (docs/RI_JK_ROUTINE.md step 4). Under scf_ri_jk the SOSCF Hessian and the stability MO blocks come from the RI factors; before, SOSCF rebuilt the dense AO ERI tensor every SOSCF step and stability diagonalized the exact Hessian at RI orbitals (~1e-6 off). Eigenvalues equal PySCF stability on mf.density_fit() (def2-universal-JKFIT; PySCF uhf_internal is 2x Planck's: 0.14645447/2).",
    "tags": [
     "core",
     "extended",
@@ -962,7 +962,7 @@
     "extended",
     "ri"
    ],
-   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 8.3e-11). RI-JK RHF gradient (docs/RI_JK_ROUTINE_SCOPE.md step 9), def2-universal-JKFIT: Planck equals PySCF to every printed digit. Was water_rhf_rijk_gradient_rejected; before step 3 the exact-integral gradient at RI orbitals ran here, 9.9e-6 off. Forming V^-1 explicitly (cond ~8e11 for Cartesian JKFIT) put it 2.1e-6 off; the triangular solves fix that.",
+   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 8.3e-11). RI-JK RHF gradient (docs/RI_JK_ROUTINE.md step 9), def2-universal-JKFIT: Planck equals PySCF to every printed digit. Was water_rhf_rijk_gradient_rejected; before step 3 the exact-integral gradient at RI orbitals ran here, 9.9e-6 off. Forming V^-1 explicitly (cond ~8e11 for Cartesian JKFIT) put it 2.1e-6 off; the triangular solves fix that.",
    "expected_exit_code": 0,
    "contains": [
     "Nuclear Gradient (Ha/Bohr) :"
@@ -1115,7 +1115,7 @@
     "ri",
     "open_shell"
    ],
-   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 4.9e-11). RI-JK UHF gradient (docs/RI_JK_ROUTINE_SCOPE.md step 10), def2-universal-JKFIT; Planck equals PySCF to every printed digit. Was water_cation_uhf_rijk_gradient_rejected.",
+   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 4.9e-11). RI-JK UHF gradient (docs/RI_JK_ROUTINE.md step 10), def2-universal-JKFIT; Planck equals PySCF to every printed digit. Was water_cation_uhf_rijk_gradient_rejected.",
    "expected_exit_code": 0,
    "contains": [
     "Nuclear Gradient (Ha/Bohr) :"
@@ -1252,7 +1252,7 @@
     "ri",
     "spherical"
    ],
-   "_pyscf_reference": "PySCF 2.15.0 mf.density_fit().nuc_grad_method(), cart=False, 6-31G* and def2-universal-JKFIT (spherical aux) from Planck's GBS (tests/pyscf/ri_jk_gradient_references.py; PySCF's analytic gradient matches its own energy FD to 9.0e-11). Planck matches every printed digit. Spherical RI derivative lift (docs/RI_JK_ROUTINE_SCOPE.md step 16). Was water_rhf_rijk_spherical_gradient_rejected (step 10).",
+   "_pyscf_reference": "PySCF 2.15.0 mf.density_fit().nuc_grad_method(), cart=False, 6-31G* and def2-universal-JKFIT (spherical aux) from Planck's GBS (tests/pyscf/ri_jk_gradient_references.py; PySCF's analytic gradient matches its own energy FD to 9.0e-11). Planck matches every printed digit. Spherical RI derivative lift (docs/RI_JK_ROUTINE.md step 16). Was water_rhf_rijk_spherical_gradient_rejected (step 10).",
    "expected_exit_code": 0,
    "contains": [
     "Nuclear Gradient (Ha/Bohr) :"
@@ -1297,7 +1297,7 @@
     "spherical",
     "open_shell"
    ],
-   "_pyscf_reference": "PySCF 2.15.0 mf.density_fit().nuc_grad_method(), cart=False, 6-31G* and def2-universal-JKFIT (spherical aux) from Planck's GBS (tests/pyscf/ri_jk_gradient_references.py; PySCF's analytic gradient matches its own energy FD to 9.7e-10). Planck matches every printed digit. Spherical RI derivative lift (docs/RI_JK_ROUTINE_SCOPE.md step 16). C1 H2O2 cation UHF, all 12 components independent.",
+   "_pyscf_reference": "PySCF 2.15.0 mf.density_fit().nuc_grad_method(), cart=False, 6-31G* and def2-universal-JKFIT (spherical aux) from Planck's GBS (tests/pyscf/ri_jk_gradient_references.py; PySCF's analytic gradient matches its own energy FD to 9.7e-10). Planck matches every printed digit. Spherical RI derivative lift (docs/RI_JK_ROUTINE.md step 16). C1 H2O2 cation UHF, all 12 components independent.",
    "expected_exit_code": 0,
    "contains": [
     "Nuclear Gradient (Ha/Bohr) :"
@@ -1347,7 +1347,7 @@
     "ri",
     "dft"
    ],
-   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit(), def2-universal-JKFIT and 6-31G* from Planck's GBS, unpruned 150 x 590 grid (tests/pyscf/ri_jk_dft_references.py): -76.3126823494; exact-integral energy -76.3126584396. Planck matches every printed digit. RI-J for pure functionals (docs/RI_JK_ROUTINE_SCOPE.md step 12). Was water_rks_pbe_rijk_rejected (step 6).",
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit(), def2-universal-JKFIT and 6-31G* from Planck's GBS, unpruned 150 x 590 grid (tests/pyscf/ri_jk_dft_references.py): -76.3126823494; exact-integral energy -76.3126584396. Planck matches every printed digit. RI-J for pure functionals (docs/RI_JK_ROUTINE.md step 12). Was water_rks_pbe_rijk_rejected (step 6).",
    "expected_exit_code": 0,
    "contains": [
     "DFT Energy"
@@ -1419,7 +1419,7 @@
     "ri",
     "dft"
    ],
-   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit(), B3LYP, def2-universal-JKFIT and 6-31G* from Planck's GBS, unpruned 150 x 590 grid (tests/pyscf/ri_jk_dft_references.py): -76.4009488436; exact-integral energy -76.4009350142. Planck matches every printed digit. RI-J + RI-K for a global hybrid (docs/RI_JK_ROUTINE_SCOPE.md step 13). Was water_rks_b3lyp_rijk_rejected (step 12).",
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit(), B3LYP, def2-universal-JKFIT and 6-31G* from Planck's GBS, unpruned 150 x 590 grid (tests/pyscf/ri_jk_dft_references.py): -76.4009488436; exact-integral energy -76.4009350142. Planck matches every printed digit. RI-J + RI-K for a global hybrid (docs/RI_JK_ROUTINE.md step 13). Was water_rks_b3lyp_rijk_rejected (step 12).",
    "expected_exit_code": 0,
    "contains": [
     "DFT Energy"
@@ -1491,7 +1491,7 @@
     "ri",
     "dft"
    ],
-   "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 13): the RI 2c/3c integrals are Coulomb-kernel only, so range-separated functionals are refused under scf_ri_jk.",
+   "_note": "Boundary marker (docs/RI_JK_ROUTINE.md step 13): the RI 2c/3c integrals are Coulomb-kernel only, so range-separated functionals are refused under scf_ri_jk.",
    "expected_exit_code": 1,
    "contains": [
     "not a range-separated functional"
@@ -1507,7 +1507,7 @@
     "ri",
     "dft"
    ],
-   "_pyscf_reference": "KS orbital Hessian on the fitted operator (docs/RI_JK_ROUTINE_SCOPE.md step 14): singlet gen_g_hop_rhf/2 +0.3242326, triplet rhf_external +0.2702975. PySCF 2.15.0 on dft.RKS(...).density_fit(), 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590 (tests/pyscf/ri_jk_dft_references.py). Planck matches every printed digit. With the exact-integral Hessian at the RI orbitals (the pre-step-14 behaviour) the eigenvalues move by 6.7e-6 (singlet) and 5e-7 (triplet), so atol is 2e-7. SOSCF reaches the RI DIIS energy.",
+   "_pyscf_reference": "KS orbital Hessian on the fitted operator (docs/RI_JK_ROUTINE.md step 14): singlet gen_g_hop_rhf/2 +0.3242326, triplet rhf_external +0.2702975. PySCF 2.15.0 on dft.RKS(...).density_fit(), 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590 (tests/pyscf/ri_jk_dft_references.py). Planck matches every printed digit. With the exact-integral Hessian at the RI orbitals (the pre-step-14 behaviour) the eigenvalues move by 6.7e-6 (singlet) and 5e-7 (triplet), so atol is 2e-7. SOSCF reaches the RI DIIS energy.",
    "expected_exit_code": 0,
    "contains": [
     "DFT SOSCF :",
@@ -1583,7 +1583,7 @@
     "ri",
     "dft"
    ],
-   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit().nuc_grad_method() with grid response, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590, conv_tol_grad 1e-9 (tests/pyscf/ri_jk_dft_references.py). Planck matches every component to <= 7e-11 Ha/Bohr. KS RI-JK gradient (docs/RI_JK_ROUTINE_SCOPE.md step 15). Was water_rks_pbe_rijk_gradient_rejected (step 12).",
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit().nuc_grad_method() with grid response, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590, conv_tol_grad 1e-9 (tests/pyscf/ri_jk_dft_references.py). Planck matches every component to <= 7e-11 Ha/Bohr. KS RI-JK gradient (docs/RI_JK_ROUTINE.md step 15). Was water_rks_pbe_rijk_gradient_rejected (step 12).",
    "expected_exit_code": 0,
    "contains": [
     "DFT Energy"
@@ -1754,7 +1754,7 @@
     "dft",
     "spherical"
    ],
-   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit().nuc_grad_method() with grid response, cart=False, PBE, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590 (tests/pyscf/ri_jk_dft_references.py). Planck matches every component to ~1e-12. Spherical KS RI-JK gradient (docs/RI_JK_ROUTINE_SCOPE.md step 16). Was water_rks_pbe_rijk_spherical_gradient_rejected (step 15).",
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit().nuc_grad_method() with grid response, cart=False, PBE, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590 (tests/pyscf/ri_jk_dft_references.py). Planck matches every component to ~1e-12. Spherical KS RI-JK gradient (docs/RI_JK_ROUTINE.md step 16). Was water_rks_pbe_rijk_spherical_gradient_rejected (step 15).",
    "expected_exit_code": 0,
    "contains": [
     "DFT Energy"
@@ -3091,7 +3091,7 @@
     "extended"
    ],
    "timeout_s": 300,
-   "_pyscf_reference": "PySCF 2.15.0 has no DF-MP2 gradient, so tests/pyscf/ri_mp2_frequency_references.py builds the gradient as a fourth-order FD (1e-3 Bohr) of the RI-MP2 energy (dense SCF + DF-MP2, cc-pVDZ-RIFIT from Planck's GBS), then central differences at Planck's h = 5e-3 Bohr and thermo.harmonic_analysis. Independent of Planck's RI-MP2 gradient, its per-geometry RI cache invalidation and its Hessian loop. RI-RMP2/STO-3G water: 1480.60/5000.85/5418.23 cm-1, E -74.9767723887; Planck matches every printed digit. Was water_ri_rmp2_freq_rejected (docs/RI_JK_ROUTINE_SCOPE.md step 8).",
+   "_pyscf_reference": "PySCF 2.15.0 has no DF-MP2 gradient, so tests/pyscf/ri_mp2_frequency_references.py builds the gradient as a fourth-order FD (1e-3 Bohr) of the RI-MP2 energy (dense SCF + DF-MP2, cc-pVDZ-RIFIT from Planck's GBS), then central differences at Planck's h = 5e-3 Bohr and thermo.harmonic_analysis. Independent of Planck's RI-MP2 gradient, its per-geometry RI cache invalidation and its Hessian loop. RI-RMP2/STO-3G water: 1480.60/5000.85/5418.23 cm-1, E -74.9767723887; Planck matches every printed digit. Was water_ri_rmp2_freq_rejected (docs/RI_JK_ROUTINE.md step 8).",
    "expected_exit_code": 0,
    "contains": [
     "Vibrational Frequencies",

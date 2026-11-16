@@ -1,4 +1,4 @@
-# RI-JK heavy-element gate (docs/RI_JK_ROUTINE_SCOPE.md step 8a): AgCl,
+# RI-JK heavy-element gate (docs/RI_JK_ROUTINE.md step 8a): AgCl,
 # def2-SVP + ECP on Ag, spherical, def2-universal-JKFIT, whose Ag set carries
 # i functions (L = 6). Reference: tests/pyscf/ri_jk_references.py (ECP read
 # from Planck's GBS). tol_eri 1e-12 as in hf/agcl_rhf_def2svp_ecp.

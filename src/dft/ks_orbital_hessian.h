@@ -39,7 +39,7 @@ namespace DFT::Driver
         double short_range_exchange_coefficient = 0.0;
         double range_separation_omega = 0.0;
         double kernel_scale = 2.0;
-        // RI-JK (docs/RI_JK_ROUTINE_SCOPE.md step 14): non-null means the J and
+        // RI-JK (docs/RI_JK_ROUTINE.md step 14): non-null means the J and
         // K responses come from the fitted operator, built in the working basis
         // from the working MOs, as the RI-JK SCF does. Needs a primed RI cache;
         // full-range exchange only (range separation is refused under RI).

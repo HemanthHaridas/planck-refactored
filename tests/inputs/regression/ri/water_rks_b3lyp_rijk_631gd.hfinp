@@ -1,4 +1,4 @@
-# RI-JK Kohn-Sham gate (docs/RI_JK_ROUTINE_SCOPE.md step 13): water RKS B3LYP (RI-J + RI-K),
+# RI-JK Kohn-Sham gate (docs/RI_JK_ROUTINE.md step 13): water RKS B3LYP (RI-J + RI-K),
 # def2-universal-JKFIT, unpruned 150 x 590 grid, against PySCF
 # dft.RKS/UKS(...).density_fit() (tests/pyscf/ri_jk_dft_references.py).
 %begin_control

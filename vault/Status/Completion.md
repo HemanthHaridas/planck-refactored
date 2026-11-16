@@ -499,7 +499,7 @@ historical design context, but they are no longer the source of truth for
   - Energies and gradients are unchanged to printed digits elsewhere; core
     174/174.
 
-- **RI-JK SCF gated against PySCF (2026-11-12, `docs/RI_JK_ROUTINE_SCOPE.md`
+- **RI-JK SCF gated against PySCF (2026-11-12, `docs/RI_JK_ROUTINE.md`
   step 0).** `scf_ri_jk` had no regression case. Water, water⁺, C1 H2O2 and
   H2O2⁺ (RHF/UHF, Cartesian 6-31G*, cc-pVDZ-RIFIT) now equal PySCF
   `density_fit` to every printed digit, with both bases read from Planck's GBS
@@ -528,7 +528,7 @@ historical design context, but they are no longer the source of truth for
   (RI-MP2's CPHF route and `transform_eri_ri`); before, SOSCF rebuilt the AO
   tensor every step and stability used the exact Hessian. Eigenvalues equal
   PySCF stability on a density-fitted SCF (RHF and UHF).
-- **Spherical RI gradients (2026-11-16, `docs/RI_JK_ROUTINE_SCOPE.md`
+- **Spherical RI gradients (2026-11-16, `docs/RI_JK_ROUTINE.md`
   step 16; that scope is now answered).** `build_ri_two_electron_gradient`
   lifts the working-basis three-index density to the Cartesian derivative
   loops (orbital Cᵀ G C per aux column, aux × T_aux, metric T_auxᵀ γ T_aux).
@@ -539,7 +539,7 @@ historical design context, but they are no longer the source of truth for
     Fixed the same day (orbital-Hessian entry above).
 
 - **RI-JK in `planck-dft` for pure and global-hybrid single points
-  (2026-11-16, `docs/RI_JK_ROUTINE_SCOPE.md` steps 12–13).** The KS assembly
+  (2026-11-16, `docs/RI_JK_ROUTINE.md` steps 12–13).** The KS assembly
   adds the fitted J and K in the working basis after projecting the other
   terms. Water RKS/UKS PBE, spherical water RKS PBE, and water RKS, water⁺
   UKS and C1 H2O2 RKS B3LYP equal PySCF `density_fit()` to every printed
@@ -552,7 +552,7 @@ historical design context, but they are no longer the source of truth for
   TDDFT, PCM and counterpoise with `scf_ri_jk` are refused by name.
 
 - **RI pair factors cached per geometry (2026-11-16, B0;
-  `docs/RI_JK_ROUTINE_SCOPE.md` step 11).** B = J V^{-1/2} is built once by
+  `docs/RI_JK_ROUTINE.md` step 11).** B = J V^{-1/2} is built once by
   `ensure_ri_3c_ready` into `_ri_pair_factors` and reset with `_ri_j3c`,
   instead of re-solved on every J/K call. Benzene 6-31G*/JKFIT RI-JK energy
   1.5× faster end to end, energies bitwise identical.
@@ -565,7 +565,7 @@ historical design context, but they are no longer the source of truth for
     in `.gitignore`.
 
 - **RI-JK HF gradient, geometry optimization and frequencies (2026-11-16,
-  `docs/RI_JK_ROUTINE_SCOPE.md` steps 9–10).** One helper,
+  `docs/RI_JK_ROUTINE.md` steps 9–10).** One helper,
   `build_ri_scf_two_electron_gradient`, gives the fitted 2e term for the Γ
   RHF, UHF, ROHF and RKS share; the three SCF gradients call it under
   `scf_ri_jk`. Cartesian RHF is gated: water and C1 H2O2 gradients, water
@@ -583,7 +583,7 @@ historical design context, but they are no longer the source of truth for
   - **Still refused:** spherical (16), correlated and PCM RI-JK derivatives.
 
 - **RI-MP2 frequencies, and a streamed RI derivative contraction
-  (2026-11-16, `docs/RI_JK_ROUTINE_SCOPE.md` steps 6–8).**
+  (2026-11-16, `docs/RI_JK_ROUTINE.md` steps 6–8).**
   - **Frequencies.** RI-RMP2/UMP2 `frequency`, `geomoptfreq` and
     `imaginaryfollow` run; no new code, only the refusal removed. PySCF has
     no DF-MP2 gradient, so the reference is a fourth-order FD of PySCF's

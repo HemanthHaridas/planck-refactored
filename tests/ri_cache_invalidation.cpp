@@ -141,7 +141,7 @@ int main()
              "geometry-stale cache was returned (dimension-only guard).");
 
     // The fitted pair factors are cached with the tensor (step 11 of
-    // docs/RI_JK_ROUTINE_SCOPE.md) and must follow it: after the move they must
+    // docs/RI_JK_ROUTINE.md) and must follow it: after the move they must
     // be B's tensor with the metric applied, not A's factors. (Comparing with a
     // Calculator built fresh at B would not work: this test moves only
     // _standard, so the orbital shells stay at A.)

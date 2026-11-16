@@ -1,4 +1,4 @@
-"""References for the Kohn-Sham RI-JK gates (docs/RI_JK_ROUTINE_SCOPE.md steps 12-13).
+"""References for the Kohn-Sham RI-JK gates (docs/RI_JK_ROUTINE.md steps 12-13).
 
 PySCF dft.RKS/UKS(...).density_fit() on each input, the orbital and auxiliary
 bases read from Planck's GBS files, Planck's CODATA 2018 Bohr, and Planck's

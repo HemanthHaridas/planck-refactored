@@ -1,7 +1,7 @@
 # Why did the RI-MP2 gradient miss its own energy FD by ~4e-6 Ha/Bohr?
 
 Answered 2026-11-16 (opened as a scope 2026-11-16, from
-`docs/RI_JK_ROUTINE_SCOPE.md` step 16). Status lives in `vault/Status/`.
+`docs/RI_JK_ROUTINE.md` step 16). Status lives in `vault/Status/`.
 
 ## Answer
 

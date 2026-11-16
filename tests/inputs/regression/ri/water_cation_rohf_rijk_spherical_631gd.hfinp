@@ -1,4 +1,4 @@
-# RI-JK ROHF (docs/RI_JK_ROUTINE_SCOPE.md step 5): run_rohf builds the same
+# RI-JK ROHF (docs/RI_JK_ROUTINE.md step 5): run_rohf builds the same
 # (Ga, Gb) as UHF, so RI-JK needed one branch. def2-universal-JKFIT, spherical;
 # equal to PySCF ROHF(...).density_fit() with the same GBS-read bases
 # (tests/pyscf/ri_jk_references.py).

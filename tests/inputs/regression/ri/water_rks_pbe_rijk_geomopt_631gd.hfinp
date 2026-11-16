@@ -1,4 +1,4 @@
-# RI-JK KS geometry optimization gate (docs/RI_JK_ROUTINE_SCOPE.md step 15):
+# RI-JK KS geometry optimization gate (docs/RI_JK_ROUTINE.md step 15):
 # E_opt against PySCF geometric GAU_TIGHT on dft.RKS(...).density_fit()
 # (tests/pyscf/ri_jk_dft_references.py).
 %begin_control

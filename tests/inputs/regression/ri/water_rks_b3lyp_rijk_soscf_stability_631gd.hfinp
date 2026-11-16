@@ -1,4 +1,4 @@
-# RI-JK KS SOSCF + stability gate (docs/RI_JK_ROUTINE_SCOPE.md step 14): water RKS B3LYP,
+# RI-JK KS SOSCF + stability gate (docs/RI_JK_ROUTINE.md step 14): water RKS B3LYP,
 # the KS orbital Hessian on the fitted operator. Energy = the RI DIIS energy;
 # eigenvalues against PySCF stability on dft.*.density_fit()
 # (tests/pyscf/ri_jk_dft_references.py).

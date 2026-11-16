@@ -1,4 +1,4 @@
-# RI-JK SCF gate (docs/RI_JK_ROUTINE_SCOPE.md step 0): scf_ri_jk with the
+# RI-JK SCF gate (docs/RI_JK_ROUTINE.md step 0): scf_ri_jk with the
 # cc-pVDZ-RIFIT fitting basis, against PySCF density_fit with the same
 # orbital and auxiliary bases read from Planck's GBS files
 # (tests/pyscf/ri_jk_references.py).

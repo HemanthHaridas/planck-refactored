@@ -1,4 +1,4 @@
-# RI-JK spherical gradient gate (docs/RI_JK_ROUTINE_SCOPE.md step 16): C1 H2O2
+# RI-JK spherical gradient gate (docs/RI_JK_ROUTINE.md step 16): C1 H2O2
 # cation UHF, every component independent, against PySCF density-fitted gradient,
 # cart=False (tests/pyscf/ri_jk_gradient_references.py).
 %begin_control

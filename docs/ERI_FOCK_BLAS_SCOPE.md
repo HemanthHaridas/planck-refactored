@@ -1,6 +1,6 @@
 # ERI / Fock BLAS-LAPACK Migration — Scope
 
-Status: **scope; B0 landed** (2026-11-16, as `docs/RI_JK_ROUTINE_SCOPE.md`
+Status: **scope; B0 landed** (2026-11-16, as `docs/RI_JK_ROUTINE.md`
 step 11, which has the measurements). In-flight work, so this file is allowed
 to be scope-shaped; rewrite it as an answer when the work lands.
 

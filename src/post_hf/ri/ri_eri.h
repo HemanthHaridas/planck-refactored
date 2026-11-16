@@ -152,7 +152,7 @@ namespace HartreeFock::Correlation::RI
         const Eigen::MatrixXd &x_proj,
         bool bra_prefolded = false);
 
-    // Two-electron term of an RI-JK SCF gradient (docs/RI_JK_ROUTINE_SCOPE.md
+    // Two-electron term of an RI-JK SCF gradient (docs/RI_JK_ROUTINE.md
     // step 9): ¼ Σ Γ_μνλσ d(μν|λσ)_fit/dR with the SCF Γ every reference
     // shares, Γ = 2 Pt⊗Pt − 2k (Pa·Pa + Pb·Pb) (Pt = Pa + Pb; RHF passes
     // Pa = Pb = P/2; k = 1 for HF, the exact-exchange fraction for a global

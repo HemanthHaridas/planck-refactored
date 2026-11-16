@@ -1322,7 +1322,7 @@ namespace HartreeFock::Correlation::RI
         // gamma3 and x_proj live in the working (fitted) space: working AO
         // pairs × fitted aux functions, spherical when the run is. The
         // derivative loops are Cartesian on both legs, so wg and γ_PQ are
-        // lifted to Cartesian below (docs/RI_JK_ROUTINE_SCOPE.md step 16).
+        // lifted to Cartesian below (docs/RI_JK_ROUTINE.md step 16).
         const std::size_t natoms = calculator._molecule.natoms;
         const std::size_t nb = calculator.working_nbasis();
         const auto npair = static_cast<Eigen::Index>(nb * (nb + 1) / 2);
@@ -1385,7 +1385,7 @@ namespace HartreeFock::Correlation::RI
 
         // Streamed: each derivative element is contracted the moment it is
         // computed, so the 3·natoms × npair × naux derivative tensor is never
-        // stored (docs/RI_JK_ROUTINE_SCOPE.md step 7). The loops run threaded
+        // stored (docs/RI_JK_ROUTINE.md step 7). The loops run threaded
         // over aux shells; each shell accumulates into its own natoms × 3
         // partial, summed in shell order, so the gradient is the same at any
         // thread count (G6, docs/GRADIENT_INTEGRAL_PERFORMANCE.md).

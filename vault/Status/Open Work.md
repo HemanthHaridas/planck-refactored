@@ -60,7 +60,7 @@ teaching code) reorders it.
    pure and global-hybrid single points use RI-J/K, KS SOSCF and stability
    the fitted operator, KS gradients/geomopt equal PySCF (12–15), and RI
    gradients run in a spherical basis too (16). The scope is answered:
-   `docs/RI_JK_ROUTINE_SCOPE.md`. RI-MP2 gradients meet their own energy FD
+   `docs/RI_JK_ROUTINE.md`. RI-MP2 gradients meet their own energy FD
    and run spherical since the orbital-response fix
    (`docs/RI_MP2_GRADIENT_RESPONSE.md`). Still open:
    - **RI-DH** (O9 in §2) and attenuated RI-K for range-separated

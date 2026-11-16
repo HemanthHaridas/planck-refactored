@@ -1,4 +1,4 @@
-# RI-JK KS gradient gate (docs/RI_JK_ROUTINE_SCOPE.md step 15): C1 H2O2 RKS B3LYP,
+# RI-JK KS gradient gate (docs/RI_JK_ROUTINE.md step 15): C1 H2O2 RKS B3LYP,
 # def2-universal-JKFIT, unpruned 150 x 590, against PySCF
 # dft.*.density_fit().nuc_grad_method() with grid response
 # (tests/pyscf/ri_jk_dft_references.py).

@@ -1,4 +1,4 @@
-# RI-JK spherical KS gradient gate (docs/RI_JK_ROUTINE_SCOPE.md step 16): RKS PBE,
+# RI-JK spherical KS gradient gate (docs/RI_JK_ROUTINE.md step 16): RKS PBE,
 # def2-universal-JKFIT, unpruned 150 x 590, against PySCF density-fitted
 # gradient with grid response, cart=False (tests/pyscf/ri_jk_dft_references.py).
 %begin_control

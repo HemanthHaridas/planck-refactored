@@ -1,4 +1,4 @@
-# RI-JK geometry optimization gate (docs/RI_JK_ROUTINE_SCOPE.md step 9):
+# RI-JK geometry optimization gate (docs/RI_JK_ROUTINE.md step 9):
 # E_opt against PySCF geometric GAU_TIGHT on mf.density_fit()
 # (tests/pyscf/ri_jk_gradient_references.py).
 %begin_control

@@ -1,4 +1,4 @@
-"""References for the RI-JK gradient gates (docs/RI_JK_ROUTINE_SCOPE.md step 9).
+"""References for the RI-JK gradient gates (docs/RI_JK_ROUTINE.md step 9).
 
 PySCF density-fitted RHF gradients (mf.density_fit().nuc_grad_method()), with
 the orbital and auxiliary bases read from Planck's GBS files and Planck's

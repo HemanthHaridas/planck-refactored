@@ -1,4 +1,4 @@
-"""References for the RI-MP2 frequency gates (docs/RI_JK_ROUTINE_SCOPE.md step 8).
+"""References for the RI-MP2 frequency gates (docs/RI_JK_ROUTINE.md step 8).
 
 PySCF has no density-fitted MP2 gradient (2.15.0 raises NotImplementedError),
 so the reference gradient is a fourth-order FD of the RI-MP2 ENERGY: dense

@@ -1,4 +1,4 @@
-# Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 13): the RI 2c/3c integrals
+# Boundary marker (docs/RI_JK_ROUTINE.md step 13): the RI 2c/3c integrals
 # are Coulomb-kernel only, so range-separated functionals are refused.
 %begin_control
     basis       6-31g*

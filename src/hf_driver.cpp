@@ -518,7 +518,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         // ROHF, dense and RI RMP2/UMP2 gradients all run in the spherical basis:
         // the MP2 Lagrangian stays in the working basis and the derivative-kernel
         // inputs are lifted once (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md,
-        // docs/RI_JK_ROUTINE_SCOPE.md step 16).
+        // docs/RI_JK_ROUTINE.md step 16).
         // Post-HF energy paths consume only the SCF's spherical AO ERI and spherical
         // MO coefficients: the AO→MO transform is self-consistent in the spherical
         // basis (no C needed), and every AO/MO dimension keys off working_nbasis().
@@ -609,7 +609,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     // (Ga, Gb)) are wired. They have no symmetry-orbit folding.
     // Derivative workflows: the RI-JK gradient (build_ri_scf_two_electron_
     // gradient) is gated for RHF, UHF and ROHF, Cartesian and spherical
-    // (docs/RI_JK_ROUTINE_SCOPE.md steps 9-10, 16). Everything else stays
+    // (docs/RI_JK_ROUTINE.md steps 9-10, 16). Everything else stays
     // refused, because the exact-integral gradient at RI orbitals is
     // inconsistent with the RI energy (water/def2-universal-JKFIT: 9.9e-6
     // Ha/Bohr off its FD, inside the geomopt threshold): a correlated gradient

@@ -1,4 +1,4 @@
-# RI-JK gradient gate (docs/RI_JK_ROUTINE_SCOPE.md step 9): C1 H2O2, every
+# RI-JK gradient gate (docs/RI_JK_ROUTINE.md step 9): C1 H2O2, every
 # component independent, def2-universal-JKFIT, against PySCF
 # mf.density_fit().nuc_grad_method() (tests/pyscf/ri_jk_gradient_references.py).
 %begin_control

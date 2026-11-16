@@ -1,10 +1,9 @@
 # What does RI-JK need before it is usable for routine HF and DFT?
 
-The answer, as of 2026-11-16 (scoped 2026-11-10; steps 0–16 landed). Status
-lives in `vault/Status/Completion.md` and `vault/Status/Open Work.md`
-(priority 6). The speed half (BLAS, RI-K from C_occ) is in
-`docs/ERI_FOCK_BLAS_SCOPE.md`; this doc is about correctness and reach, plus
-the one speed item (B0) that KS RI-JK could not do without.
+Answered 2026-11-16 (opened as a scope 2026-11-10). Status lives in
+`vault/Status/`. This doc is about correctness and reach, plus the speed
+items RI-JK could not do without (B0, G6); the rest of the speed work (BLAS,
+RI-K from C_occ) is `docs/ERI_FOCK_BLAS_SCOPE.md`.
 
 ## Answer
 
@@ -22,10 +21,15 @@ With a JKFIT set the fitting error is ≤ 2.2e-5 Eh per atom
 RIFIT set.
 
 **Refused by name**, each for a stated reason: range-separated functionals
-(the RI integrals are Coulomb-kernel only), TDDFT, PCM and counterpoise with
-RI-JK; full point-group symmetry; a correlated gradient on RI-JK orbitals;
-and spherical RI-MP2 gradients, which wait on the RI-MP2 gradient defect
-found in step 16 (below).
+(the RI integrals are Coulomb-kernel only), double hybrids, TDDFT, PCM and
+counterpoise with RI-JK in `planck-dft`; PCM derivatives with RI-JK in
+`hartree-fock`; full point-group symmetry; and a correlated gradient on RI-JK
+orbitals (its HF-reference terms would also have to be fitted).
+
+RI-MP2, which shares the fitting cache, came along: its gradient meets its
+own energy FD in both bases (`docs/RI_MP2_GRADIENT_RESPONSE.md`), its
+frequencies are gated (step 8), and its gradient no longer builds the nao⁴
+AO pair density (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`).
 
 | | Status |
 |---|---|
@@ -63,21 +67,19 @@ in `src/dft/driver.cpp` (range separation, double hybrids, TDDFT, PCM;
 counterpoise at the top of `DFT::Driver::run`). Every SCF and KS gradient
 takes its 2e term from `build_ri_scf_two_electron_gradient` under RI, and
 `build_ri_two_electron_gradient` lifts the working-basis three-index density
-to the Cartesian derivative loops. In `planck-dft`, `assemble_current_ks_potential` adds
-the RI J and K in the working basis after projecting the other KS terms. HF
-SOSCF and stability check the flag (step 4). Post-HF methods (MP2, CC,
-CASSCF) on RI-JK orbitals keep exact integrals, which is a legitimate
-combination.
+to the Cartesian derivative loops, which are streamed and threaded over aux
+shells. In `planck-dft`, `assemble_current_ks_potential` adds the RI J and K
+in the working basis after projecting the other KS terms. HF SOSCF and
+stability reach the fitted operator through `SCF::two_electron_fock`, the one
+place the fitted/exact choice is made
+(`docs/SCF_ORBITAL_HESSIAN_OPERATOR.md`); the KS orbital Hessian takes the
+fitted J/K under RI (step 14). Post-HF methods (MP2, CC, CASSCF) on RI-JK
+orbitals keep exact integrals, which is a legitimate combination.
 
-## Still open
+## Record of the landed steps
 
-- **RI-DH (O9)**: RI-JK in `planck-dft` and the streamed contraction are
-  in place.
-- **Attenuated (range-separated) RI-K**, so range-separated functionals can
-  use RI-JK.
-- **`scf_ri_basis`**: see step 1.
-
-## Done
+The steps below are kept for their measurements and the defects they found;
+the step numbers are cited by commits, tests and code comments.
 
 ### 0. A gate for what existed
 
@@ -510,8 +512,22 @@ the RI-MP2 gradient itself was off. Once that was fixed
 (`docs/RI_MP2_GRADIENT_RESPONSE.md`) the refusal was removed; the
 spherical FD gates read 1.1e-7 / 1.5e-7.
 
+## Not done
+
+Nothing in this scope. A separate `scf_ri_basis` keyword was decided against
+(step 1): RI-JK and RI-MP2 share one fitting cache.
+
 ## Not in this scope
 
-Full-symmetry RI-JK (symmetry-orbit folding), COSX/seminumerical exchange,
-attenuated (range-separated) RI-K beyond the refusal, and the rest of the
-performance work in `ERI_FOCK_BLAS_SCOPE.md` (B1 BLAS, B2 RI-K from C_occ).
+Each is a new capability, not a gap in routine RI-JK, and is tracked in
+`vault/Status/Open Work.md`:
+
+- **Attenuated (range-separated) RI-K**, so range-separated functionals can
+  use RI-JK; refused by name until then.
+- **RI double hybrids (RI-DH, O9)**: the RI-JK half and the streamed
+  derivative contraction it needs are in place.
+- **Full-symmetry RI-JK** (symmetry-orbit folding) and COSX/seminumerical
+  exchange.
+- **The rest of the speed work** in `docs/ERI_FOCK_BLAS_SCOPE.md` (B1 BLAS,
+  B2 RI-K from C_occ) and RI shell-block 3c/2c kernels
+  (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`).

@@ -15,7 +15,7 @@ namespace DFT::Driver
         using HartreeFock::BasisFunctions::mos_to_cartesian;
 
         // Fitted J/K response for one symmetric working-basis trial density
-        // (docs/RI_JK_ROUTINE_SCOPE.md step 14). The unpacked factors are built
+        // (docs/RI_JK_ROUTINE.md step 14). The unpacked factors are built
         // once per operator; the RI builders take and return working-basis
         // matrices, so the caller packs them with the working MOs.
         struct RiResponse
