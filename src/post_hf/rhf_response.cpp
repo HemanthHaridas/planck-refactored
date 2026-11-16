@@ -30,7 +30,7 @@ namespace HartreeFock::Correlation
 
             const Eigen::MatrixXd C_occ = C.leftCols(n_occ);
             const Eigen::MatrixXd C_virt = C.rightCols(n_virt);
-            const Eigen::MatrixXd pf = RI::build_ri_pair_factors(calculator);
+            const Eigen::MatrixXd &pf = RI::build_ri_pair_factors(calculator);
 
             // Fitted MO blocks. Row packing from build_ri_mo_block is
             // row_orbital * n_col + col_orbital.

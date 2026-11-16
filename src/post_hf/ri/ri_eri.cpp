@@ -825,6 +825,7 @@ namespace HartreeFock::Correlation::RI
         calculator._ri_j2c.resize(0, 0);
         calculator._ri_metric_factor.reset();
         calculator._ri_j3c.resize(0, 0);
+        calculator._ri_pair_factors.resize(0, 0);
         calculator._ri_cache_geometry = geom;
     }
 
@@ -1526,30 +1527,35 @@ namespace HartreeFock::Correlation::RI
         const std::size_t n_work = calculator.working_nbasis();
         const std::size_t npair = n_work * (n_work + 1) / 2;
         const std::size_t naux = calculator._ri_aux_basis ? calculator._ri_aux_basis->nfit() : 0;
-        if (calculator._ri_j3c.rows() == static_cast<Eigen::Index>(npair) &&
-            calculator._ri_j3c.cols() == static_cast<Eigen::Index>(naux))
+        if (calculator._ri_j3c.rows() != static_cast<Eigen::Index>(npair) ||
+            calculator._ri_j3c.cols() != static_cast<Eigen::Index>(naux))
+        {
+            auto j3c_res = compute_3c_eri(calculator);
+            if (!j3c_res)
+                return std::unexpected("ensure_ri_3c_ready: " + j3c_res.error());
+            calculator._ri_j3c = std::move(*j3c_res);
+            calculator._ri_pair_factors.resize(0, 0);
+        }
+        if (calculator._ri_pair_factors.rows() == calculator._ri_j3c.rows())
             return {};
 
-        auto j3c_res = compute_3c_eri(calculator);
-        if (!j3c_res)
-            return std::unexpected("ensure_ri_3c_ready: " + j3c_res.error());
-        calculator._ri_j3c = std::move(*j3c_res);
+        // B = J V^{-1/2}: the same metric factor the gradient's X uses.
+        const Eigen::MatrixXd &j3c = calculator._ri_j3c;
+        const auto &metric = *calculator._ri_metric_factor;
+        if (metric.method == MetricFactorization::Method::Eigen)
+            calculator._ri_pair_factors = j3c * metric.transform.transpose();
+        else
+        {
+            Eigen::MatrixXd pair_factors_t = j3c.transpose();
+            metric.transform.triangularView<Eigen::Lower>().solveInPlace(pair_factors_t);
+            calculator._ri_pair_factors = pair_factors_t.transpose();
+        }
         return {};
     }
 
-    Eigen::MatrixXd build_ri_pair_factors(const HartreeFock::Calculator &calculator)
+    const Eigen::MatrixXd &build_ri_pair_factors(const HartreeFock::Calculator &calculator)
     {
-        const Eigen::MatrixXd &j3c = calculator._ri_j3c;
-        const auto &metric = *calculator._ri_metric_factor;
-
-        if (metric.method == MetricFactorization::Method::Eigen)
-            return j3c * metric.transform.transpose();
-
-        const Eigen::MatrixXd &L = metric.transform;
-        Eigen::MatrixXd pair_factors_t = j3c.transpose();
-        pair_factors_t =
-            L.triangularView<Eigen::Lower>().solve(pair_factors_t);
-        return pair_factors_t.transpose();
+        return calculator._ri_pair_factors;
     }
 
     Eigen::MatrixXd build_ri_mo_block(
@@ -1598,7 +1604,7 @@ namespace HartreeFock::Correlation::RI
         const HartreeFock::Calculator &calculator,
         const Eigen::MatrixXd &D)
     {
-        const Eigen::MatrixXd pair_factors = build_ri_pair_factors(calculator);
+        const Eigen::MatrixXd &pair_factors = build_ri_pair_factors(calculator);
         const Eigen::Index nb = D.rows();
         const Eigen::Index nfit = pair_factors.cols();
 
@@ -1631,7 +1637,7 @@ namespace HartreeFock::Correlation::RI
     std::vector<Eigen::MatrixXd> build_ri_3index_unpacked(
         const HartreeFock::Calculator &calculator)
     {
-        const Eigen::MatrixXd pair_factors = build_ri_pair_factors(calculator);
+        const Eigen::MatrixXd &pair_factors = build_ri_pair_factors(calculator);
         const Eigen::Index nb =
             static_cast<Eigen::Index>(calculator.working_nbasis());
         const Eigen::Index naux = pair_factors.cols();

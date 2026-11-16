@@ -1,7 +1,8 @@
 # ERI / Fock BLAS-LAPACK Migration — Scope
 
-Status: **scope, nothing landed** (2026-10-17). In-flight work, so this file is
-allowed to be scope-shaped; rewrite it as an answer when the work lands.
+Status: **scope; B0 landed** (2026-11-16, as `docs/RI_JK_ROUTINE_SCOPE.md`
+step 11, which has the measurements). In-flight work, so this file is allowed
+to be scope-shaped; rewrite it as an answer when the work lands.
 
 **Question:** Would routing the ERI and Fock builds through BLAS/LAPACK make
 them faster, and where?
@@ -14,7 +15,7 @@ BLAS at all. In priority order:
 
 | step | change | measured lever | needs BLAS? |
 |---|---|---|---|
-| B0 | Cache the RI pair factors and the unpacked `B_Q` once per geometry | **61 % + 8 %** of RI-JK Fock time is rebuilding them twice per iteration | no |
+| B0 | Cache the RI pair factors and the unpacked `B_Q` once per geometry | **61 % + 8 %** of RI-JK Fock time is rebuilding them twice per iteration | no — **done** for the pair factors (2026-11-16); `B_Q` still unpacked per call |
 | B1 | Optional `USE_BLAS` build: `EIGEN_USE_BLAS` + Accelerate / system BLAS | RI-K GEMMs **4.3–7.8×** | yes |
 | B2 | RI-K from `C_occ` instead of `D` on the SCF caller | **4.4–4.8×** serial on RI-K | no |
 | B3 | LAPACK `dsyevd` wrapper for SCF diagonalization | 2.5–7× at n ≥ 300, but diag is **0.08 %** of an iteration today | yes |

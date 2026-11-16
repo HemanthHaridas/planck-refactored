@@ -1553,6 +1553,11 @@ namespace HartreeFock
         std::shared_ptr<AuxBasis> _ri_aux_basis;
         Eigen::MatrixXd _ri_j2c; // raw 2-center Coulomb metric (P|Q)
         Eigen::MatrixXd _ri_j3c; // packed 3-center tensor (AO-pair × aux), in working AO basis
+        // Fitted pair factors B = J V^{-1/2} (packed AO pair × fitting mode),
+        // built from _ri_j3c by ensure_ri_3c_ready and cleared with it. They do
+        // not depend on the density, so the RI-JK Fock build reads them every
+        // iteration instead of re-solving (docs/RI_JK_ROUTINE_SCOPE.md step 11).
+        Eigen::MatrixXd _ri_pair_factors;
         std::shared_ptr<Correlation::RI::MetricFactorization> _ri_metric_factor;
         // Geometry (_molecule._standard) the RI caches above were built against.
         // The aux basis / 2-center metric / 3-center tensor all sit on the atom

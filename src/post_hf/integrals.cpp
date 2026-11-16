@@ -199,7 +199,7 @@ namespace HartreeFock::Correlation
 
         // B_{(ia),Q} and B_{(jb),Q} share the same fitted AO-pair factors; the
         // two bra/ket blocks only differ in which MO coefficients project them.
-        const Eigen::MatrixXd pair_factors =
+        const Eigen::MatrixXd &pair_factors =
             HartreeFock::Correlation::RI::build_ri_pair_factors(calculator);
         const Eigen::MatrixXd b_bra =
             HartreeFock::Correlation::RI::build_ri_mo_block(pair_factors, C1, C2);

@@ -480,6 +480,19 @@ historical design context, but they are no longer the source of truth for
   (RI-MP2's CPHF route and `transform_eri_ri`); before, SOSCF rebuilt the AO
   tensor every step and stability used the exact Hessian. Eigenvalues equal
   PySCF stability on a density-fitted SCF (RHF and UHF).
+- **RI pair factors cached per geometry (2026-11-16, B0;
+  `docs/RI_JK_ROUTINE_SCOPE.md` step 11).** B = J V^{-1/2} is built once by
+  `ensure_ri_3c_ready` into `_ri_pair_factors` and reset with `_ri_j3c`,
+  instead of re-solved on every J/K call. Benzene 6-31G*/JKFIT RI-JK energy
+  1.5× faster end to end, energies bitwise identical.
+  - **`planck-ri-3c-eri` fixed (test side).** It had failed since K1
+    (2026-10-25): its PySCF export parsed the raw cc-pVDZ GBS while
+    `read_gbs_basis` drops redundant primitives, so it compared different
+    contracted functions (same span, so no energy gate noticed). The export
+    script now mirrors `drop_redundant_primitives`; passes at 1e-10. The
+    script was also untracked (`scripts/*` is ignored); it is now allowlisted
+    in `.gitignore`.
+
 - **RI-JK HF gradient, geometry optimization and frequencies (2026-11-16,
   `docs/RI_JK_ROUTINE_SCOPE.md` steps 9–10).** One helper,
   `build_ri_scf_two_electron_gradient`, gives the fitted 2e term for the Γ

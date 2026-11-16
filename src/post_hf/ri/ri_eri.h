@@ -202,12 +202,12 @@ namespace HartreeFock::Correlation::RI
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator);
 
-    // Fitted AO-pair factors B_{(μν),Q} from the cached 3-center tensor and the
-    // 2-center metric factorization: applies V^{-1/2} (Cholesky solve or the
-    // eigen-pruned transform) to _ri_j3c. Rows index the packed AO pair (μ≥ν),
-    // columns index the fitting-metric space. Requires ensure_ri_3c_ready and a
-    // populated _ri_metric_factor on the Calculator.
-    Eigen::MatrixXd build_ri_pair_factors(const HartreeFock::Calculator &calculator);
+    // Fitted AO-pair factors B_{(μν),Q} = _ri_j3c with V^{-1/2} applied
+    // (Cholesky solve or the eigen-pruned transform). Rows index the packed AO
+    // pair (μ≥ν), columns the fitting-metric space. Built once per geometry by
+    // ensure_ri_3c_ready and cached on the Calculator (_ri_pair_factors); this
+    // returns that cache, so it needs ensure_ri_3c_ready first.
+    const Eigen::MatrixXd &build_ri_pair_factors(const HartreeFock::Calculator &calculator);
 
     // Contract the packed-pair fitted factors into an MO block B_{(pq),Q},
     // rows indexed p*ncol_q + q over the columns of C_row / C_col. The AO-pair

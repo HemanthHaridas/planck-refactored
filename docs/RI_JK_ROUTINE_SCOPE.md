@@ -28,6 +28,7 @@ printed digit. Spherical RI-JK derivatives are still refused by name.
 | Heavy elements, ECPs, aux L = 6 | **Done**, AgCl = PySCF (step 5a) |
 | SOSCF, stability | **Done**, eigenvalues = PySCF DF (step 4) |
 | Streamed RI derivative contraction | **Done**, shared with RI-MP2 (step 7) |
+| RI pair factors cached per geometry (B0) | **Done** (step 11) |
 | RI-MP2 frequencies | **Done** (step 8) |
 | RI-JK RHF/UHF/ROHF gradient, geomopt, frequencies (Cartesian) | **Done**, = PySCF (steps 9–10) |
 | RI-JK spherical derivatives | **Refused** by name; step 16 |
@@ -54,22 +55,13 @@ combination.
 
 | Step | What | Needs |
 |---|---|---|
-| 11 | B0: cache the RI pair factors | — |
-| 12 | KS RI-J, pure functionals | 6, 11 |
+| 12 | KS RI-J, pure functionals | — |
 | 13 | KS RI-K, global hybrids | 12 |
 | 14 | KS SOSCF and stability on RI; refusals for TDDFT and DH | 13 |
 | 15 | KS RI-JK gradient, Cartesian | 13 |
 | 16 | Spherical RI gradients: RI-JK HF and KS, and RI-MP2 | 15 |
 
-11 is next: it has no open prerequisites and every KS step needs it.
-
-### 11. B0: cache the RI pair factors
-
-`build_ri_j` and `build_ri_k` call `build_ri_pair_factors` on every call,
-~61 % of the RI-JK Fock build (`docs/ERI_FOCK_BLAS_SCOPE.md`). It does not
-depend on the density. KS RI-J would pay it every iteration and probably not
-beat the direct build, so it goes before step 12. The `*_rijk_*` cases gate
-it (energies unchanged).
+12 is next; every remaining step follows from it.
 
 ### 12. KS RI-J, pure functionals
 
@@ -393,6 +385,44 @@ H2O2⁺ UHF on a saddle, so the script follows the instability. Its
 displaced-geometry SCFs then changed basin and its FD came out 1.18 off;
 seeding them from the central density fixed that (1.4e-9). Its SCF also needs
 more than the default 50 cycles to reach `conv_tol_grad` 1e-9.
+
+### 11. B0: the RI pair factors are cached
+
+`build_ri_j` and `build_ri_k` re-solved B = J V^{-1/2} from `_ri_j3c` on every
+call, twice per SCF iteration (`docs/ERI_FOCK_BLAS_SCOPE.md` B0 measured it
+at ~61 % of the RI-JK Fock build). The factors do not depend on the density.
+`ensure_ri_3c_ready` now builds them once into `Calculator::_ri_pair_factors`
+right after `_ri_j3c`, and `build_ri_pair_factors` returns a reference to
+that cache; the five callers that copied it now bind a reference.
+
+Invalidation, the risk the B0 scope named, uses the existing mechanism: the
+factors are reset in the same block of `ri_invalidate_if_geometry_moved` that
+clears `_ri_j3c`, and again whenever `ensure_ri_3c_ready` rebuilds the tensor.
+`planck-ri-cache-invalidation` now also checks that, after the geometry
+moves, the cached factors are the moved tensor with the metric applied
+(Δ = 0). Removing both resets fails that test and the RI-JK geomopt and
+frequency cases; either reset alone keeps them correct.
+
+Benzene 6-31G*/def2-universal-JKFIT RI-JK energy, whole run: user time
+4.3–4.5 s → 2.9 s (1.5×; setup included, so the Fock build gains more),
+peak RSS unchanged (~184 MiB). Energies and every SCF iteration line are
+bitwise identical. The unpacked per-aux B_Q (the other 8 %) is still built
+per call; caching it would cost nb²·naux, twice the packed factors.
+
+Found and fixed on the way: `planck-ri-3c-eri` failed its live PySCF
+comparison of `compute_3c_eri` (native −1.22 against −0.0317 on O's second s
+function). The integrals were right; the test compared different functions.
+Since K1 (2026-10-25, `docs/ERI_KERNEL_VS_LIBCINT.md` §3) `read_gbs_basis`
+drops redundant primitives from cc-pVXZ contractions, which keeps the span
+but changes the contracted functions, while `scripts/export_ri_3c_pyscf.py`
+parsed the raw GBS file. Every energy-level gate is span-invariant, so
+nothing else noticed. The export script now mirrors
+`drop_redundant_primitives` for the orbital basis (opt-in flag; the four
+RI-MP2 benchmark scripts that import its loader compare energies and keep
+the raw parse), and the test passes at 1e-10. The script itself was never
+in the repository (`.gitignore` ignores `scripts/*` except an allowlist), so
+on a fresh clone the test could not even find its oracle; it is now on the
+allowlist.
 
 ## Not in this scope
 

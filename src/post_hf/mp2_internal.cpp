@@ -202,7 +202,7 @@ namespace HartreeFock::Correlation::detail
             if (!calculator._ri_metric_factor)
                 return std::unexpected("make_eris_rmp2: RI metric factorization is missing.");
 
-            const Eigen::MatrixXd pair_factors =
+            const Eigen::MatrixXd &pair_factors =
                 HartreeFock::Correlation::RI::build_ri_pair_factors(calculator);
             const Eigen::MatrixXd b_ov =
                 HartreeFock::Correlation::RI::build_ri_mo_block(pair_factors, C_occ, C_virt);
@@ -241,7 +241,7 @@ namespace HartreeFock::Correlation::detail
                 return std::unexpected("RMP2 direct OVOV producer: " + ri_ready.error());
             if (!calculator._ri_metric_factor)
                 return std::unexpected("RMP2 direct OVOV producer: RI metric factorization is missing.");
-            const Eigen::MatrixXd pair_factors=
+            const Eigen::MatrixXd &pair_factors =
                 HartreeFock::Correlation::RI::build_ri_pair_factors(calculator);
             const Eigen::MatrixXd b_ov=
                 HartreeFock::Correlation::RI::build_ri_mo_block(pair_factors,c_occ,c_virt);
@@ -305,7 +305,7 @@ namespace HartreeFock::Correlation::detail
             if (!calculator._ri_metric_factor)
                 return std::unexpected("make_eris_ump2: RI metric factorization is missing.");
 
-            const Eigen::MatrixXd pair_factors =
+            const Eigen::MatrixXd &pair_factors =
                 HartreeFock::Correlation::RI::build_ri_pair_factors(calculator);
 
             // The fitted AO-pair factors are spin-independent; the unrestricted
