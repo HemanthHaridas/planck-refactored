@@ -246,9 +246,21 @@ The positive distances in the second column are minimum errors of the reported p
 
 To reproduce the references, run `tests/pyscf/cr2_fciqmc_accuracy.py` on the all-MO pilot FCIDUMP with `--trial-orbitals 10` and `--trial-orbitals 12`. Add `--parent-orbitals 12` to the 10-orbital command for the direct CI control. The largest target reference calculation took 216 s and 310 MiB on this M3.
 
+## R3 probabilistic spawning from low-weight parents
+
+The investigation resumed on November 16 after the RI-JK and gradient work through `3285f9ae`. The Cr₂ pilot still uses Cartesian STO-3G, RHF and cached exact integrals. The current working-tree build reproduced Hamiltonian `339dffb09993d608` and default short-control trajectory `c9fa8173d41b8f2a`. The opt-in short-control trajectory also reproduced the November 9 result. A frozen executable preserves this build for comparisons.
+
+The experimental input `fciqmc_sample_low_weight_parents true` samples each incoming parent of magnitude below the positive spawn granularity once per step. A selected parent makes all its configured excitation draws using the signed granularity as its spawn weight. Multiplying that weight by the selection probability recovers the incoming signed weight in expectation. The diagonal step and the initiator test both use the incoming weight. Parents at or above the granularity take the usual path. At zero granularity both modes take the same path.
+
+The short control passed with the new setting both enabled and disabled. Sampling excitation draws fell from 44,415,456 to 32,919,880 (25.9%). The three focused CTests and five molecular regressions passed on the current tree. With the option enabled, raw trajectories matched at 1, 2, 4 and 8 threads. With zero granularity, enabling the option reproduced the default trajectory. The mean-step unit check also verifies that diagonal propagation and the initiator decision use the original weight. [Current-build qualification and work counters](../tests/benchmarks/fciqmc/cr2_low_weight_qualification_m3_r3.json)
+
+The five-seed comparison remains incomplete. The November 9 series stopped after two matched pairs. On November 16, the user reported another calculation using the machine, and we stopped the rerun during timing calibration. Those timings are excluded from performance conclusions. The option remains experimental and defaults to false.
+
+Resume with Cr₂ CAS(12,10), 25,000 target walkers, four spawn attempts, threshold zero, timestep 0.0005 and 110,000 equilibration steps. The baseline samples for 50,000 steps. Use seed 20250901 to set the candidate sampling length from fresh process timings with profiling disabled. Measure candidate sampling cost from 50,000 and 100,000 steps, then choose a length that matches baseline total wall time. Evaluate seeds 20250904–20250908 with alternating run order against exact CASCI (−2064.494323848 Eh). Each estimator's root mean squared error (RMSE) includes its signed bias and seed-to-seed variation.
+
 ## Next steps
 
-For scaling, test probabilistic spawning from low-weight parents on the exact CAS(12,10) control. Check the mean spawn against the deterministic step, fixed-seed thread identity, and energy spread across seeds at equal wall time before testing the larger spaces.
+For scaling, finish the calibrated five-seed comparison when the host is available. Check the actual wall-time ratios before comparing both estimators' RMSE. The current build has passed the correctness and reproducibility checks above. Advance to the CAS(12,18) cost pilot after evaluating energy error at equal time.
 
 For accuracy, compare the current single-determinant projection with a fixed multideterminant trial on the same CAS(12,18) walker trajectories. Build the trial in Planck's determinant basis and check its Rayleigh quotient on the shared Hamiltonian. Track the signed trial overlap and usable samples across seeds. This separates sensitivity to the projected estimator from changes to the walker dynamics.
 

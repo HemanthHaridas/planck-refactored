@@ -618,7 +618,8 @@ namespace HartreeFock::Correlation::CI::QMC
         double initiator_threshold,
         SpawnWorkspace &ws,
         Output &out,
-        FCIQMCPropagationProfile *profile)
+        FCIQMCPropagationProfile *profile,
+        bool sample_low_weight_parents = false)
     {
         // H2.4/H2.5 (docs/FCIQMC_PARALLELISM.md): the per-call
         // scaffolding -- 64 accumulators, 64 parent buckets, 64 RNG streams --
@@ -737,7 +738,6 @@ namespace HartreeFock::Correlation::CI::QMC
                                                          : &work->at_or_above_granularity;
                     ++weight_work->visits;
                     weight_work->absolute_weight += magnitude;
-                    weight_work->attempts += n_spawn_attempts;
                 }
                 // DEATH: deterministic, exactly as in propagate_deterministic.
                 // There is one diagonal element per determinant, so sampling it
@@ -763,7 +763,18 @@ namespace HartreeFock::Correlation::CI::QMC
                 // that the total expected spawn is independent of how many
                 // attempts are made -- otherwise raising n_spawn_attempts would
                 // silently scale the Hamiltonian.
-                const double per_attempt = weight / static_cast<double>(n_spawn_attempts);
+                double spawn_weight = weight;
+                if (sample_low_weight_parents && std::abs(weight) < granularity)
+                {
+                    // One draw per parent, shared by all its attempts. Conditional on
+                    // selection, weight / q is exactly the signed granularity.
+                    if (parent_rng.uniform() >= std::abs(weight) / granularity)
+                        continue;
+                    spawn_weight = std::copysign(granularity, weight);
+                }
+                if (weight_work)
+                    weight_work->attempts += n_spawn_attempts;
+                const double per_attempt = spawn_weight / static_cast<double>(n_spawn_attempts);
                 for (int attempt = 0; attempt < n_spawn_attempts; ++attempt)
                 {
                     if (work)
@@ -946,11 +957,12 @@ namespace HartreeFock::Correlation::CI::QMC
         double initiator_threshold,
         SpawnWorkspace &ws,
         CanonicalWalkerPopulation &out,
-        FCIQMCPropagationProfile *profile)
+        FCIQMCPropagationProfile *profile,
+        bool sample_low_weight_parents)
     {
         propagate_stochastic_impl(population, n_act, ham, dt, shift, rng,
                                   n_spawn_attempts, granularity,
-                                  initiator_threshold, ws, out, profile);
+                                  initiator_threshold, ws, out, profile, sample_low_weight_parents);
     }
 
     // Convenience overload: builds a local workspace and returns a value. For

@@ -1079,6 +1079,14 @@ namespace HartreeFock::IO
                      fciqmc.spawn_attempts = parsed;
                      return std::expected<void, std::string>{};
                  }},
+                {"fciqmc_sample_low_weight_parents", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     auto parsed = toBool(v);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     fciqmc.sample_low_weight_parents = *parsed;
+                     return {};
+                 }},
                 {"fciqmc_profile", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
                  {
                      auto parsed = toBool(v);

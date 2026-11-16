@@ -3317,6 +3317,48 @@ static void test_profile_is_a_passive_trajectory_observer()
           "FCIQMC profile records the accumulator before and after fold");
 }
 
+static void test_low_weight_parent_sampling()
+{
+    // One possible alpha excitation. A selected parent spawns two +2 walkers;
+    // its incoming weight is -0.5 and its selection probability is 1/4.
+    const DetKey parent{1, 0}, child{2, 0};
+    const HamiltonianOps ops{[](const DetKey &, const DetKey &) { return 4.0; },
+                             [](const DetKey &) { return 1.0; }};
+    WalkerPopulation original;
+    original.add(parent, -0.5);
+    const auto exact = propagate_deterministic(original, 2, ops, 0.5, 0.0);
+    CanonicalWalkerPopulation start, out;
+    start.assign_sorted({{parent, -0.5}});
+    SpawnWorkspace ws;
+    RandomSource rng(20250901);
+    FCIQMCPropagationProfile profile;
+    double child_sum = 0.0;
+    const int samples = 8192;
+    for (int i = 0; i < samples; ++i)
+    {
+        propagate_stochastic(start, 2, ops, 0.5, 0.0, rng, 2, 2.0, 0.0,
+                             ws, out, &profile, true);
+        check(out.weight_at(parent) == exact.weight_at(parent),
+              "sampling parents preserves the diagonal on every step");
+        const double spawned = out.weight_at(child);
+        check(spawned == 0.0 || spawned == 4.0, "both attempts share one parent selection");
+        child_sum += spawned;
+    }
+    check_close(child_sum / samples, exact.weight_at(child), 6.0 * std::sqrt(3.0 / samples),
+                "low-weight spawn mean agrees with the deterministic step");
+    std::uint64_t attempts = 0;
+    for (const auto &bin : profile.bins)
+        attempts += bin.below_granularity.attempts;
+    check(2.0 * attempts == child_sum, "profile counts only attempted low-weight spawns");
+
+    for (int i = 0; i < 64; ++i)
+    {
+        propagate_stochastic(start, 2, ops, 0.5, 0.0, rng, 2, 2.0, 0.75,
+                             ws, out, nullptr, true);
+        check(out.weight_at(child) == 0.0, "initiator uses the original parent weight");
+    }
+}
+
 static void test_literal_canonical_merge_matches_map_output()
 {
     // The candidate contiguous owner must begin as an oracle for today's merge,
@@ -4916,6 +4958,7 @@ int main()
     test_trajectory_is_reproducible();
     test_trajectory_digest_is_sensitive();
     test_profile_is_a_passive_trajectory_observer();
+    test_low_weight_parent_sampling();
     test_literal_canonical_merge_matches_map_output();
     test_level_parallel_pairwise_merge_matches_sequential();
     test_parent_keyed_stream_is_independent_of_parent_visit_order();

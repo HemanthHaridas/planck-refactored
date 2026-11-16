@@ -837,6 +837,7 @@ namespace HartreeFock
         // evolution nor the estimator; it only records work and wall-time
         // counters around the existing fixed-order propagation phases.
         bool profile = false;
+        bool sample_low_weight_parents = false;
 
         // The seed is USER-VISIBLE on purpose. The reproducibility contract --
         // same seed reproduces the trajectory bitwise -- is worthless if the seed

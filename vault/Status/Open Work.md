@@ -357,8 +357,11 @@ None of these blocks correctness. Take each up only with a current profile.
     multideterminant projection with the single-reference estimator on
     identical trajectories. Two SC-NEVPT2 estimates differ by 19 mEh.
   - Low-weight parents account for 93–96% of visits across three Cr₂
-    profiles. Test probabilistic spawning with compensation for skipped
-    draws on CAS(12,10), using exact CI and error at equal wall time.
+    profiles. Opt-in probabilistic spawning passed the November 16
+    current-build correctness and thread-identity checks. Finish the
+    five-seed CAS(12,10) comparison against exact CI at equal wall time.
+    Timing calibration was stopped because another calculation was using
+    the host. Recalibrate when the host is available.
 - **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
   `docs/CCGEN_KERNEL_PERFORMANCE.md`):
   - Re-profile the generated production configuration, separating

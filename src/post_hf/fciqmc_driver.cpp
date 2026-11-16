@@ -389,9 +389,12 @@ namespace HartreeFock::Correlation
                             opt.initiator_threshold));
         logging(LogLevel::Info, tag + " :",
                 std::format("{} equilibration + {} sampling steps, {} spawn "
-                            "attempts per occupied determinant",
+                            "attempts per {} determinant",
                             opt.equilibration_steps, opt.sampling_steps,
-                            opt.spawn_attempts));
+                            opt.spawn_attempts,
+                            opt.sample_low_weight_parents ? "selected" : "occupied"));
+        if (opt.sample_low_weight_parents)
+            logging(LogLevel::Info, tag + " :", "probabilistic spawning from low-weight parents enabled");
 
         // ── Propagate ──────────────────────────────────────────────────────────
         CanonicalWalkerPopulation pop;
@@ -484,7 +487,7 @@ namespace HartreeFock::Correlation
                                  ctl.shift, rng, opt.spawn_attempts,
                                  opt.walker_granularity,
                                  opt.initiator_threshold, spawn_ws, next_pop,
-                                 step_profile);
+                                 step_profile, opt.sample_low_weight_parents);
             if (opt.profile)
                 peak_population_bytes = std::max(
                     peak_population_bytes, pop.retained_bytes() + next_pop.retained_bytes());

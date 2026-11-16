@@ -769,7 +769,8 @@ namespace HartreeFock::Correlation::CI::QMC
         double initiator_threshold,
         SpawnWorkspace &ws,
         CanonicalWalkerPopulation &out,
-        FCIQMCPropagationProfile *profile = nullptr);
+        FCIQMCPropagationProfile *profile = nullptr,
+        bool sample_low_weight_parents = false);
 
     WalkerPopulation propagate_stochastic(
         const WalkerPopulation &population,
