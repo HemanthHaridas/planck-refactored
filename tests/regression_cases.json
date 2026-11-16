@@ -955,17 +955,169 @@
    ]
   },
   {
-   "id": "water_rhf_rijk_gradient_rejected",
-   "input": "tests/inputs/regression/ri/water_rhf_rijk_gradient_rejected.hfinp",
-   "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 3). Before the refusal, scf_ri_jk + gradient returned the exact-integral gradient at RI orbitals, 9.9e-6 Ha/Bohr off a central FD of the RI energy (water, def2-universal-JKFIT): inside the geomopt threshold, so silent. Lift when the RI-JK gradient (step 7) lands.",
+   "id": "water_rhf_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_gradient_631gd.hfinp",
    "tags": [
     "core",
     "extended",
     "ri"
    ],
+   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 8.3e-11). RI-JK RHF gradient (docs/RI_JK_ROUTINE_SCOPE.md step 9), def2-universal-JKFIT: Planck equals PySCF to every printed digit. Was water_rhf_rijk_gradient_rejected; before step 3 the exact-integral gradient at RI orbitals ran here, 9.9e-6 off. Forming V^-1 explicitly (cond ~8e11 for Cartesian JKFIT) put it 2.1e-6 off; the triangular solves fix that.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0066059836,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.0668716795
+      ],
+      [
+       -0.0302562839,
+       0.0,
+       -0.0334358397
+      ],
+      [
+       0.0302562839,
+       0.0,
+       -0.0334358397
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rhf_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_rhf_rijk_gradient_631gd.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 2.2e-9). C1 H2O2, all 12 components independent; Planck equals PySCF to every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.7538444878,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.0543264556,
+       0.0076076639,
+       -0.0374872943
+      ],
+      [
+       0.0420591616,
+       0.0104297256,
+       -0.0403316076
+      ],
+      [
+       0.0535452619,
+       0.004955153,
+       0.0301175181
+      ],
+      [
+       -0.041277968,
+       -0.0229925425,
+       0.0477013838
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_rijk_geomopt_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_geomopt_631gd.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 geometric GAU_TIGHT on mf.density_fit(), def2-universal-JKFIT (tests/pyscf/ri_jk_gradient_references.py): E_opt -76.0107180372, matched to every printed digit. geomopt_grad_tol 1.5e-5 is GAU_TIGHT's max force.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Geometry Optimization :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "geomopt_final_energy",
+     "expected": -76.0107180372,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_rijk_freq_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_freq_631gd.hfinp",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "timeout_s": 300,
+   "_pyscf_reference": "Central differences at h = 5e-3 Bohr of PySCF 2.15.0 analytic mf.density_fit() gradients + thermo.harmonic_analysis (tests/pyscf/ri_jk_gradient_references.py): 1578.68/4585.52/4766.02 cm-1. Planck matches every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Vibrational Frequencies"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1578.68,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 4585.52,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 4766.02,
+     "atol": 0.05
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uhf_rijk_gradient_rejected",
+   "input": "tests/inputs/regression/ri/water_cation_uhf_rijk_gradient_rejected.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 9): the RI-JK gradient is gated for Cartesian RHF only. Lift when UHF/ROHF are gated (step 10).",
    "expected_exit_code": 1,
    "contains": [
-    "RI-JK SCF (scf_ri_jk) does not support gradients, geometry optimization or frequencies"
+    "does not support gradients, geometry optimization or frequencies with a UHF or ROHF reference"
    ]
   },
   {

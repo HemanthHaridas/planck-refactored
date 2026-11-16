@@ -15,10 +15,10 @@ included. With a JKFIT set the fitting error is ≤ 2.2e-5 Eh per atom
 (def2-universal-JKFIT) and ≤ 1.5e-5 (cc-pVTZ-JKFIT), 40–60× below the MP2
 RIFIT set. SOSCF and stability use the fitted operator.
 
-**Not yet usable beyond HF energies.** There is no RI-JK gradient, so every
-derivative workflow is refused by name. `planck-dft` refuses `scf_ri_jk`
-(it used to ignore it). The RI derivative contraction the gradient will use
-is now streamed and shared with RI-MP2, and RI-MP2 frequencies work.
+**RHF gradients, geometry optimization and frequencies work** for a
+Cartesian basis, equal to PySCF's density-fitted gradient to every printed
+digit. UHF, ROHF and spherical RI-JK derivatives are still refused by name.
+`planck-dft` refuses `scf_ri_jk` (it used to ignore it).
 
 | | Status |
 |---|---|
@@ -29,7 +29,8 @@ is now streamed and shared with RI-MP2, and RI-MP2 frequencies work.
 | SOSCF, stability | **Done**, eigenvalues = PySCF DF (step 4) |
 | Streamed RI derivative contraction | **Done**, shared with RI-MP2 (step 7) |
 | RI-MP2 frequencies | **Done** (step 8) |
-| RI-JK gradient, geomopt, frequencies | **Refused** by name (step 3); steps 9–10, 15–16 |
+| RI-JK RHF gradient, geomopt, frequencies (Cartesian) | **Done**, = PySCF (step 9) |
+| RI-JK UHF/ROHF and spherical derivatives | **Refused** by name; steps 10, 16 |
 | `planck-dft` | **Refused** by name (step 6); steps 11–15 |
 | Full point-group symmetry | Refused; out of scope |
 
@@ -43,8 +44,8 @@ itself when the geometry moves. The RI builders take and return
 working-basis matrices: `compute_3c_eri` already transforms the orbital
 indices to the spherical working basis.
 
-The boundaries: the RI-JK gate in `src/hf_driver.cpp` (full symmetry and
-derivative workflows) and the refusal at the top of `DFT::Driver::run`. HF
+The boundaries: the RI-JK gate in `src/hf_driver.cpp` (full symmetry, and
+derivative workflows other than Cartesian RHF without correlation or PCM) and the refusal at the top of `DFT::Driver::run`. HF
 SOSCF and stability check the flag (step 4). Post-HF methods (MP2, CC,
 CASSCF) on RI-JK orbitals keep exact integrals, which is a legitimate
 combination.
@@ -53,46 +54,24 @@ combination.
 
 | Step | What | Needs |
 |---|---|---|
-| 9 | RI-JK gradient, RHF, Cartesian; lift step 3's refusal for RHF | 7 |
-| 10 | RI-JK gradient, UHF and ROHF | 9 |
+| 10 | RI-JK gradient, UHF and ROHF | — |
 | 11 | B0: cache the RI pair factors | — |
 | 12 | KS RI-J, pure functionals | 6, 11 |
 | 13 | KS RI-K, global hybrids | 12 |
 | 14 | KS SOSCF and stability on RI; refusals for TDDFT and DH | 13 |
-| 15 | KS RI-JK gradient, Cartesian | 10, 13 |
+| 15 | KS RI-JK gradient, Cartesian | 13 |
 | 16 | Spherical RI gradients: RI-JK HF and KS, and RI-MP2 | 10, 15 |
 
-11 can run in parallel with 9–10. Both 9 and 12 are on the critical path.
-
-### 9. RI-JK gradient, RHF, Cartesian
-
-Every SCF gradient (`compute_closed_shell_gradient_from_density`,
-`compute_uhf_gradient`, `compute_rohf_gradient`) takes its 2e term from one
-shared `two_electron_gradient(gamma_fn)`
-(`src/gradient/two_electron_gradient.h`), which takes Γ quartet by quartet.
-RI cannot use that shape (it would need nao⁴). Add one sibling,
-`ri_scf_two_electron_gradient(calc, Pa, Pb, k_coeff)`, called instead of it
-under `_ri_jk` at those three sites. It builds the fitted three-index density
-and hands it to step 7's `build_ri_two_electron_gradient(calculator, gamma3,
-x_proj)`. Core/Pulay and V_nn are unchanged: W comes from the RI Fock, which
-the orbitals diagonalize, so it is already consistent.
-
-- J: γ3_{(μν),P} = ½·D_μν·(XᵀD)_P (rank one per pair; X = J V⁻¹).
-- K: γ3_{(μν),P} = −¼·k·Σ_σ(D^σ X[P] D^σ)_μν per spin (RHF: D = P/2 per
-  spin). nb²·naux, no nao⁴.
-- Pin the ½/¼ convention against the RI-MP2 callers (`mp2_gradient.cpp`;
-  the UMP2 one scales by 0.5) and an FD of the RI energy, not by reasoning.
-
-Gate: water and C1 H2O2 RHF, def2-universal-JKFIT, against PySCF
-`mf.density_fit().nuc_grad_method()` (every component, `gradient_close`) and
-a central-difference FD of the RI energy. Then lift step 3's refusal for RHF
-and add a geomopt case against PySCF `geometric`. Record peak RSS on one
-larger input against the stored-tensor estimate in step 7.
+10 and 11 have no open prerequisites; 11 is on the critical path to KS.
 
 ### 10. RI-JK gradient, UHF and ROHF
 
-The same helper with two densities. Gates on water⁺ (UHF, ROHF) and C1
-H2O2⁺ (UHF); lift step 3's refusal for both.
+Already wired: `compute_uhf_gradient` and `compute_rohf_gradient` call step
+9's `build_ri_scf_two_electron_gradient(calc, P_a, P_b)` under `_ri_jk`. What
+is missing is the gate. Gates on water⁺ (UHF, ROHF) and C1 H2O2⁺ (UHF) with
+`tests/pyscf/ri_jk_gradient_references.py` (it already reads `scf_type`);
+then narrow the `hf_driver.cpp` refusal and replace
+`water_cation_uhf_rijk_gradient_rejected`.
 
 ### 11. B0: cache the RI pair factors
 
@@ -147,8 +126,9 @@ as step 4, against PySCF stability on `density_fit()`.
 
 ### 15. KS RI-JK gradient, Cartesian
 
-J (and global-hybrid K) through step 9's helper, called from
-`compute_analytic_ks_gradient`; the XC terms are untouched. Gate: PySCF
+Already wired for global hybrids: `compute_rks_gradient` passes its exact-
+exchange fraction to the closed-shell builder, whose RI branch calls step 9's
+helper with it; the UKS gradient needs the same. The XC terms are untouched. Gate: PySCF
 `density_fit()` KS gradients and an FD of the RI energy. Lift the KS
 derivative-workflow refusal kept since step 12.
 
@@ -166,7 +146,7 @@ spherical refusals together, including
 
 - **G6, profile the RI 2c/3c integrals**
   (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`). The derivative loops are still
-  serial; profile on the step 9 gradient.
+  serial: benzene 6-31G*/JKFIT takes 29 s for one gradient (step 9).
 - **RI-DH (O9)**: needs steps 12–15.
 - **`scf_ri_basis`**: see step 1.
 
@@ -344,6 +324,57 @@ RI-MP2 energies equal to every printed digit. Gated by
 `water_radical_cation_ri_ump2_freq_sto3g`, ±0.05 cm⁻¹. With the RI cache
 invalidation disabled, both fail by up to 41 cm⁻¹. All 33 RI regression
 cases pass.
+
+### 9. RI-JK gradient, RHF, Cartesian
+
+Every SCF gradient takes its 2e term from `two_electron_gradient(gamma_fn)`,
+which takes Γ quartet by quartet and cannot carry RI. One sibling,
+`build_ri_scf_two_electron_gradient(calc, Pa, Pb, k)` (`ri_eri.cpp`), covers
+the Γ all three references share, Γ = 2 Pt⊗Pt − 2k (Pa·Pa + Pb·Pb) (RHF:
+Pa = Pb = P/2; k = 1 for HF, the exact-exchange fraction for a hybrid). It
+forms
+
+  γ3_{μν,Q} = Pt_μν c_Q − k (Pa X[Q] Pa + Pb X[Q] Pb)_μν,  c_Q = Σ Pt_λσ X_{λσ,Q},
+
+that is Γ/2 against X = J V⁻¹, because `build_ri_two_electron_gradient`
+returns ½ Σ G d(fitted ERI) and the SCF term is ¼ Σ Γ d. The closed-shell
+builder (RHF, RKS), UHF and ROHF gradients call it under `_ri_jk` in place of
+the exact 2e term; core/Pulay and V_nn are unchanged, since W comes from the
+RI Fock the orbitals diagonalize.
+
+**Found: V⁻¹ was formed explicitly.** `build_ri_x_pair_factors` (shared with
+the RI-MP2 gradient) built X = J (L⁻ᵀL⁻¹). The first RI-JK gradient missed
+its energy FD by 2.1e-6 Ha/Bohr with def2-universal-JKFIT and the two H atoms
+differed by 3e-8, while every orbital basis with the uncontracted
+cc-pVDZ-RIFIT set matched to 3e-8 (FD noise). Ruled out on the way: a pruned
+metric (both sets take the Cholesky branch), the derivative integrals on a
+contracted aux set (`planck-ri-3c-derivative-fd` with JKFIT: 1.3e-8, FD
+floor), aux column counts (`nfit()` = `nfunctions` for Cartesian aux), and
+the formula (PySCF's analytic DF gradient matches its own FD to 8e-11 on the
+same setup). The cause is conditioning: the Cartesian JKFIT metric has cond
+8e11 (RIFIT 7e8; spherical JKFIT 2e7). X is now two triangular solves,
+Xᵀ = L⁻ᵀ(L⁻¹Jᵀ), the same factor the energy applies. RI-MP2 gradients use
+the same function and stay inside their gates.
+
+| Case (6-31G*, def2-universal-JKFIT) | Reference | Planck |
+|---|---|---|
+| water gradient | PySCF analytic (= its FD to 8.3e-11) | every printed digit |
+| C1 H2O2 gradient, 12 components | PySCF analytic (= its FD to 2.2e-9) | every printed digit |
+| water geomopt | PySCF geometric GAU_TIGHT, E_opt −76.0107180372 | identical |
+| water frequencies | central differences of PySCF's DF gradient at 5e-3 Bohr: 1578.68 / 4585.52 / 4766.02 cm⁻¹ | identical |
+
+Gated by `water_rhf_rijk_gradient_631gd` (was
+`water_rhf_rijk_gradient_rejected`), `h2o2_rhf_rijk_gradient_631gd`,
+`water_rhf_rijk_geomopt_631gd` (core) and `water_rhf_rijk_freq_631gd`
+(extended); the explicit-inverse X fails the gradient cases by 100×. The
+`hf_driver.cpp` gate admits derivative workflows for Cartesian RHF without
+correlation (the MP2 gradient's reference terms assume exact integrals) or
+PCM (not gated); `water_cation_uhf_rijk_gradient_rejected` marks the rest.
+All 37 RI cases pass.
+
+Memory: benzene 6-31G*/JKFIT (nb = 102, naux = 654) peaks at 243 MiB for the
+whole gradient run; the stored derivative tensors of step 7 would have been
+1.04 GiB on their own. 29 s, almost all in the serial derivative loops (G6).
 
 ## Not in this scope
 

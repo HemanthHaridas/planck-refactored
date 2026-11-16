@@ -159,6 +159,19 @@ namespace HartreeFock::Correlation::RI
         const Eigen::MatrixXd &x_proj,
         bool bra_prefolded = false);
 
+    // Two-electron term of an RI-JK SCF gradient (docs/RI_JK_ROUTINE_SCOPE.md
+    // step 9): ¼ Σ Γ_μνλσ d(μν|λσ)_fit/dR with the SCF Γ every reference
+    // shares, Γ = 2 Pt⊗Pt − 2k (Pa·Pa + Pb·Pb) (Pt = Pa + Pb; RHF passes
+    // Pa = Pb = P/2; k = 1 for HF, the exact-exchange fraction for a global
+    // hybrid). The same quantity two_electron_gradient computes with
+    // exact integrals, so it replaces it one for one. Cartesian AO densities;
+    // needs the RI cache primed at the current geometry (the SCF does it).
+    std::expected<Eigen::MatrixXd, std::string> build_ri_scf_two_electron_gradient(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &Pa,
+        const Eigen::MatrixXd &Pb,
+        double exchange_coefficient = 1.0);
+
     // Packed 3-index density and raw X factors for the RI 2e-gradient term
     // (Step RG3.4), built from the AO separable density dm2buf[μ,ν,r,s] (the
     // transitional nao⁴ buffer, row-major). Returns:

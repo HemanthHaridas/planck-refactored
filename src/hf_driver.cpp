@@ -628,11 +628,14 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     // The RI J/K builders take and return working-basis matrices (the fitted
     // 3-center tensor is already in the working basis, spherical included).
     // RHF, UHF and ROHF (whose Roothaan Fock is assembled from the same
-    // (Ga, Gb)) are wired. They have no symmetry-orbit folding. No RI-JK
-    // gradient exists: the analytic gradient would use exact integrals at RI
-    // orbitals (water/def2-universal-JKFIT: 9.9e-6 Ha/Bohr off
-    // the RI energy's FD, inside the geomopt threshold), so every derivative
-    // workflow is refused too (docs/RI_JK_ROUTINE_SCOPE.md steps 3, 9-10 and 15).
+    // (Ga, Gb)) are wired. They have no symmetry-orbit folding.
+    // Derivative workflows: the RI-JK gradient (build_ri_scf_two_electron_
+    // gradient) is gated for Cartesian RHF (docs/RI_JK_ROUTINE_SCOPE.md step 9).
+    // Everything else stays refused, because the exact-integral gradient at RI
+    // orbitals is inconsistent with the RI energy (water/def2-universal-JKFIT:
+    // 9.9e-6 Ha/Bohr off its FD, inside the geomopt threshold): UHF and ROHF
+    // until step 10, spherical until step 16, a correlated gradient (its
+    // reference terms assume exact integrals), and PCM (not gated).
     // Reject rather than silently returning a wrong answer; each names its reason.
     if (calculator._scf._ri_jk)
     {
@@ -643,21 +646,28 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             calc == HartreeFock::CalculationType::Frequency ||
             calc == HartreeFock::CalculationType::GeomOptFrequency ||
             calc == HartreeFock::CalculationType::ImaginaryFollow;
-        const char *reason =
-            calculator._use_full_symmetry
-                ? "full point-group symmetry (RI J/K does not fold symmetry orbits)"
-            : derivative_workflow
-                ? "gradients, geometry optimization or frequencies (there is no RI-JK "
-                  "gradient; the exact-integral gradient at RI orbitals is inconsistent "
-                  "with the RI energy)"
+        const char *derivative_gap =
+            calculator._scf._scf != HartreeFock::SCFType::RHF
+                ? "UHF or ROHF reference"
+            : calculator._shells._spherical
+                ? "spherical basis"
+            : calculator._correlation != HartreeFock::PostHF::None
+                ? "correlated gradient"
+            : calculator._solvation._model != HartreeFock::SolvationModel::None
+                ? "PCM"
                 : nullptr;
-        if (reason != nullptr)
+        std::string reason;
+        if (calculator._use_full_symmetry)
+            reason = "full point-group symmetry (RI J/K does not fold symmetry orbits)";
+        else if (derivative_workflow && derivative_gap != nullptr)
+            reason = std::string("gradients, geometry optimization or frequencies with a ") +
+                     derivative_gap + " (the RI-JK gradient covers Cartesian RHF only so far)";
+        if (!reason.empty())
         {
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Error, "RI-JK :",
                 std::string("RI-JK SCF (scf_ri_jk) does not support ") + reason +
-                    ". Use an RHF, UHF or ROHF energy without full symmetry, "
-                    "or disable RI-JK (scf_ri_jk false).");
+                    ". Use a supported combination, or disable RI-JK (scf_ri_jk false).");
             return EXIT_FAILURE;
         }
         if (calculator._mp2.ri_basis_name.empty())

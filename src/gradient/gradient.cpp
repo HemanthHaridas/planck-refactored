@@ -20,6 +20,7 @@
 #include "io/logging.h"
 #include "post_hf/mp2.h"
 #include "post_hf/mp2_gradient.h"
+#include "post_hf/ri/ri_eri.h"
 #include "scf/scf.h"
 #include "symmetry/integral_symmetry.h"
 
@@ -254,7 +255,8 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
     const Eigen::MatrixXd &P,
     const Eigen::MatrixXd &W,
     GammaFn &&gamma_fn,
-    HartreeFock::Gradient::WavefunctionGradientBreakdown *breakdown = nullptr)
+    HartreeFock::Gradient::WavefunctionGradientBreakdown *breakdown = nullptr,
+    double ri_exchange_coefficient = 1.0)
 {
     // Shared restricted-reference gradient builder:
     //   core/Pulay + nucleus-position attraction + 2e contraction + Vnn.
@@ -291,14 +293,26 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
         core_pulay += one_e->total();
     }
 
-    accumulate_shell_pair_eri_gradient(
-        calc,
-        shell_pairs,
-        shell_atom,
-        bf_shell,
-        schwarz_q,
-        two_electron,
-        gamma_fn);
+    if (calc._scf._ri_jk)
+    {
+        // RI-JK: the fitted operator's 2e term for the same Γ, with P split
+        // into equal spin halves (docs/RI_JK_ROUTINE_SCOPE.md step 9).
+        const Eigen::MatrixXd half = 0.5 * P;
+        auto ri = HartreeFock::Correlation::RI::build_ri_scf_two_electron_gradient(
+            calc, half, half, ri_exchange_coefficient);
+        if (!ri)
+            return std::unexpected(ri.error());
+        two_electron = *ri;
+    }
+    else
+        accumulate_shell_pair_eri_gradient(
+            calc,
+            shell_pairs,
+            shell_atom,
+            bf_shell,
+            schwarz_q,
+            two_electron,
+            gamma_fn);
     const Eigen::MatrixXd nuclear_repulsion = compute_nuclear_repulsion_gradient(calc);
     const Eigen::MatrixXd total = core_pulay + two_electron + nuclear_repulsion;
     if (breakdown)
@@ -425,7 +439,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rks_g
     };
     WavefunctionGradientBreakdown breakdown;
     auto grad = compute_closed_shell_gradient_from_density(
-        calc, shell_pairs, P, W, gamma_fn, &breakdown);
+        calc, shell_pairs, P, W, gamma_fn, &breakdown, cx_total);
     if (!grad)
         return grad;
 
@@ -554,8 +568,18 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
                2.0 * P_b(ii, kk) * P_b(jj, ll);
     };
 
-    accumulate_shell_pair_eri_gradient(
-        calc, shell_pairs, shell_atom, bf_shell, schwarz_q, grad, gamma_fn);
+    if (calc._scf._ri_jk)
+    {
+        // RI-JK: the fitted operator's 2e term for the same Γ
+        // (docs/RI_JK_ROUTINE_SCOPE.md steps 9-10).
+        auto ri = HartreeFock::Correlation::RI::build_ri_scf_two_electron_gradient(calc, P_a, P_b);
+        if (!ri)
+            return std::unexpected(ri.error());
+        grad += *ri;
+    }
+    else
+        accumulate_shell_pair_eri_gradient(
+            calc, shell_pairs, shell_atom, bf_shell, schwarz_q, grad, gamma_fn);
 
     // ── Term 4: nuclear repulsion ─────────────────────────────────────────────
     for (std::size_t a = 0; a < natoms; ++a)
@@ -667,8 +691,18 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rohf_
                2.0 * P_b(ii, kk) * P_b(jj, ll);
     };
 
-    accumulate_shell_pair_eri_gradient(
-        calc, shell_pairs, shell_atom, bf_shell, schwarz_q, grad, gamma_fn);
+    if (calc._scf._ri_jk)
+    {
+        // RI-JK: the fitted operator's 2e term for the same Γ
+        // (docs/RI_JK_ROUTINE_SCOPE.md steps 9-10).
+        auto ri = HartreeFock::Correlation::RI::build_ri_scf_two_electron_gradient(calc, P_a, P_b);
+        if (!ri)
+            return std::unexpected(ri.error());
+        grad += *ri;
+    }
+    else
+        accumulate_shell_pair_eri_gradient(
+            calc, shell_pairs, shell_atom, bf_shell, schwarz_q, grad, gamma_fn);
 
     // ── Term 4: nuclear repulsion ─────────────────────────────────────────────
     for (std::size_t a = 0; a < natoms; ++a)

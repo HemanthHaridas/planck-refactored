@@ -1372,17 +1372,20 @@ namespace HartreeFock::Correlation::RI
         {
             const Eigen::MatrixXd &J = calculator._ri_j3c;
             const auto &metric = *calculator._ri_metric_factor;
-            Eigen::MatrixXd vhalf_inv; // X_metric with X V Xᵀ = I ⇒ V^{-1} = Xᵀ X
             if (metric.method == MetricFactorization::Method::Eigen)
-                vhalf_inv = metric.transform;
-            else
             {
-                const Eigen::MatrixXd I =
-                    Eigen::MatrixXd::Identity(J.cols(), J.cols());
-                vhalf_inv = metric.transform.triangularView<Eigen::Lower>().solve(I);
+                // Pruned transform T with V^{-1} = Tᵀ T on the kept modes.
+                const Eigen::MatrixXd &T = metric.transform;
+                return (J * T.transpose()) * T;
             }
-            const Eigen::MatrixXd Vinv = vhalf_inv.transpose() * vhalf_inv;
-            return J * Vinv; // packed pair × aux
+            // Cholesky V = L Lᵀ: Xᵀ = L^{-T} (L^{-1} Jᵀ), two triangular solves.
+            // Never form V^{-1}: a Cartesian JKFIT metric has cond ~1e12 and the
+            // explicit inverse put the RI-JK gradient 2e-6 Ha/Bohr off its own
+            // energy FD (water, def2-universal-JKFIT); the solves match it.
+            const auto L = metric.transform.triangularView<Eigen::Lower>();
+            Eigen::MatrixXd Xt = L.solve(J.transpose());
+            L.transpose().solveInPlace(Xt);
+            return Xt.transpose(); // packed pair × aux
         }
     }
 
@@ -1431,6 +1434,59 @@ namespace HartreeFock::Correlation::RI
                         (mu == nu) ? Wm(mu, nu) : (Wm(mu, nu) + Wm(nu, mu));
         }
         return {gamma3, x_pair};
+    }
+
+    std::expected<Eigen::MatrixXd, std::string> build_ri_scf_two_electron_gradient(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &Pa,
+        const Eigen::MatrixXd &Pb,
+        double exchange_coefficient)
+    {
+        const auto n = static_cast<Eigen::Index>(calculator._shells.nbasis());
+        const Eigen::Index npair = n * (n + 1) / 2;
+        if (calculator._shells._spherical)
+            return std::unexpected("RI-JK gradient: spherical basis not supported yet "
+                                   "(docs/RI_JK_ROUTINE_SCOPE.md step 16).");
+        if (!calculator._ri_metric_factor || calculator._ri_j3c.rows() != npair)
+            return std::unexpected("RI-JK gradient: the RI cache is not ready for this basis.");
+        if (Pa.rows() != n || Pa.cols() != n || Pb.rows() != n || Pb.cols() != n)
+            return std::unexpected("RI-JK gradient: density size does not match the AO basis.");
+
+        // build_ri_two_electron_gradient returns ½ Σ G d(μν|λσ)_fit for the
+        // three-index density of G; the SCF term is ¼ Σ Γ d, so G = Γ/2:
+        //   G = Pt⊗Pt − k (Pa·Pa + Pb·Pb)
+        //   gamma3_{μν,Q} = Σ_λσ G_{μν,λσ} X_{λσ,Q}
+        //                 = Pt_μν c_Q − k (Pa X[Q] Pa + Pb X[Q] Pb)_μν,
+        //   c_Q = Σ_λσ Pt_λσ X_{λσ,Q}  (full λσ sum: packed with weight 2).
+        const Eigen::MatrixXd X = build_ri_x_pair_factors(calculator); // packed × naux
+        const Eigen::Index naux = X.cols();
+        const Eigen::MatrixXd Pt = Pa + Pb;
+        const bool same_spin = (&Pa == &Pb) || (Pa.array() == Pb.array()).all();
+
+        Eigen::VectorXd pt_packed(npair);
+        for (Eigen::Index mu = 0, r = 0; mu < n; ++mu)
+            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++r)
+                pt_packed(r) = (mu == nu ? 1.0 : 2.0) * Pt(mu, nu);
+        const Eigen::RowVectorXd c = pt_packed.transpose() * X;
+
+        // ponytail: Pσ X[Q] Pσ is nb³ per aux function; from C_occ it would be
+        // nb²·n_occ (B2 in docs/ERI_FOCK_BLAS_SCOPE.md does that for RI-K).
+        Eigen::MatrixXd gamma3(npair, naux);
+#pragma omp parallel for schedule(dynamic)
+        for (Eigen::Index Q = 0; Q < naux; ++Q)
+        {
+            Eigen::MatrixXd XQ(n, n);
+            for (Eigen::Index mu = 0, r = 0; mu < n; ++mu)
+                for (Eigen::Index nu = 0; nu <= mu; ++nu, ++r)
+                    XQ(mu, nu) = XQ(nu, mu) = X(r, Q);
+            const Eigen::MatrixXd K = same_spin
+                                          ? Eigen::MatrixXd(2.0 * Pa * XQ * Pa)
+                                          : Eigen::MatrixXd(Pa * XQ * Pa + Pb * XQ * Pb);
+            for (Eigen::Index mu = 0, r = 0; mu < n; ++mu)
+                for (Eigen::Index nu = 0; nu <= mu; ++nu, ++r)
+                    gamma3(r, Q) = Pt(mu, nu) * c(Q) - exchange_coefficient * K(mu, nu);
+        }
+        return build_ri_two_electron_gradient(calculator, gamma3, X);
     }
 
     Eigen::MatrixXd build_ri_imat(
