@@ -31,7 +31,16 @@ namespace
         std::size_t cx_stride = 0;
         std::size_t cy_stride = 0;
         std::size_t cz_stride = 0;
-        std::vector<double> data;
+        // One grow-only buffer per thread, reused across primitive calls: the
+        // per-call heap vector was ~20 % of the RI derivative loop (G6).
+        // assign() still zero-fills, so the values are unchanged. Not
+        // reentrant, and nothing calls it recursively.
+        std::vector<double> &data = buffer();
+        static std::vector<double> &buffer()
+        {
+            thread_local std::vector<double> b;
+            return b;
+        }
 
         ThreeCenterScratch(
             int lABx, int lABy, int lABz,
@@ -97,7 +106,12 @@ namespace
         std::size_t bx_stride = 0;
         std::size_t by_stride = 0;
         std::size_t bz_stride = 0;
-        std::vector<double> data;
+        std::vector<double> &data = buffer(); // as ThreeCenterScratch
+        static std::vector<double> &buffer()
+        {
+            thread_local std::vector<double> b;
+            return b;
+        }
 
         TwoCenterScratch(
             int lAx, int lAy, int lAz,
@@ -670,7 +684,10 @@ namespace HartreeFock::Correlation::RI
             shell_components[s] = BasisFunctions::_cartesian_shell_order(L);
         }
 
-        // Symmetric build over shell pairs K ≤ L.
+        // Symmetric build over shell pairs K ≤ L. Iteration K writes blocks
+        // (K, L≥K) and their mirrors (L, K): disjoint across K, so threads
+        // never share an element and the result is thread-count invariant.
+#pragma omp parallel for schedule(dynamic)
         for (std::size_t K = 0; K < nshells; ++K)
         {
             const auto &shP = aux.shells[K];
@@ -912,10 +929,13 @@ namespace HartreeFock::Correlation::RI
             static_cast<Eigen::Index>(calculator._ri_aux_basis->nfunctions));
         j3c_cart.setZero();
 
-        std::size_t aux_col = 0;
-        for (std::size_t shell_idx = 0; shell_idx < calculator._ri_aux_basis->shells.size(); ++shell_idx)
+        // Each aux shell fills its own columns: threads never share an element.
+        const auto &aux = *calculator._ri_aux_basis;
+#pragma omp parallel for schedule(dynamic)
+        for (std::size_t shell_idx = 0; shell_idx < aux.shells.size(); ++shell_idx)
         {
-            const auto &shellC = calculator._ri_aux_basis->shells[shell_idx];
+            const auto &shellC = aux.shells[shell_idx];
+            std::size_t aux_col = aux.offsets[shell_idx];
             const unsigned L = static_cast<unsigned>(shellC._shell);
             const auto components = HartreeFock::BasisFunctions::_cartesian_shell_order(L);
 
@@ -1073,11 +1093,17 @@ namespace HartreeFock::Correlation::RI
     namespace
     {
         // The one loop over every 3-center derivative element (μν|Q)': each aux
-        // Cartesian component × each AO pair (μ≥ν). fn(row, aux_col, atomA,
-        // atomB, atomC, d) receives the packed pair row, the aux column, the
-        // atoms the three legs sit on and the 9 components ([leg][axis]).
-        // compute_3c_eri_deriv scatters through it; build_ri_two_electron_
-        // gradient contracts through it without storing anything.
+        // Cartesian component × each AO pair (μ≥ν). fn(K, row, aux_col, atomA,
+        // atomB, atomC, d) receives the aux shell K, the packed pair row, the
+        // aux column, the atoms the three legs sit on and the 9 components
+        // ([leg][axis]). compute_3c_eri_deriv scatters through it;
+        // build_ri_two_electron_gradient contracts through it without storing
+        // anything.
+        //
+        // Threaded over aux shells: fn runs concurrently for different K, so it
+        // must write only K-owned storage (aux_col belongs to K; a reduction
+        // keeps one partial per K and sums them in K order, which keeps the
+        // result independent of the thread count).
         template <typename Fn>
         std::expected<void, std::string> for_each_3c_deriv(
             const HartreeFock::Calculator &calculator, Fn &&fn)
@@ -1086,9 +1112,12 @@ namespace HartreeFock::Correlation::RI
                 return std::unexpected("RI 3-center derivative: RI auxiliary basis is not loaded.");
 
             const auto shell_pairs = build_shellpairs(calculator._shells);
-            std::size_t aux_col = 0;
-            for (const auto &shellC : calculator._ri_aux_basis->shells)
+            const auto &aux = *calculator._ri_aux_basis;
+#pragma omp parallel for schedule(dynamic)
+            for (std::size_t K = 0; K < aux.shells.size(); ++K)
             {
+                const auto &shellC = aux.shells[K];
+                std::size_t aux_col = aux.offsets[K];
                 const auto components = HartreeFock::BasisFunctions::_cartesian_shell_order(
                     static_cast<unsigned>(shellC._shell));
                 const std::size_t atomC = shellC._atom_index;
@@ -1104,7 +1133,7 @@ namespace HartreeFock::Correlation::RI
                             spAB.A._cartesian[0], spAB.A._cartesian[1], spAB.A._cartesian[2],
                             spAB.B._cartesian[0], spAB.B._cartesian[1], spAB.B._cartesian[2],
                             shellC, amC[0], amC[1], amC[2]);
-                        fn(static_cast<Eigen::Index>(hi * (hi + 1) / 2 + lo),
+                        fn(K, static_cast<Eigen::Index>(hi * (hi + 1) / 2 + lo),
                            static_cast<Eigen::Index>(aux_col),
                            spAB.A._shell->_atom_index, spAB.B._shell->_atom_index, atomC, d);
                     }
@@ -1115,7 +1144,9 @@ namespace HartreeFock::Correlation::RI
         }
 
         // The one loop over every 2-center metric derivative element (P|Q)'.
-        // fn(r, c, atomP, atomQ, d), d = [center][axis].
+        // fn(K, r, c, atomP, atomQ, d), d = [center][axis]; row r belongs to
+        // aux shell K. Threaded over K with the same contract as
+        // for_each_3c_deriv: fn writes only K-owned storage.
         template <typename Fn>
         std::expected<void, std::string> for_each_2c_deriv(
             const HartreeFock::Calculator &calculator, Fn &&fn)
@@ -1127,6 +1158,7 @@ namespace HartreeFock::Correlation::RI
             const HartreeFock::AuxBasis &aux = *calculator._ri_aux_basis;
 
             const std::size_t nshells = aux.shells.size();
+#pragma omp parallel for schedule(dynamic)
             for (std::size_t K = 0; K < nshells; ++K)
             {
                 const auto &shP = aux.shells[K];
@@ -1139,7 +1171,7 @@ namespace HartreeFock::Correlation::RI
                         static_cast<unsigned>(shQ._shell));
                     for (std::size_t p = 0; p < compP.size(); ++p)
                         for (std::size_t q = 0; q < compQ.size(); ++q)
-                            fn(static_cast<Eigen::Index>(aux.offsets[K] + p),
+                            fn(K, static_cast<Eigen::Index>(aux.offsets[K] + p),
                                static_cast<Eigen::Index>(aux.offsets[Lsh] + q),
                                shP._atom_index, shQ._atom_index,
                                compute_2c_deriv_elem(
@@ -1165,8 +1197,8 @@ namespace HartreeFock::Correlation::RI
         // coincide; += accumulates, so translational invariance holds).
         auto ok = for_each_3c_deriv(
             calculator,
-            [&](Eigen::Index row, Eigen::Index col, std::size_t atomA, std::size_t atomB,
-                std::size_t atomC, const std::array<double, 9> &d)
+            [&](std::size_t, Eigen::Index row, Eigen::Index col, std::size_t atomA,
+                std::size_t atomB, std::size_t atomC, const std::array<double, 9> &d)
             {
                 for (int q = 0; q < 3; ++q)
                 {
@@ -1257,8 +1289,8 @@ namespace HartreeFock::Correlation::RI
                                         Eigen::MatrixXd::Zero(naux, naux));
         auto ok = for_each_2c_deriv(
             calculator,
-            [&](Eigen::Index r, Eigen::Index c, std::size_t atomP, std::size_t atomQ,
-                const std::array<double, 6> &d)
+            [&](std::size_t, Eigen::Index r, Eigen::Index c, std::size_t atomP,
+                std::size_t atomQ, const std::array<double, 6> &d)
             {
                 for (int a = 0; a < 3; ++a)
                 {
@@ -1353,23 +1385,28 @@ namespace HartreeFock::Correlation::RI
 
         // Streamed: each derivative element is contracted the moment it is
         // computed, so the 3·natoms × npair × naux derivative tensor is never
-        // stored (docs/RI_JK_ROUTINE_SCOPE.md step 7).
-        // ponytail: serial, like the stored-tensor loop it replaces; threading
-        // is G6 (docs/GRADIENT_INTEGRAL_PERFORMANCE.md).
-        Eigen::MatrixXd two_e = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(natoms), 3);
+        // stored (docs/RI_JK_ROUTINE_SCOPE.md step 7). The loops run threaded
+        // over aux shells; each shell accumulates into its own natoms × 3
+        // partial, summed in shell order, so the gradient is the same at any
+        // thread count (G6, docs/GRADIENT_INTEGRAL_PERFORMANCE.md).
+        const std::size_t nshells = calculator._ri_aux_basis->shells.size();
+        std::vector<Eigen::MatrixXd> part3(
+            nshells, Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(natoms), 3));
+        std::vector<Eigen::MatrixXd> part2 = part3;
 
         // 3-center: Σ_{(μν),Q} w·gamma3·dJ, each leg on its own atom.
         auto ok3 = for_each_3c_deriv(
             calculator,
-            [&](Eigen::Index row, Eigen::Index col, std::size_t atomA, std::size_t atomB,
-                std::size_t atomC, const std::array<double, 9> &d)
+            [&](std::size_t K, Eigen::Index row, Eigen::Index col, std::size_t atomA,
+                std::size_t atomB, std::size_t atomC, const std::array<double, 9> &d)
             {
+                Eigen::MatrixXd &out = part3[K];
                 const double g = wg(row, col);
                 for (int q = 0; q < 3; ++q)
                 {
-                    two_e(static_cast<Eigen::Index>(atomA), q) += g * d[0 * 3 + q];
-                    two_e(static_cast<Eigen::Index>(atomB), q) += g * d[1 * 3 + q];
-                    two_e(static_cast<Eigen::Index>(atomC), q) += g * d[2 * 3 + q];
+                    out(static_cast<Eigen::Index>(atomA), q) += g * d[0 * 3 + q];
+                    out(static_cast<Eigen::Index>(atomB), q) += g * d[1 * 3 + q];
+                    out(static_cast<Eigen::Index>(atomC), q) += g * d[2 * 3 + q];
                 }
             });
         if (!ok3)
@@ -1380,18 +1417,25 @@ namespace HartreeFock::Correlation::RI
         // matching the dense two_e term to fitting accuracy (gated RG2.2).
         auto ok2 = for_each_2c_deriv(
             calculator,
-            [&](Eigen::Index r, Eigen::Index c, std::size_t atomP, std::size_t atomQ,
-                const std::array<double, 6> &d)
+            [&](std::size_t K, Eigen::Index r, Eigen::Index c, std::size_t atomP,
+                std::size_t atomQ, const std::array<double, 6> &d)
             {
+                Eigen::MatrixXd &out = part2[K];
                 const double g = -0.5 * gamma_pq(r, c);
                 for (int a = 0; a < 3; ++a)
                 {
-                    two_e(static_cast<Eigen::Index>(atomP), a) += g * d[0 * 3 + a];
-                    two_e(static_cast<Eigen::Index>(atomQ), a) += g * d[1 * 3 + a];
+                    out(static_cast<Eigen::Index>(atomP), a) += g * d[0 * 3 + a];
+                    out(static_cast<Eigen::Index>(atomQ), a) += g * d[1 * 3 + a];
                 }
             });
         if (!ok2)
             return std::unexpected(ok2.error());
+
+        Eigen::MatrixXd two_e = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(natoms), 3);
+        for (const auto &p3 : part3)
+            two_e += p3;
+        for (const auto &p2 : part2)
+            two_e += p2;
         return two_e;
     }
 
@@ -1432,39 +1476,29 @@ namespace HartreeFock::Correlation::RI
         const Eigen::Index n = nao;
         const Eigen::Index npair = n * (n + 1) / 2;
 
-        // Unpack X into per-aux nao×nao matrices X[Q](r,s) = X[Q](s,r).
-        std::vector<Eigen::MatrixXd> X(static_cast<std::size_t>(naux),
-                                       Eigen::MatrixXd::Zero(n, n));
-        {
-            std::size_t pr = 0;
-            for (Eigen::Index mu = 0; mu < n; ++mu)
-                for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pr)
-                    for (Eigen::Index Q = 0; Q < naux; ++Q)
-                    {
-                        const double v = x_pair(static_cast<Eigen::Index>(pr), Q);
-                        X[static_cast<std::size_t>(Q)](mu, nu) = v;
-                        X[static_cast<std::size_t>(Q)](nu, mu) = v;
-                    }
-        }
+        // Unpack X to full (r s) rows, one column per aux function:
+        // Xfull(r*n+s, Q) = X[Q](r,s) = X[Q](s,r).
+        Eigen::MatrixXd Xfull(n * n, naux);
+        for (Eigen::Index mu = 0, pr = 0; mu < n; ++mu)
+            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pr)
+            {
+                Xfull.row(mu * n + nu) = x_pair.row(pr);
+                Xfull.row(nu * n + mu) = x_pair.row(pr);
+            }
 
         // dm2buf viewed as [(μ ν) full × (r s) full] row-major (μ,ν both full).
         const Eigen::Map<const RowMat> D(dm2buf.data(), n * n, n * n);
 
-        // gamma3[(μν)packed, Q] = Σ_{rs} dm2buf[μ,ν,r,s] X[Q](r,s).
-        Eigen::MatrixXd gamma3 = Eigen::MatrixXd::Zero(npair, naux);
-        for (Eigen::Index Q = 0; Q < naux; ++Q)
-        {
-            const RowMat XQ = X[static_cast<std::size_t>(Q)];
-            const Eigen::Map<const Eigen::VectorXd> xvec(XQ.data(), n * n);
-            const Eigen::VectorXd wfull = D * xvec; // (μ*n+ν) full
-            const Eigen::Map<const RowMat> Wm(wfull.data(), n, n); // rows μ, cols ν
-            std::size_t pr = 0;
-            for (Eigen::Index mu = 0; mu < n; ++mu)
-                for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pr)
-                    // Packed bra folds μ<ν into μ≥ν: dm2buf[μν] + dm2buf[νμ].
-                    gamma3(static_cast<Eigen::Index>(pr), Q) =
-                        (mu == nu) ? Wm(mu, nu) : (Wm(mu, nu) + Wm(nu, mu));
-        }
+        // W[(μν) full, Q] = Σ_{rs} dm2buf[μ,ν,r,s] X[Q](r,s): one GEMM, not
+        // naux serial matrix-vector products (G6: 7 s of a benzene gradient).
+        const Eigen::MatrixXd W = D * Xfull;
+
+        // Packed bra folds μ<ν into μ≥ν: dm2buf[μν] + dm2buf[νμ].
+        Eigen::MatrixXd gamma3(npair, naux);
+        for (Eigen::Index mu = 0, pr = 0; mu < n; ++mu)
+            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pr)
+                gamma3.row(pr) = (mu == nu) ? Eigen::RowVectorXd(W.row(mu * n + nu))
+                                            : Eigen::RowVectorXd(W.row(mu * n + nu) + W.row(nu * n + mu));
         return {gamma3, x_pair};
     }
 
@@ -1532,17 +1566,25 @@ namespace HartreeFock::Correlation::RI
         // dm2buf is row-major [p][v][r][s]; view as [(p v) × (r s)] row-major.
         const Eigen::Map<const RowMat> M(dm2buf.data(), n * n, n * n);
 
-        Eigen::MatrixXd imat = Eigen::MatrixXd::Zero(n, n);
-        for (const Eigen::MatrixXd &BQ : B)
+        // vec(B[Q]) over (r,s) with r*n+s packing to match M's columns, one
+        // column per aux function.
+        const Eigen::Index naux = static_cast<Eigen::Index>(B.size());
+        Eigen::MatrixXd Bfull(n * n, naux);
+        for (Eigen::Index Q = 0; Q < naux; ++Q)
         {
-            // vec(B[Q]) over (r,s) with r*n+s packing to match M's columns.
-            const RowMat BQr = BQ; // symmetric, but pack row-major to be exact
-            const Eigen::Map<const Eigen::VectorXd> bvec(BQr.data(), n * n);
-            // W[Q](p,v) = Σ_rs B[Q](r,s) dm2buf[p,v,r,s]; reshape the (pv)-vector.
-            const Eigen::VectorXd wcol = M * bvec;               // (p*n+v) row-major
-            const Eigen::Map<const RowMat> W(wcol.data(), n, n); // rows p, cols v
+            const RowMat BQr = B[static_cast<std::size_t>(Q)]; // pack row-major to be exact
+            Bfull.col(Q) = Eigen::Map<const Eigen::VectorXd>(BQr.data(), n * n);
+        }
+        // W[Q](p,v) = Σ_rs B[Q](r,s) dm2buf[p,v,r,s]: one GEMM, not naux
+        // serial matrix-vector products (G6: 7 s of a benzene gradient).
+        const Eigen::MatrixXd Wall = M * Bfull;
+
+        Eigen::MatrixXd imat = Eigen::MatrixXd::Zero(n, n);
+        for (Eigen::Index Q = 0; Q < naux; ++Q)
+        {
+            const Eigen::Map<const RowMat> W(Wall.col(Q).data(), n, n); // rows p, cols v
             // imat(q,v) += Σ_p B[Q](p,q) W(p,v) = (B[Q]ᵀ W)(q,v).
-            imat.noalias() += BQ.transpose() * W;
+            imat.noalias() += B[static_cast<std::size_t>(Q)].transpose() * W;
         }
         return imat;
     }

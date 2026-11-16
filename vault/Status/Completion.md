@@ -451,6 +451,20 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **RI integral and derivative loops threaded (G6, 2026-11-16,
+  `docs/GRADIENT_INTEGRAL_PERFORMANCE.md`).** Measured first on benzene
+  6-31G\* at 4 threads: the gradient was 23.1 of 27.4 s (RI-JK, JKFIT) and
+  41.7 of 51.1 s (RI-MP2, RIFIT), held by serial 3c/2c loops, a heap vector
+  per primitive call (~20 % of the loop) and two RI-MP2 matrix-vector loops
+  over aux functions (7.2 s and 7.4 s).
+  - The 3c/2c integral and derivative loops run over aux shells in parallel.
+    The gradient keeps one partial per aux shell, summed in shell order, so
+    it is identical at 1, 3 and 4 threads.
+  - The VRR scratch is a thread-local grow-only buffer (still zero-filled).
+  - `build_ri_gamma3_from_ao_dm2` and `build_ri_imat` are one GEMM each.
+  - Benzene RI-JK gradient run 27.4 → 7.9 s, RI-MP2 51.1 → 28.4 s;
+    gradients and energies equal to every printed digit.
+
 - **One matrix-free HF orbital Hessian; RI-MP2 gradients fixed and run
   spherical (2026-11-16, `9e9c2623`; `docs/SCF_ORBITAL_HESSIAN_OPERATOR.md`,
   `docs/RI_MP2_GRADIENT_RESPONSE.md`).**

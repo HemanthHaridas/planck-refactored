@@ -63,8 +63,8 @@ teaching code) reorders it.
    `docs/RI_JK_ROUTINE_SCOPE.md`. RI-MP2 gradients meet their own energy FD
    and run spherical since the orbital-response fix
    (`docs/RI_MP2_GRADIENT_RESPONSE.md`). Still open:
-   - **RI-DH** (O9 in §2), **G6** (the serial RI derivative loops, §5),
-     and attenuated RI-K for range-separated functionals.
+   - **RI-DH** (O9 in §2) and attenuated RI-K for range-separated
+     functionals. (G6, the serial RI derivative loops, is done.)
 
 **Expected, with a workaround.**
 
@@ -316,7 +316,8 @@ None of these blocks correctness. Take each up only with a current profile.
   - B2: RI-K from `C_occ`.
   - B3 (`dsyevd`) is deferred.
 - **Gradients** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`):
-  - G6: profile RI 2c/3c derivatives.
+  - RI shell-block 3c/2c kernels (G6 threaded the per-component loops;
+    benzene RI-JK gradient 27.4 → 7.9 s). Only if RI gradients grow.
   - Block-level density screening and screened derivative block kernels.
   - Stored-ERI UMP2 response, only if its share pays.
   - Conventional tensor construction on real post-HF workloads.

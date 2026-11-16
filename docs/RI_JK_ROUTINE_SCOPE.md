@@ -41,6 +41,7 @@ found in step 16 (below).
 | `planck-dft` pure and global-hybrid energies (RI-J, RI-K) | **Done**, = PySCF (steps 12–13) |
 | `planck-dft` SOSCF, stability | **Done**, eigenvalues = PySCF DF (step 14) |
 | `planck-dft` gradients, geomopt (RKS, UKS) | **Done**, = PySCF, Cartesian and spherical (steps 15–16) |
+| RI 3c/2c integral and derivative loops threaded (G6) | **Done**: benzene 6-31G* RI-JK gradient 27.4 → 7.9 s, RI-MP2 51.1 → 28.4 s (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`) |
 | RI-MP2 gradients at the FD floor; spherical RI-MP2 gradients | **Done** (`docs/RI_MP2_GRADIENT_RESPONSE.md`): 1.1–1.5e-7 against its own energy FD, Cartesian and spherical |
 | `planck-dft` range-separated with RI-JK | **Refused** by name (attenuated RI not implemented) |
 | Full point-group symmetry | Refused |
@@ -71,9 +72,6 @@ combination.
 
 - **RI-DH (O9)**: RI-JK in `planck-dft` and the streamed contraction are
   in place.
-- **G6, profile the RI 2c/3c integrals**
-  (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`). The derivative loops are still
-  serial: benzene 6-31G*/JKFIT takes 29 s for one gradient (step 9).
 - **Attenuated (range-separated) RI-K**, so range-separated functionals can
   use RI-JK.
 - **`scf_ri_basis`**: see step 1.
@@ -306,7 +304,8 @@ All 37 RI cases pass.
 
 Memory: benzene 6-31G*/JKFIT (nb = 102, naux = 654) peaks at 243 MiB for the
 whole gradient run; the stored derivative tensors of step 7 would have been
-1.04 GiB on their own. 29 s, almost all in the serial derivative loops (G6).
+1.04 GiB on their own. 29 s, almost all in the serial derivative loops; after
+G6 threaded them, 7.9 s (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`).
 
 ### 10. RI-JK gradient, UHF and ROHF
 

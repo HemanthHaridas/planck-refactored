@@ -208,6 +208,53 @@ recurrence shared, bitwise per axis) took 8 H2O 0.87 → 0.78 s and 4 H2O
 the price. The unused public `contract_rmp2_one_electron_gradient` was
 deleted.
 
+### The RI integrals: serial, allocating, matrix-vector loops (G6)
+
+Measured first, on benzene 6-31G\* at 4 threads (`sample` on the running
+process; gradient = gradient run − energy run):
+
+| Run | Total | Gradient share |
+|---|---|---|
+| RI-JK, def2-universal-JKFIT | 27.4 s | 23.1 s |
+| RI-MP2, cc-pVDZ-RIFIT | 51.1 s | 41.7 s |
+
+Three things held it, none of them the integral algorithm:
+- **Serial loops.** `compute_3c_eri`, `compute_2c_eri` and the two streamed
+  derivative loops (`for_each_3c_deriv`, `for_each_2c_deriv`) ran on one
+  thread; the 3c derivative loop alone was ~11.6 s of the RI-MP2 gradient.
+- **A heap vector per primitive call.** The 3c/2c VRR scratch was a
+  `std::vector` allocated and zero-filled on every call: malloc, free and
+  memset were ~20 % of the RI-JK loop's samples.
+- **Matrix-vector loops in the RI-MP2 gradient.** `build_ri_gamma3_from_ao_dm2`
+  and `build_ri_imat` applied the nao⁴ pair density to one aux vector at a
+  time (`D · vec(X[Q])`), 7.2 s and 7.4 s, single-threaded.
+
+The changes:
+- All four loops run over aux shells in parallel. Each aux shell owns its
+  columns (and, for the 2c metric, its mirrored blocks), so the stored
+  builds share no element. The gradient contraction keeps one natoms × 3
+  partial per aux shell and sums them in shell order (invariant 7): the
+  benzene RI-JK gradient is identical at 1, 3 and 4 threads.
+- The scratch is a thread-local, grow-only buffer; `assign` still
+  zero-fills, so values are unchanged.
+- Each matrix-vector loop is one GEMM, `D · [vec X[0] … vec X[naux−1]]`, at
+  n² × naux extra memory (40 MB for benzene; the pair density it multiplies
+  is n⁴).
+
+| Run | Before | After |
+|---|---|---|
+| benzene RI-JK gradient run | 27.4 s | 7.9 s |
+| benzene RI-JK energy run | 4.3 s | 2.9 s |
+| benzene RI-MP2 gradient run | 51.1 s | 28.4 s |
+| benzene RI-MP2 energy run | 9.4 s | 8.6 s |
+
+Gradients and energies equal the old ones to every printed digit. In the
+RI-MP2 gradient, what remains is the threaded 3c kernel and the dense
+reference terms (the exact HF derivative integrals and the Z-vector's direct
+Fock builds), not RI bookkeeping. Left alone: the 3c/2c kernels still run
+per Cartesian component, rebuilding the VRR for each; a shell-block kernel,
+as the 4-centre engines have, is the next lever if RI gradients grow.
+
 ### Defects found on the way
 
 - **The SCF stored the DIIS extrapolation's orbitals.** G2's new summation
@@ -240,6 +287,9 @@ deleted.
   - back-transforms ≤ 2 %.
 - The conventional MP2 gradients are bounded by their dense nao⁴ tensors
   (D_α, D_β, the ERI) in memory, not time. RI-MP2 is the route past that.
+- **RI gradients** (benzene 6-31G\*, G6): RI-JK 7.9 s for the whole run,
+  2.9 s of it SCF; RI-MP2 28.4 s, led by the 3c derivative kernel and the
+  dense reference terms.
 
 ## What invariants matter
 
@@ -378,7 +428,7 @@ Commits, tests and code comments cite these names.
 | G7 O2 | `d9cfba12` | T2 → AO back-transforms as shared GEMM helpers | 1.83 → 0.55 s |
 | G7 O3 | — | Imat as a GEMM | dropped (1.3 %) |
 | G5 | `32f0819f` | one threaded 1e block; three-axis C-derivative | 0.87 → 0.78 s (8 H2O) |
-| G6 | — | RI three-centre integrals | not done |
+| G6 | — | RI 3c/2c loops threaded over aux shells; thread-local VRR scratch; RI-MP2 matrix-vector loops as GEMMs | 27.4 → 7.9 s (RI-JK), 51.1 → 28.4 s (RI-MP2), benzene 6-31G\* |
 
 Measuring: the benchmark inputs are water chains (`water_chain` in
 `tests/benchmarks/scale_bench.py`, 3.0 Å spacing) with `calculation gradient`.
@@ -391,11 +441,10 @@ since zsh does not word-split an unquoted variable.
 
 Tracked in `vault/Status/Open Work.md`; none is needed at these sizes.
 
-- **G6: RI three-centre integrals.** `compute_3c_eri`, `compute_2c_eri` and
-  `compute_3c_deriv_elem` (`src/post_hf/ri/ri_eri.cpp`) run per component,
-  serial and unscreened. Measure their share on an RI-MP2 gradient and an
-  RI-JK SCF first. D3 (RI pair factors recomputed per iteration,
-  `docs/ERI_FOCK_BLAS_SCOPE.md`) is the larger RI-JK lever.
+- **RI shell-block kernels.** The 3c/2c integrals and derivatives
+  (`src/post_hf/ri/ri_eri.cpp`) are threaded (G6) but still per Cartesian
+  component and unscreened, rebuilding the VRR for each component. The next
+  lever if RI gradients grow.
 - **Block-level density screening** (`Q_ab Q_cd · max|Γ_block| < tol`) in the
   2e loop.
 - **Screened kernels in the derivative block kernels.** HSE06's long-range
