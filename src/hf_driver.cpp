@@ -629,7 +629,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     // gradient exists: the analytic gradient would use exact integrals at RI
     // orbitals (water/def2-universal-JKFIT: 9.9e-6 Ha/Bohr off
     // the RI energy's FD, inside the geomopt threshold), so every derivative
-    // workflow is refused too (docs/RI_JK_ROUTINE_SCOPE.md steps 3 and 7).
+    // workflow is refused too (docs/RI_JK_ROUTINE_SCOPE.md steps 3, 9-10 and 15).
     // Reject rather than silently returning a wrong answer; each names its reason.
     if (calculator._scf._ri_jk)
     {

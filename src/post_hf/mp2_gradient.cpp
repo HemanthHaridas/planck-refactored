@@ -568,22 +568,15 @@ namespace HartreeFock::Correlation
         // gamma3 sums both orderings and the contraction runs bra_prefolded.
         if (calculator._mp2.use_ri)
         {
-            auto dJ = HartreeFock::Correlation::RI::compute_3c_eri_deriv(calculator);
-            auto dV = HartreeFock::Correlation::RI::compute_2c_eri_deriv(calculator);
-            if (!dJ)
-                return std::unexpected("RMP2 RI gradient: " + dJ.error());
-            if (!dV)
-                return std::unexpected("RMP2 RI gradient: " + dV.error());
             auto [gamma3, x_proj] =
                 HartreeFock::Correlation::RI::build_ri_gamma3_from_ao_dm2(
                     calculator, dm2buf_full, nao);
-            const Eigen::MatrixXd ri_two_e =
-                HartreeFock::Correlation::RI::build_ri_two_electron_gradient(
-                    gamma3, x_proj, *dJ, *dV,
-                    calculator._molecule.natoms, static_cast<std::size_t>(nao),
-                    /*bra_prefolded=*/true);
-            two_e_terms += ri_two_e;
-            electronic += ri_two_e;
+            auto ri_two_e = HartreeFock::Correlation::RI::build_ri_two_electron_gradient(
+                calculator, gamma3, x_proj, /*bra_prefolded=*/true);
+            if (!ri_two_e)
+                return std::unexpected("RMP2 RI gradient: " + ri_two_e.error());
+            two_e_terms += *ri_two_e;
+            electronic += *ri_two_e;
         }
         // imat_ao (seeded from lag.imat_ao) is already -1 flipped; imat_mo and
         // veff_corr_ao come straight from the shared Lagrangian. imat_mo is a
@@ -848,19 +841,14 @@ namespace HartreeFock::Correlation
             std::vector<double> pair_dm2_ao(nao4);
             for (std::size_t k = 0; k < nao4; ++k)
                 pair_dm2_ao[k] = Da[k] + Db[k];
-            auto dJ = HartreeFock::Correlation::RI::compute_3c_eri_deriv(calculator);
-            auto dV = HartreeFock::Correlation::RI::compute_2c_eri_deriv(calculator);
-            if (!dJ)
-                return std::unexpected("UMP2 RI gradient: " + dJ.error());
-            if (!dV)
-                return std::unexpected("UMP2 RI gradient: " + dV.error());
             auto [gamma3, x_proj] =
                 HartreeFock::Correlation::RI::build_ri_gamma3_from_ao_dm2(
                     calculator, pair_dm2_ao, nao);
-            electronic += 0.5 * HartreeFock::Correlation::RI::build_ri_two_electron_gradient(
-                                    gamma3, x_proj, *dJ, *dV,
-                                    calculator._molecule.natoms, static_cast<std::size_t>(nao),
-                                    /*bra_prefolded=*/true);
+            auto ri_two_e = HartreeFock::Correlation::RI::build_ri_two_electron_gradient(
+                calculator, gamma3, x_proj, /*bra_prefolded=*/true);
+            if (!ri_two_e)
+                return std::unexpected("UMP2 RI gradient: " + ri_two_e.error());
+            electronic += 0.5 * *ri_two_e;
         }
         else
         {

@@ -1069,73 +1069,117 @@ namespace HartreeFock::Correlation::RI
         return result;
     }
 
+    namespace
+    {
+        // The one loop over every 3-center derivative element (μν|Q)': each aux
+        // Cartesian component × each AO pair (μ≥ν). fn(row, aux_col, atomA,
+        // atomB, atomC, d) receives the packed pair row, the aux column, the
+        // atoms the three legs sit on and the 9 components ([leg][axis]).
+        // compute_3c_eri_deriv scatters through it; build_ri_two_electron_
+        // gradient contracts through it without storing anything.
+        template <typename Fn>
+        std::expected<void, std::string> for_each_3c_deriv(
+            const HartreeFock::Calculator &calculator, Fn &&fn)
+        {
+            if (!calculator._ri_aux_basis)
+                return std::unexpected("RI 3-center derivative: RI auxiliary basis is not loaded.");
+            if (calculator._shells._spherical)
+                return std::unexpected("RI 3-center derivative: spherical basis not supported yet "
+                                       "(Cartesian only; docs/RI_JK_ROUTINE_SCOPE.md step 16).");
+
+            const auto shell_pairs = build_shellpairs(calculator._shells);
+            std::size_t aux_col = 0;
+            for (const auto &shellC : calculator._ri_aux_basis->shells)
+            {
+                const auto components = HartreeFock::BasisFunctions::_cartesian_shell_order(
+                    static_cast<unsigned>(shellC._shell));
+                const std::size_t atomC = shellC._atom_index;
+                for (const auto &amC : components)
+                {
+                    for (const auto &spAB : shell_pairs)
+                    {
+                        const std::size_t mu = spAB.A._index;
+                        const std::size_t nu = spAB.B._index;
+                        const std::size_t hi = std::max(mu, nu), lo = std::min(mu, nu);
+                        const auto d = compute_3c_deriv_elem(
+                            spAB,
+                            spAB.A._cartesian[0], spAB.A._cartesian[1], spAB.A._cartesian[2],
+                            spAB.B._cartesian[0], spAB.B._cartesian[1], spAB.B._cartesian[2],
+                            shellC, amC[0], amC[1], amC[2]);
+                        fn(static_cast<Eigen::Index>(hi * (hi + 1) / 2 + lo),
+                           static_cast<Eigen::Index>(aux_col),
+                           spAB.A._shell->_atom_index, spAB.B._shell->_atom_index, atomC, d);
+                    }
+                    ++aux_col;
+                }
+            }
+            return {};
+        }
+
+        // The one loop over every 2-center metric derivative element (P|Q)'.
+        // fn(r, c, atomP, atomQ, d), d = [center][axis].
+        template <typename Fn>
+        std::expected<void, std::string> for_each_2c_deriv(
+            const HartreeFock::Calculator &calculator, Fn &&fn)
+        {
+            if (!calculator._ri_aux_basis)
+                return std::unexpected("RI 2-center derivative: RI auxiliary basis is not loaded.");
+            const HartreeFock::AuxBasis &aux = *calculator._ri_aux_basis;
+            if (aux.cart_to_sph.size())
+                return std::unexpected("RI 2-center derivative: spherical auxiliary basis not supported "
+                                       "(it follows a spherical orbital basis; Cartesian only).");
+
+            const std::size_t nshells = aux.shells.size();
+            for (std::size_t K = 0; K < nshells; ++K)
+            {
+                const auto &shP = aux.shells[K];
+                const auto compP = HartreeFock::BasisFunctions::_cartesian_shell_order(
+                    static_cast<unsigned>(shP._shell));
+                for (std::size_t Lsh = 0; Lsh < nshells; ++Lsh)
+                {
+                    const auto &shQ = aux.shells[Lsh];
+                    const auto compQ = HartreeFock::BasisFunctions::_cartesian_shell_order(
+                        static_cast<unsigned>(shQ._shell));
+                    for (std::size_t p = 0; p < compP.size(); ++p)
+                        for (std::size_t q = 0; q < compQ.size(); ++q)
+                            fn(static_cast<Eigen::Index>(aux.offsets[K] + p),
+                               static_cast<Eigen::Index>(aux.offsets[Lsh] + q),
+                               shP._atom_index, shQ._atom_index,
+                               compute_2c_deriv_elem(
+                                   shP, compP[p][0], compP[p][1], compP[p][2],
+                                   shQ, compQ[q][0], compQ[q][1], compQ[q][2]));
+                }
+            }
+            return {};
+        }
+    }
+
     std::expected<std::vector<Eigen::MatrixXd>, std::string>
     compute_3c_eri_deriv(const HartreeFock::Calculator &calculator)
     {
-        if (!calculator._mp2.use_ri)
-            return std::unexpected("compute_3c_eri_deriv: MP2 RI is disabled.");
         if (!calculator._ri_aux_basis)
             return std::unexpected("compute_3c_eri_deriv: RI auxiliary basis is not loaded.");
-        if (calculator._shells._spherical)
-            return std::unexpected("compute_3c_eri_deriv: spherical basis not supported yet "
-                                   "(Cartesian only; lift at the skin when a consumer needs it).");
-
-        const std::size_t natoms = calculator._molecule.natoms;
         const std::size_t n_cart = calculator._shells.nbasis();
-        const std::size_t npair = n_cart * (n_cart + 1) / 2;
-        const std::size_t naux = calculator._ri_aux_basis->nfunctions;
-
-        // Output: natoms*3 packed derivative matrices, index = atom*3 + axis.
         std::vector<Eigen::MatrixXd> dJ(
-            natoms * 3,
-            Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(npair),
-                                  static_cast<Eigen::Index>(naux)));
-
-        const auto shell_pairs = build_shellpairs(calculator._shells);
-
-        std::size_t aux_col = 0;
-        for (std::size_t shell_idx = 0; shell_idx < calculator._ri_aux_basis->shells.size(); ++shell_idx)
-        {
-            const auto &shellC = calculator._ri_aux_basis->shells[shell_idx];
-            const unsigned L = static_cast<unsigned>(shellC._shell);
-            const auto components = HartreeFock::BasisFunctions::_cartesian_shell_order(L);
-            const std::size_t atomC = shellC._atom_index;
-
-            for (const auto &amC : components)
+            calculator._molecule.natoms * 3,
+            Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(n_cart * (n_cart + 1) / 2),
+                                  static_cast<Eigen::Index>(calculator._ri_aux_basis->nfunctions)));
+        // Scatter the 9 components to the atoms their legs sit on (atoms may
+        // coincide; += accumulates, so translational invariance holds).
+        auto ok = for_each_3c_deriv(
+            calculator,
+            [&](Eigen::Index row, Eigen::Index col, std::size_t atomA, std::size_t atomB,
+                std::size_t atomC, const std::array<double, 9> &d)
             {
-                const int lCx = amC[0], lCy = amC[1], lCz = amC[2];
-
-                for (const auto &spAB : shell_pairs)
+                for (int q = 0; q < 3; ++q)
                 {
-                    const std::size_t mu = spAB.A._index;
-                    const std::size_t nu = spAB.B._index;
-                    const std::size_t hi = std::max(mu, nu), lo = std::min(mu, nu);
-                    const Eigen::Index row = static_cast<Eigen::Index>(hi * (hi + 1) / 2 + lo);
-                    const std::size_t atomA = spAB.A._shell->_atom_index;
-                    const std::size_t atomB = spAB.B._shell->_atom_index;
-
-                    const auto d = compute_3c_deriv_elem(
-                        spAB,
-                        spAB.A._cartesian[0], spAB.A._cartesian[1], spAB.A._cartesian[2],
-                        spAB.B._cartesian[0], spAB.B._cartesian[1], spAB.B._cartesian[2],
-                        shellC, lCx, lCy, lCz);
-
-                    // Scatter the 9 components to the atoms their legs sit on.
-                    // Atoms may coincide (e.g. μ and ν on the same atom); the
-                    // += accumulates correctly, and translational invariance is
-                    // preserved because every leg's contribution is placed on its
-                    // own atom.
-                    for (int q = 0; q < 3; ++q)
-                    {
-                        dJ[atomA * 3 + q](row, static_cast<Eigen::Index>(aux_col)) += d[0 * 3 + q];
-                        dJ[atomB * 3 + q](row, static_cast<Eigen::Index>(aux_col)) += d[1 * 3 + q];
-                        dJ[atomC * 3 + q](row, static_cast<Eigen::Index>(aux_col)) += d[2 * 3 + q];
-                    }
+                    dJ[atomA * 3 + q](row, col) += d[0 * 3 + q];
+                    dJ[atomB * 3 + q](row, col) += d[1 * 3 + q];
+                    dJ[atomC * 3 + q](row, col) += d[2 * 3 + q];
                 }
-                ++aux_col;
-            }
-        }
-
+            });
+        if (!ok)
+            return std::unexpected("compute_3c_eri_deriv: " + ok.error());
         return dJ;
     }
 
@@ -1211,55 +1255,22 @@ namespace HartreeFock::Correlation::RI
     {
         if (!calculator._ri_aux_basis)
             return std::unexpected("compute_2c_eri_deriv: RI auxiliary basis is not loaded.");
-
-        const std::size_t natoms = calculator._molecule.natoms;
-        const HartreeFock::AuxBasis &aux = *calculator._ri_aux_basis;
-        if (aux.cart_to_sph.size())
-            return std::unexpected("compute_2c_eri_deriv: spherical auxiliary basis not supported "
-                                   "(it follows a spherical orbital basis; Cartesian only).");
-        const std::size_t naux = aux.nfunctions;
-
-        std::vector<Eigen::MatrixXd> dV(
-            natoms * 3,
-            Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(naux),
-                                  static_cast<Eigen::Index>(naux)));
-
-        const std::size_t nshells = aux.shells.size();
-        for (std::size_t K = 0; K < nshells; ++K)
-        {
-            const auto &shP = aux.shells[K];
-            const std::size_t off_K = aux.offsets[K];
-            const std::size_t atomP = shP._atom_index;
-            const auto compP = HartreeFock::BasisFunctions::_cartesian_shell_order(
-                static_cast<unsigned>(shP._shell));
-
-            for (std::size_t Lsh = 0; Lsh < nshells; ++Lsh)
+        const auto naux = static_cast<Eigen::Index>(calculator._ri_aux_basis->nfunctions);
+        std::vector<Eigen::MatrixXd> dV(calculator._molecule.natoms * 3,
+                                        Eigen::MatrixXd::Zero(naux, naux));
+        auto ok = for_each_2c_deriv(
+            calculator,
+            [&](Eigen::Index r, Eigen::Index c, std::size_t atomP, std::size_t atomQ,
+                const std::array<double, 6> &d)
             {
-                const auto &shQ = aux.shells[Lsh];
-                const std::size_t off_L = aux.offsets[Lsh];
-                const std::size_t atomQ = shQ._atom_index;
-                const auto compQ = HartreeFock::BasisFunctions::_cartesian_shell_order(
-                    static_cast<unsigned>(shQ._shell));
-
-                for (std::size_t p = 0; p < compP.size(); ++p)
+                for (int a = 0; a < 3; ++a)
                 {
-                    for (std::size_t q = 0; q < compQ.size(); ++q)
-                    {
-                        const auto d = compute_2c_deriv_elem(
-                            shP, compP[p][0], compP[p][1], compP[p][2],
-                            shQ, compQ[q][0], compQ[q][1], compQ[q][2]);
-                        const Eigen::Index r = static_cast<Eigen::Index>(off_K + p);
-                        const Eigen::Index c = static_cast<Eigen::Index>(off_L + q);
-                        for (int a = 0; a < 3; ++a)
-                        {
-                            dV[atomP * 3 + a](r, c) += d[0 * 3 + a];
-                            dV[atomQ * 3 + a](r, c) += d[1 * 3 + a];
-                        }
-                    }
+                    dV[atomP * 3 + a](r, c) += d[0 * 3 + a];
+                    dV[atomQ * 3 + a](r, c) += d[1 * 3 + a];
                 }
-            }
-        }
-
+            });
+        if (!ok)
+            return std::unexpected("compute_2c_eri_deriv: " + ok.error());
         return dV;
     }
 
@@ -1273,17 +1284,18 @@ namespace HartreeFock::Correlation::RI
         return D_ovov * b_ov;
     }
 
-    Eigen::MatrixXd build_ri_two_electron_gradient(
+    std::expected<Eigen::MatrixXd, std::string> build_ri_two_electron_gradient(
+        const HartreeFock::Calculator &calculator,
         const Eigen::MatrixXd &gamma3,
         const Eigen::MatrixXd &x_proj,
-        const std::vector<Eigen::MatrixXd> &dJ,
-        const std::vector<Eigen::MatrixXd> &dV,
-        std::size_t natoms,
-        std::size_t nb,
         bool bra_prefolded)
     {
-        const Eigen::Index npair = gamma3.rows();
-        const Eigen::Index naux = gamma3.cols();
+        const std::size_t natoms = calculator._molecule.natoms;
+        const std::size_t nb = calculator._shells.nbasis();
+        const auto npair = static_cast<Eigen::Index>(nb * (nb + 1) / 2);
+        if (gamma3.rows() != npair || x_proj.rows() != npair || gamma3.cols() != x_proj.cols())
+            return std::unexpected("build_ri_two_electron_gradient: gamma3/x_proj shape does not "
+                                   "match the Cartesian AO pair count.");
 
         // Bra pair weight. When gamma3's bra is a SINGLE ordering (μ≥ν only, e.g.
         // a bra-symmetric density), off-diagonal packed pairs stand in for both
@@ -1305,25 +1317,49 @@ namespace HartreeFock::Correlation::RI
         const Eigen::MatrixXd wg = w.asDiagonal() * gamma3; // w · Σ Γ·X, bra fold
 
         // Metric-derivative charge γ_{PQ} = Σ_{(μν)} w·x_{(μν),P}·gamma3_{(μν),Q}.
-        const Eigen::MatrixXd wx = w.asDiagonal() * x_proj;    // npair × naux
-        const Eigen::MatrixXd gamma_pq = wx.transpose() * gamma3; // naux × naux
+        const Eigen::MatrixXd gamma_pq = (w.asDiagonal() * x_proj).transpose() * gamma3;
 
-        Eigen::MatrixXd two_e = Eigen::MatrixXd::Zero(
-            static_cast<Eigen::Index>(natoms), 3);
-        for (std::size_t a = 0; a < natoms * 3; ++a)
-        {
-            // 3-center: Σ_{(μν),Q} w·gamma3·dJ. Frobenius inner product. dJ
-            // scatters all three legs (μ, ν, aux) to their atoms, so one pass
-            // gives the full per-atom 3-center derivative.
-            const double j_term = (wg.cwiseProduct(dJ[a])).sum();
-            // 2-center metric correction: −½ Σ_{PQ} γ_{PQ}·dV. The ½ is real —
-            // it balances the metric leg against the (unfactored) 3-center leg,
-            // matching the dense two_e term to fitting accuracy (gated RG2.2).
-            const double v_term = -0.5 * (gamma_pq.cwiseProduct(dV[a])).sum();
-            two_e(static_cast<Eigen::Index>(a / 3),
-                  static_cast<Eigen::Index>(a % 3)) = j_term + v_term;
-        }
-        (void)naux;
+        // Streamed: each derivative element is contracted the moment it is
+        // computed, so the 3·natoms × npair × naux derivative tensor is never
+        // stored (docs/RI_JK_ROUTINE_SCOPE.md step 7).
+        // ponytail: serial, like the stored-tensor loop it replaces; threading
+        // is G6 (docs/GRADIENT_INTEGRAL_PERFORMANCE.md).
+        Eigen::MatrixXd two_e = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(natoms), 3);
+
+        // 3-center: Σ_{(μν),Q} w·gamma3·dJ, each leg on its own atom.
+        auto ok3 = for_each_3c_deriv(
+            calculator,
+            [&](Eigen::Index row, Eigen::Index col, std::size_t atomA, std::size_t atomB,
+                std::size_t atomC, const std::array<double, 9> &d)
+            {
+                const double g = wg(row, col);
+                for (int q = 0; q < 3; ++q)
+                {
+                    two_e(static_cast<Eigen::Index>(atomA), q) += g * d[0 * 3 + q];
+                    two_e(static_cast<Eigen::Index>(atomB), q) += g * d[1 * 3 + q];
+                    two_e(static_cast<Eigen::Index>(atomC), q) += g * d[2 * 3 + q];
+                }
+            });
+        if (!ok3)
+            return std::unexpected(ok3.error());
+
+        // 2-center metric correction: −½ Σ_{PQ} γ_{PQ}·dV. The ½ is real — it
+        // balances the metric leg against the (unfactored) 3-center leg,
+        // matching the dense two_e term to fitting accuracy (gated RG2.2).
+        auto ok2 = for_each_2c_deriv(
+            calculator,
+            [&](Eigen::Index r, Eigen::Index c, std::size_t atomP, std::size_t atomQ,
+                const std::array<double, 6> &d)
+            {
+                const double g = -0.5 * gamma_pq(r, c);
+                for (int a = 0; a < 3; ++a)
+                {
+                    two_e(static_cast<Eigen::Index>(atomP), a) += g * d[0 * 3 + a];
+                    two_e(static_cast<Eigen::Index>(atomQ), a) += g * d[1 * 3 + a];
+                }
+            });
+        if (!ok2)
+            return std::unexpected(ok2.error());
         return two_e;
     }
 

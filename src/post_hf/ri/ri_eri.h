@@ -145,19 +145,18 @@ namespace HartreeFock::Correlation::RI
     //   E2(atom,q) = Σ_{(μν),P} w·gamma3·dJ_{(μν),P}  −  ½ Σ_{PQ} γ_{PQ}·dV_{PQ}
     // with γ_{PQ} = Σ_{(μν)} w·x_proj_{(μν),P}·gamma3_{(μν),Q} — the metric-
     // derivative correction that has no dense analog (it exists only because RI
-    // factors through V). dJ = compute_3c_eri_deriv, dV = compute_2c_eri_deriv,
-    // both natoms*3 packed derivative tensors. Returns natoms×3.
+    // factors through V). The derivative integrals dJ and dV are streamed:
+    // each element is contracted as it is computed, so the 3·natoms × npair ×
+    // naux tensor compute_3c_eri_deriv returns is never stored. Cartesian
+    // orbital and aux bases only. Returns natoms×3.
     // bra_prefolded: false (default) — gamma3's bra is a single μ≥ν ordering and
     // off-diagonal pairs are doubled internally (bra-symmetric density, RG2.2
     // synthetic gate). true — gamma3 already sums both (μν)+(νμ) orderings
     // (general non-bra-symmetric dm2buf, RG3.4), so no internal doubling.
-    Eigen::MatrixXd build_ri_two_electron_gradient(
+    std::expected<Eigen::MatrixXd, std::string> build_ri_two_electron_gradient(
+        const HartreeFock::Calculator &calculator,
         const Eigen::MatrixXd &gamma3,
         const Eigen::MatrixXd &x_proj,
-        const std::vector<Eigen::MatrixXd> &dJ,
-        const std::vector<Eigen::MatrixXd> &dV,
-        std::size_t natoms,
-        std::size_t nb,
         bool bra_prefolded = false);
 
     // Packed 3-index density and raw X factors for the RI 2e-gradient term
