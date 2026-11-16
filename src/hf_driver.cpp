@@ -574,7 +574,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         // for cross-basis density projection in the spherical working basis.
     }
 
-    // ── RI-MP2 workflow gate: single point, RHF gradient, RHF geomopt ────────────
+    // ── RI-MP2 workflow gate: RHF/UHF single point, gradient, geomopt, frequencies
     // The RI front-end caches the auxiliary basis, the 2-center Coulomb metric,
     // and the packed 3-center tensor on the Calculator (_ri_aux_basis / _ri_j2c /
     // _ri_j3c). The caches self-invalidate on a geometry change (G1:
@@ -595,28 +595,31 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     //     water_radical_cation_ri_ump2_geomopt_sto3g, each with a stationary-point
     //     FD check against its own RI surface.
     //
-    // Frequency / GeomOptFreq / ImaginaryFollow are deliberately NOT rejected
-    // here — they fall through to the RI-MP2 frequency guard below, which names
-    // the accurate reason. ROHF is excluded: there is no ROHF-MP2 gradient at
-    // all, dense or RI. Basis-agnostic.
-    const bool ri_freq_workflow =
-        calculator._calculation == HartreeFock::CalculationType::Frequency ||
-        calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency ||
-        calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow;
+    //   * Frequency / GeomOptFreq / ImaginaryFollow — the semi-numerical Hessian
+    //     differences the same per-geometry SCF + MP2 + gradient step
+    //     (Opt::run_scf_gradient), G1 again handling the caches. Gated against a
+    //     PySCF Hessian from second differences of the RI-MP2 energy
+    //     (water_ri_rmp2_freq_sto3g, water_radical_cation_ri_ump2_freq_sto3g).
+    //
+    // ROHF is excluded: there is no ROHF-MP2 gradient at all, dense or RI.
+    // Basis-agnostic.
     const bool ri_workflow_ok =
         (calculator._scf._scf == HartreeFock::SCFType::RHF ||
          calculator._scf._scf == HartreeFock::SCFType::UHF) &&
         (calculator._calculation == HartreeFock::CalculationType::Gradient ||
-         calculator._calculation == HartreeFock::CalculationType::GeomOpt);
+         calculator._calculation == HartreeFock::CalculationType::GeomOpt ||
+         calculator._calculation == HartreeFock::CalculationType::Frequency ||
+         calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency ||
+         calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow);
     if (calculator._mp2.use_ri &&
         calculator._calculation != HartreeFock::CalculationType::SinglePoint &&
-        !ri_workflow_ok && !ri_freq_workflow)
+        !ri_workflow_ok)
     {
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Error, "RI-MP2 :",
-            "RI-MP2 (mp2_use_ri) supports single-point energies plus the RHF/UHF "
-            "analytic gradient and RHF/UHF geometry optimization. Set calculation "
-            "singlepoint, gradient or geomopt, or disable RI (mp2_use_ri false) "
+            "RI-MP2 (mp2_use_ri) supports single-point energies plus RHF/UHF "
+            "gradients, geometry optimization and frequencies. Use an RHF or UHF "
+            "reference, or disable RI (mp2_use_ri false) "
             "for " + map_enum(calculator._calculation) + ".");
         return EXIT_FAILURE;
     }
@@ -663,29 +666,6 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                 HartreeFock::LogLevel::Error, "RI-JK :",
                 "RI-JK SCF (scf_ri_jk) needs an auxiliary basis: set mp2_ri_basis "
                 "(the same fitting basis RI-MP2 uses).");
-            return EXIT_FAILURE;
-        }
-    }
-
-    // ── RI-MP2 frequencies are not validated ─────────────────────────────────────
-    // The semi-numerical Hessian finite-differences the MP2 gradient through
-    // Opt::run_scf_gradient, the same per-geometry step geometry optimization
-    // uses. Dense RMP2/UMP2 frequencies are PySCF-gated; RI-MP2 ones are not.
-    {
-        const bool freq_workflow =
-            calculator._calculation == HartreeFock::CalculationType::Frequency ||
-            calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency ||
-            calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow;
-        const bool correlated =
-            calculator._correlation == HartreeFock::PostHF::RMP2 ||
-            calculator._correlation == HartreeFock::PostHF::UMP2;
-        if (freq_workflow && correlated && calculator._mp2.use_ri)
-        {
-            HartreeFock::Logger::logging(
-                HartreeFock::LogLevel::Error, "Frequency :",
-                "RI-MP2 frequencies are not validated: " + map_enum(calculator._calculation) +
-                " with mp2_use_ri is refused. Disable RI (mp2_use_ri false) for "
-                "MP2 frequencies, or use calculation gradient or geomopt with RI.");
             return EXIT_FAILURE;
         }
     }

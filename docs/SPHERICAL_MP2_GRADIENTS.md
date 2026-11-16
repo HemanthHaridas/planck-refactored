@@ -6,8 +6,9 @@ lifted to Cartesian once, at the skin. The one geometry routine that runs
 SCF → MP2 → gradient serves geometry optimization and the Hessian. Spherical
 and Cartesian RMP2/UMP2 now run `gradient`, `geomopt`, `frequency`,
 `geomoptfreq` and `imaginaryfollow`, all gated against PySCF. Refused by
-name: frozen-core MP2 gradients (every basis), RI-MP2 frequencies, and
-spherical RI-MP2 gradients. Status lives in `vault/Status/`.
+name: frozen-core MP2 gradients (every basis) and spherical RI-MP2
+gradients. RI-MP2 frequencies were added on 2026-11-16
+(`docs/RI_JK_ROUTINE_SCOPE.md` step 8). Status lives in `vault/Status/`.
 
 ## The design: Lagrangian in the working basis, lifted at the skin
 
@@ -149,8 +150,8 @@ Every printed digit, frequencies and MP2 energy:
 The cost is 6N MP2 gradients for N atoms, each with its own SCF and Z-vector
 solve, so MP2 frequencies are for small molecules.
 
-**Refusals kept:** `water_ri_rmp2_freq_rejected` (RI-MP2 frequencies are not
-validated), `water_ri_rmp2_spherical_gradient_rejected`.
+**Refusals kept:** `water_ri_rmp2_spherical_gradient_rejected`. (RI-MP2
+frequencies were refused here too until `docs/RI_JK_ROUTINE_SCOPE.md` step 8.)
 
 ### Why the gradient reference was PySCF's energy FD
 
@@ -179,5 +180,5 @@ frequency references rely on.
 - **Spherical RI-MP2 gradients**: the RI 3-centre derivative tensors are
   Cartesian-only (`compute_3c_eri_deriv` refuses a spherical basis). Part of
   the combined RI item in Open Work.
-- **RI-MP2 frequencies**: need only a gate against an FD of the RI-MP2
-  gradient.
+- **RI-MP2 frequencies**: done 2026-11-16 (`docs/RI_JK_ROUTINE_SCOPE.md`
+  step 8).

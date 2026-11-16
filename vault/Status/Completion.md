@@ -480,6 +480,24 @@ historical design context, but they are no longer the source of truth for
   (RI-MP2's CPHF route and `transform_eri_ri`); before, SOSCF rebuilt the AO
   tensor every step and stability used the exact Hessian. Eigenvalues equal
   PySCF stability on a density-fitted SCF (RHF and UHF).
+- **RI-MP2 frequencies, and a streamed RI derivative contraction
+  (2026-11-16, `docs/RI_JK_ROUTINE_SCOPE.md` steps 6–8).**
+  - **Frequencies.** RI-RMP2/UMP2 `frequency`, `geomoptfreq` and
+    `imaginaryfollow` run; no new code, only the refusal removed. PySCF has
+    no DF-MP2 gradient, so the reference is a fourth-order FD of PySCF's
+    RI-MP2 energy, central-differenced at Planck's 5e-3 Bohr step: water
+    1480.60/5000.85/5418.23 cm⁻¹ and water⁺ 1347.72/4689.10/4868.83, equal
+    to every printed digit (one last-digit rounding). Gated by
+    `water_ri_rmp2_freq_sto3g` and `water_radical_cation_ri_ump2_freq_sto3g`;
+    disabling the RI cache invalidation fails both by up to 41 cm⁻¹.
+  - **Streamed contraction.** The RI 2e gradient term contracted
+    3·natoms stored npair × naux derivative tensors (≈ 32 GB at 20 atoms,
+    nb = 300, JKFIT). One loop per class (`for_each_3c_deriv`,
+    `for_each_2c_deriv`) now feeds it element by element; equal to the
+    stored-tensor formula to 1.4e-14, RI-MP2 results unchanged.
+  - **`planck-dft` refuses `scf_ri_jk`.** It parsed the keyword and ran
+    exact integrals silently (`water_rks_pbe_rijk_rejected`).
+
 - **HF frequency SCFs warm-start from the reference density (2026-11-12,
   `docs/ANALYTIC_HESSIAN_SCOPE.md` lever 1).** 19–20 → 14 iterations per
   displaced SCF, but only 1.04× on C1 cyclohexane/6-31G (SCF is 14 % of the
@@ -516,8 +534,8 @@ historical design context, but they are no longer the source of truth for
     - `water_radical_cation_ump2_freq_sto3g` (Cartesian UMP2; was the
       `_rejected` case)
     - `water_rmp2_spherical_freq_631gd` (spherical RMP2)
-  - **Still refused.** RI-MP2 frequencies (`water_ri_rmp2_freq_rejected`,
-    now with its own message).
+  - **Then refused.** RI-MP2 frequencies (`water_ri_rmp2_freq_rejected`);
+    lifted 2026-11-16 (entry above).
 
 - **Spherical RMP2/UMP2 gradients and geometry optimization (2026-11-11,
   `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md` steps 1–4).**

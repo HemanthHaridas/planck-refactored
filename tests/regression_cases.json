@@ -2242,15 +2242,72 @@
    ]
   },
   {
-   "id": "water_ri_rmp2_freq_rejected",
-   "input": "tests/inputs/regression/post_hf/water_ri_rmp2_freq_rejected.hfinp",
+   "id": "water_ri_rmp2_freq_sto3g",
+   "input": "tests/inputs/regression/post_hf/water_ri_rmp2_freq_sto3g.hfinp",
    "tags": [
     "extended"
    ],
-   "_note": "Boundary marker, pins guard ORDERING. RI + frequency falls through the RI-MP2 workflow gate to the RI-MP2 frequency guard, which names the accurate reason: dense MP2 frequencies are PySCF-gated, RI-MP2 ones are not validated.",
-   "expected_exit_code": 1,
+   "timeout_s": 300,
+   "_pyscf_reference": "PySCF 2.15.0 has no DF-MP2 gradient, so tests/pyscf/ri_mp2_frequency_references.py builds the gradient as a fourth-order FD (1e-3 Bohr) of the RI-MP2 energy (dense SCF + DF-MP2, cc-pVDZ-RIFIT from Planck's GBS), then central differences at Planck's h = 5e-3 Bohr and thermo.harmonic_analysis. Independent of Planck's RI-MP2 gradient, its per-geometry RI cache invalidation and its Hessian loop. RI-RMP2/STO-3G water: 1480.60/5000.85/5418.23 cm-1, E -74.9767723887; Planck matches every printed digit. Was water_ri_rmp2_freq_rejected (docs/RI_JK_ROUTINE_SCOPE.md step 8).",
+   "expected_exit_code": 0,
    "contains": [
-    "RI-MP2 frequencies are not validated"
+    "Vibrational Frequencies",
+    "Total MP2 Energy                    -74.9767723"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1480.6,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 5000.85,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 5418.23,
+     "atol": 0.05
+    }
+   ]
+  },
+  {
+   "id": "water_radical_cation_ri_ump2_freq_sto3g",
+   "input": "tests/inputs/regression/open_shell/water_radical_cation_ri_ump2_freq_sto3g.hfinp",
+   "tags": [
+    "extended",
+    "open_shell"
+   ],
+   "timeout_s": 300,
+   "_pyscf_reference": "PySCF 2.15.0 has no DF-MP2 gradient, so tests/pyscf/ri_mp2_frequency_references.py builds the gradient as a fourth-order FD (1e-3 Bohr) of the RI-MP2 energy (dense SCF + DF-MP2, cc-pVDZ-RIFIT from Planck's GBS), then central differences at Planck's h = 5e-3 Bohr and thermo.harmonic_analysis. Independent of Planck's RI-MP2 gradient, its per-geometry RI cache invalidation and its Hessian loop. RI-UMP2/STO-3G water cation: 1347.72/4689.10/4868.83 cm-1, E -74.6833315533; Planck prints 1347.73 (last-digit rounding), the rest identical.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Vibrational Frequencies",
+    "Total MP2 Energy                    -74.6833315"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1347.72,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 4689.1,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 4868.83,
+     "atol": 0.05
+    }
    ]
   },
   {

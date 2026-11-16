@@ -52,15 +52,15 @@ teaching code) reorders it.
    Cartesian and spherical; JKFIT sets cut the fitting error from ~1e-3 to
    ≤ 9e-5 Eh; the fitted aux follows `basis_type`
    (`docs/RI_SPHERICAL_AUX.md`); derivative workflows refused (no RI-JK
-   gradient); ROHF, SOSCF and stability on the fitted operator. Remaining:
-   `planck-dft` (step 6), the RI-JK gradient (step 7).
-   Scope: `docs/RI_JK_ROUTINE_SCOPE.md`.
-   Take up the other RI work in the same item:
-   - **Spherical RI-MP2 gradients.** The RI 3c/2c derivative tensors are
-     Cartesian-only, and the spherical-gate refusal stays until then
-     (`docs/SPHERICAL_MP2_GRADIENTS.md`).
-   - **RI-DH** (O9 in §2).
-   - **G6**, the RI 2c/3c derivative profile (§5).
+   gradient); ROHF, SOSCF and stability on the fitted operator. 2026-11-16:
+   `planck-dft` refuses `scf_ri_jk` (it ignored it), the RI derivative
+   contraction is streamed, RI-MP2 frequencies are gated (steps 6–8).
+   Remaining, in dependency order: the RHF then UHF/ROHF RI-JK gradient
+   (9–10), the B0 pair-factor cache (11), KS RI-J/K and consumers (12–14),
+   the KS RI-JK gradient (15), spherical RI gradients for HF, KS and RI-MP2
+   (16). Scope: `docs/RI_JK_ROUTINE_SCOPE.md`.
+   After it: **RI-DH** (O9 in §2) and **G6**, the RI 2c/3c derivative
+   profile (§5).
 
 **Expected, with a workaround.**
 
@@ -181,9 +181,6 @@ further post-HF ghost-atom checks.
   Roothaan Fock, which does not exist in the tree. ROHF CASSCF and RASSCF
   support only a closed inactive core, and the parity guard rejects a
   spin-polarized one. ROHF is also outside full-symmetry direct SCF.
-- **RI-MP2 frequencies** are refused by name (`water_ri_rmp2_freq_rejected`).
-  Dense RMP2/UMP2 frequencies are gated; lifting the RI refusal needs only a
-  gate against an FD of the RI-MP2 gradient.
 - **PySCF < 2.15 analytic MP2 gradients miss their own energy FD** by up to
   4.2e-7 Ha/Bohr on C1 fixtures. It is fixed in PySCF 2.15.0 by its Krylov /
   CPHF early-termination fix (pyscf/pyscf#3334); 2.14.0 still has it.

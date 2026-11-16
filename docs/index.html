@@ -5370,7 +5370,7 @@ driver.cpp
 <tr><td>RI-consistent analytic MP2 gradient (RMP2 and UMP2)</td><td>Complete (3-center and 2-center derivative integrals, fitted 3-index 2-particle density <span class="math-inline">\(\Gamma^3\)</span>, RI-fitted CPHF orbital Hessian, RI Lagrangian; every stage of the gradient is fitted, so the gradient is the exact derivative of the RI energy). Finite-difference gated to <span class="math-inline">\(\sim3\times10^{-7}\)</span></td></tr>
 <tr><td>RI-MP2 geometry optimization (RHF and UHF references)</td><td>Complete</td></tr>
 <tr><td>RMP2 / UMP2 frequencies (dense)</td><td>Complete, Cartesian and spherical (semi-numerical Hessian of the analytic MP2 gradient; PySCF-gated by <code>water_radical_cation_ump2_freq_sto3g</code> and <code>water_rmp2_spherical_freq_631gd</code>)</td></tr>
-<tr><td>RI-MP2 frequencies</td><td>Not validated (refused by name; boundary marker <code>water_ri_rmp2_freq_rejected</code>)</td></tr>
+<tr><td>RI-MP2 frequencies (RHF and UHF references)</td><td>Complete (semi-numerical Hessian of the RI-MP2 gradient; gated by <code>water_ri_rmp2_freq_sto3g</code> and <code>water_radical_cation_ri_ump2_freq_sto3g</code> against a PySCF Hessian built from FD of the RI-MP2 energy)</td></tr>
 <tr><td>RCCSD single-point energy</td><td>Complete</td></tr>
 <tr><td>UCCSD single-point energy</td><td>Teaching-oriented small-system determinant-space prototype</td></tr>
 <tr><td>RCCSDT single-point energy</td><td>Determinant prototype for tiny systems plus tensor production/optimized entry points for larger restricted references; size-based default selected by <code>choose_rccsdt_backend</code>, optional override via <code>PLANCK_RCCSDT_BACKEND</code></td></tr>
