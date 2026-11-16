@@ -63,6 +63,10 @@ teaching code) reorders it.
    `docs/RI_JK_ROUTINE_SCOPE.md`. RI-MP2 gradients meet their own energy FD
    and run spherical since the orbital-response fix
    (`docs/RI_MP2_GRADIENT_RESPONSE.md`). Still open:
+   - **The RI-MP2 gradient forms the full nao⁴ AO pair density**
+     (`rmp2_pair_density` → `build_ri_gamma3_from_ao_dm2`), so it saves time,
+     not memory: benzene 6-31G* peaks at 1.75 GB. `build_ri_gamma3_ov` (the
+     ov-space route) exists but production does not use it. UMP2 likewise.
    - **RI-DH** (O9 in §2) and attenuated RI-K for range-separated
      functionals. (G6, the serial RI derivative loops, is done.)
 

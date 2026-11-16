@@ -4582,11 +4582,25 @@ Everything is enabled by the `mp2_use_ri` keyword, with the auxiliary basis
 named by `mp2_ri_basis`. Implementation: `src/post_hf/ri/ri_eri.cpp`, with the
 auxiliary-basis loader in `src/basis/rifit.cpp`.
 
+Two details of the cache matter. First, steps 1–4 and the pair factors
+\(\widetilde B_{\mu\nu}^{Q}\) are built once per geometry
+(`ensure_ri_3c_ready`) and shared by every RI consumer, RI-MP2 and RI-JK alike;
+one stamp of the geometry invalidates all of them when an atom moves
+(`ri_invalidate_if_geometry_moved`). Second, the auxiliary functions follow
+`basis_type`: a spherical orbital basis is fitted with spherical auxiliary
+functions, as in PySCF and every other code, because the published fitting
+sets were optimized as spherical sets. Fitting a spherical basis with Cartesian
+auxiliaries is not wrong, but it adds 14–20 % more functions and moves the
+energy by an amount of the order of the fitting error itself, which makes
+results incomparable with other codes (`docs/RI_SPHERICAL_AUX.md`).
+
 ### RI Beyond MP2: the JK Builder, CASSCF, and FCI
 
 Nothing in the RI factorization is specific to MP2. Once the fitted pair factors
 \(\widetilde B_{\mu\nu}^{Q}\) exist, *any* consumer of a four-center ERI can be
-re-expressed in terms of them. Planck exploits this in three further places.
+re-expressed in terms of them. Planck exploits this in three further places,
+and the stability analysis of an RI-JK SCF reads its MO integrals the same way
+(`transform_eri_ri`).
 
 #### The RI-JK Fock builder
 
@@ -4612,8 +4626,26 @@ K_{\mu\nu} = \sum_{Q}\sum_{i} \widetilde B_{\mu i}^{Q}\, \widetilde B_{\nu i}^{Q
 
 so \(K\) costs a half-transform into the occupied space followed by a Gram
 product. This is the standard reason RI helps Coulomb more than exchange.
-Functions: `build_ri_j`, `build_ri_k`, and the assembled `build_ri_fock_rhf` /
-`build_ri_fock_uhf`.
+
+Planck's `build_ri_k` does not take that route yet. It contracts the full AO
+density, \(K = \sum_Q \widetilde B^Q \mathbf P\, \widetilde B^{Q\mathsf T}\),
+which costs \(N^3\) per auxiliary function instead of \(N^2 n_{\text{occ}}\).
+It is the same matrix, and it takes any density, including the
+non-idempotent trial densities of a response calculation; the occupied form
+is the faster route when \(n_{\text{occ}} \ll N\) (open as "B2" in
+`docs/ERI_FOCK_BLAS_SCOPE.md`). Functions: `build_ri_j`, `build_ri_k`, and the
+assembled `build_ri_fock_rhf` / `build_ri_fock_uhf`.
+
+The `scf_ri_jk` keyword puts this builder in place of the exact Fock build,
+in the HF loops and in the Kohn-Sham assembly of `planck-dft` (pure and
+global-hybrid functionals; the range-separated, attenuated exchange has no
+fitted form yet and is refused). Everything that differentiates or
+linearizes that SCF then has to use the same fitted operator, or it describes
+a different energy: SOSCF and stability reach it through
+`SCF::two_electron_fock`, the one place the fitted/exact choice is made, and
+the SCF gradient's two-electron term comes from
+`build_ri_scf_two_electron_gradient`, which is the RI gradient of the next
+subsection applied to the SCF's own two-particle density.
 
 #### RI-routed CASSCF and FCI
 
@@ -4637,9 +4669,11 @@ auxiliary basis, not a bug.
 The subtle part is the gradient. It is not enough to compute an RI energy and
 then differentiate it with the dense gradient code — that would be
 differentiating one function while evaluating the derivative of another. To be
-a true derivative of the RI energy, *every* stage of the gradient must be
-fitted: the derivative integrals, the two-particle density, and the CPHF
-response.
+a true derivative of the RI energy, every term that differentiates a *fitted*
+quantity must itself be fitted: the derivative integrals and the two-particle
+density of the fitted correlation energy. Terms that differentiate the SCF
+follow the SCF, which is exact unless RI-JK is on (see the orbital response
+below).
 
 Differentiating the fitted ERI \((\mu\nu|\lambda\sigma) = \mathbf J \mathbf
 V^{-1} \mathbf J^{T}\) by the product rule gives two terms, because the metric
@@ -4688,9 +4722,19 @@ both RHF and UHF references, in Cartesian and spherical bases, and RI-MP2
 frequencies are gated against a PySCF Hessian built from finite differences
 of its RI-MP2 energy.
 
-Functions: `compute_3c_eri_deriv`, `compute_2c_eri_deriv`, `build_ri_gamma3_ov`,
-`build_ri_gamma3_from_ao_dm2`, `build_ri_two_electron_gradient`,
-`build_ri_imat`, all in `src/post_hf/ri/ri_eri.cpp`.
+The derivative integrals are never stored. A stored
+\(\partial J/\partial R\) is \(3 N_{\text{atoms}}\) matrices of
+\(N^2 N_{\text{aux}}\), about 32 GB for 20 atoms at \(N = 300\) with a JKFIT set; instead
+`build_ri_two_electron_gradient` contracts each derivative element the moment
+it is computed (`for_each_3c_deriv`, `for_each_2c_deriv`). Those loops run in
+parallel over auxiliary shells, and each shell accumulates into its own
+\(N_{\text{atoms}}\times 3\) partial, summed in shell order, so the gradient is
+identical at any thread count (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`, G6).
+
+Functions: `build_ri_two_electron_gradient`, `build_ri_scf_two_electron_gradient`,
+`build_ri_gamma3_ov`, `build_ri_gamma3_from_ao_dm2`, `build_ri_imat`, all in
+`src/post_hf/ri/ri_eri.cpp`; `compute_3c_eri_deriv` / `compute_2c_eri_deriv`
+store the derivative tensors for the unit tests.
 
 ### RMP2 Natural Orbitals
 
