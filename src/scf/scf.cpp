@@ -361,7 +361,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::SCF::two_electron_fock(
     const Eigen::MatrixXd &density)
 {
     // The SCF's own operator: fitted when the SCF ran RI-JK
-    // (docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md). The RI builders work in
+    // (docs/SCF_ORBITAL_HESSIAN_OPERATOR.md). The RI builders work in
     // the working basis, so no lift.
     if (calc._scf._ri_jk)
     {
@@ -917,7 +917,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
             const int n_occ_i = static_cast<int>(n_occ);
             const int n_virt_i = static_cast<int>(nbasis) - n_occ_i;
             // The orbital Hessian as an operator, one Fock build per action
-            // (docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md); "Amat" below is
+            // (docs/SCF_ORBITAL_HESSIAN_OPERATOR.md); "Amat" below is
             // this A.
             const auto Amat = HartreeFock::Correlation::OrbitalHessian::rhf(
                 calculator, shell_pairs, C_soscf_prev, eps_soscf_prev, n_occ_i);

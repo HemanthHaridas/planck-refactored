@@ -1,5 +1,5 @@
 // The HF orbital Hessian operator (Correlation::OrbitalHessian,
-// docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md) against an independent dense
+// docs/SCF_ORBITAL_HESSIAN_OPERATOR.md) against an independent dense
 // A_{bj,ai} = (e_a-e_i)δ + [4(ai|jb)-(ab|ji)-(aj|bi)] built here from
 // transform_eri:
 //   - exact operator (the SCF ran without RI-JK): equal to roundoff;

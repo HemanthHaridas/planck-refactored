@@ -1,14 +1,14 @@
 # Can the RHF orbital Hessian be matrix-free, so RHF and UHF share one path?
 
-Answer, 2026-11-16 (commit `9e9c2623`). It also fixed the RI-MP2 gradient:
-`docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`.
+Answered 2026-11-16 (opened as a scope 2026-11-16; commit `9e9c2623`).
+Status lives in `vault/Status/`.
 
 ## Answer
 
-**Yes, and nothing in production needed the explicit matrix.** Every
-consumer of an HF orbital Hessian only applies it to vectors, so RHF and UHF
-now share one matrix-free operator, `Correlation::OrbitalHessian`
-(`src/post_hf/orbital_hessian.{h,cpp}`):
+**Yes. Every consumer only applies the Hessian to vectors, so RHF and UHF
+now share one matrix-free operator, and nothing builds the matrix.** It is
+`Correlation::OrbitalHessian` (`src/post_hf/orbital_hessian.{h,cpp}`). Making
+it also fixed the RI-MP2 gradient (`docs/RI_MP2_GRADIENT_RESPONSE.md`).
 
 | Consumer | Before | Now |
 |---|---|---|
@@ -80,7 +80,11 @@ contraction path in `two_electron_fock` to win that back.
   fitted operator. `git grep build_ri_fock` should show only `scf.cpp`
   (inside `two_electron_fock`) and the RI-JK SCF loop.
 
-## Not answered here
+## Not done
+
+Nothing in this scope.
+
+## Not in this scope
 
 - **The KS orbital Hessians** (`src/dft/ks_orbital_hessian.cpp`) have the
   same shape with an XC term: RKS is diag + 2J + 2f_xc − cK. They need J and

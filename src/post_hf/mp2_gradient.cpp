@@ -149,7 +149,7 @@ namespace
         // veff of the relaxed density differentiates the SCF, so it uses the
         // SCF's own operator (fitted only under RI-JK), even for RI-MP2, whose
         // fit covers the correlation energy only
-        // (docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md). Density is symmetric at
+        // (docs/RI_MP2_GRADIENT_RESPONSE.md). Density is symmetric at
         // both call sites.
         return HartreeFock::SCF::two_electron_fock(calculator, shell_pairs, density);
     }

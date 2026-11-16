@@ -13,7 +13,7 @@ namespace HartreeFock::Correlation
     // build per action, through SCF::two_electron_fock{,_uhf}, the SCF's own
     // two-electron operator (fitted under scf_ri_jk, exact otherwise). The one
     // implementation behind the MP2 Z-vector (solve_rhf_cphf, solve_uhf_cphf)
-    // and HF SOSCF (docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md).
+    // and HF SOSCF (docs/SCF_ORBITAL_HESSIAN_OPERATOR.md).
     //
     // Rotations are packed a-major, x(a*nocc + i); UHF stacks [alpha | beta].
     //   RHF: (A x)_ai = (e_a - e_i) x_ai + [Cvᵀ · 2 G(D + Dᵀ) · Co]_ai,

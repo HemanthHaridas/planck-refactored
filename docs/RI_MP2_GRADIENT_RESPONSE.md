@@ -1,15 +1,19 @@
 # Why did the RI-MP2 gradient miss its own energy FD by ~4e-6 Ha/Bohr?
 
-Answer, 2026-11-16. Found in `docs/RI_JK_ROUTINE_SCOPE.md` step 16; fixed by
-`docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md` (commit `9e9c2623`).
+Answered 2026-11-16 (opened as a scope 2026-11-16, from
+`docs/RI_JK_ROUTINE_SCOPE.md` step 16). Status lives in `vault/Status/`.
 
 ## Answer
 
 **The orbital-response terms used the fitted operator, but the SCF they
-respond to is exact.** Planck's RI-MP2 energy is the exact-integral HF
-energy plus a density-fitted correlation energy (`mp2_use_ri` fits only the
-correlation; the SCF stays exact unless `scf_ri_jk` is also set). Each term
-of the gradient must use the operator of the energy it differentiates:
+respond to is exact. Both now use the SCF's own operator, and the gradient
+meets its energy FD at the dense-MP2 floor (1.1–1.5e-7 Ha/Bohr).** The fix
+is `docs/SCF_ORBITAL_HESSIAN_OPERATOR.md` (commit `9e9c2623`).
+
+Planck's RI-MP2 energy is the exact-integral HF energy plus a density-fitted
+correlation energy (`mp2_use_ri` fits only the correlation; the SCF stays
+exact unless `scf_ri_jk` is also set). Each term of the gradient must use
+the operator of the energy it differentiates:
 
 | Gradient piece | Differentiates | Must use | Before the fix |
 |---|---|---|---|
@@ -68,7 +72,11 @@ Step 4 of the RI-JK scope later widened `fitted_response` to include
 - Spherical RI-MP2 gradients are no longer refused
   (`water_ri_rmp2_spherical_gradient_rejected` retired).
 
-## Not in this answer
+## Not done
+
+Nothing in this scope.
+
+## Not in this scope
 
 - **RI-MP2 on RI-JK orbitals** (`scf_ri_jk` with a correlated gradient) stays
   refused. Its response is now fitted, which is correct, but its HF-reference

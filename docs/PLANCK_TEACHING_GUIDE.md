@@ -4681,7 +4681,7 @@ gradient then missed its own energy finite difference by
 exact operator it is \(1.3\times10^{-7}\), the dense-MP2 floor. The rule:
 each term uses the operator of the energy it differentiates. Both response
 terms go through `SCF::two_electron_fock`, which is fitted only when the SCF
-itself ran RI-JK (`docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`).
+itself ran RI-JK (`docs/RI_MP2_GRADIENT_RESPONSE.md`).
 
 The payoff is that RI-MP2 gradients and geometry optimizations are available for
 both RHF and UHF references, in Cartesian and spherical bases, and RI-MP2
@@ -5169,7 +5169,7 @@ to the same operator and solver (it used to build \(\mathbf A\) from the full
 AO ERI tensor and an \(N^4\) MO transform, even inside a direct SCF), and SOSCF
 applies the operator too, so no consumer forms the matrix. On 4 H2O/cc-pVDZ
 direct, that made RHF SOSCF 7.1\(\times\) and the RMP2 gradient
-1.24\(\times\) faster (`docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md`).
+1.24\(\times\) faster (`docs/SCF_ORBITAL_HESSIAN_OPERATOR.md`).
 
 The comparison against the dense solution is worth knowing how to read: the
 two agree to \(1.2\times10^{-8}\) of \(\max|z|\), and tightening GMRES stops

@@ -59,7 +59,7 @@ namespace HartreeFock::Correlation
         }
 
         // The orbital Hessian of the SCF's own operator (exact, or fitted under
-        // RI-JK), applied matrix-free: docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md.
+        // RI-JK), applied matrix-free: docs/SCF_ORBITAL_HESSIAN_OPERATOR.md.
         const OrbitalHessian hessian = OrbitalHessian::rhf(calculator, shell_pairs, mo_coeff, mo_energy, n_occ);
         if (debug_rhf_response())
             maybe_print_rhf_response_matrix("A", hessian.materialize());

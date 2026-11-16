@@ -41,7 +41,7 @@ found in step 16 (below).
 | `planck-dft` pure and global-hybrid energies (RI-J, RI-K) | **Done**, = PySCF (steps 12–13) |
 | `planck-dft` SOSCF, stability | **Done**, eigenvalues = PySCF DF (step 14) |
 | `planck-dft` gradients, geomopt (RKS, UKS) | **Done**, = PySCF, Cartesian and spherical (steps 15–16) |
-| RI-MP2 gradients at the FD floor; spherical RI-MP2 gradients | **Done** (`docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`): 1.1–1.5e-7 against its own energy FD, Cartesian and spherical |
+| RI-MP2 gradients at the FD floor; spherical RI-MP2 gradients | **Done** (`docs/RI_MP2_GRADIENT_RESPONSE.md`): 1.1–1.5e-7 against its own energy FD, Cartesian and spherical |
 | `planck-dft` range-separated with RI-JK | **Refused** by name (attenuated RI not implemented) |
 | Full point-group symmetry | Refused |
 
@@ -167,7 +167,7 @@ machinery RI-MP2 already had:
   (Since replaced: the orbital-Hessian operator applies
   `SCF::two_electron_fock{,_uhf}`, which is fitted under `scf_ri_jk` alone;
   the `mp2_use_ri` half was the RI-MP2 gradient defect,
-  `docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`.)
+  `docs/RI_MP2_GRADIENT_RESPONSE.md`.)
 - Stability (`stability.cpp`) reads its MO blocks through `transform_eri_ri`
   under `scf_ri_jk`. It keys on `scf_ri_jk` alone, because it analyses the
   SCF operator, which RI-MP2 does not change.
@@ -507,7 +507,7 @@ green.
 (its γ3 comes from the working-basis pair density), but its FD check failed
 by 3.5e-6 (RMP2) / 1.6e-6 (UMP2), as did the same check in a Cartesian basis:
 the RI-MP2 gradient itself was off. Once that was fixed
-(`docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`) the refusal was removed; the
+(`docs/RI_MP2_GRADIENT_RESPONSE.md`) the refusal was removed; the
 spherical FD gates read 1.1e-7 / 1.5e-7.
 
 ## Not in this scope

@@ -452,8 +452,8 @@ historical design context, but they are no longer the source of truth for
 ### Recent fixes now considered landed
 
 - **One matrix-free HF orbital Hessian; RI-MP2 gradients fixed and run
-  spherical (2026-11-16, `9e9c2623`; `docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md`,
-  `docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`).**
+  spherical (2026-11-16, `9e9c2623`; `docs/SCF_ORBITAL_HESSIAN_OPERATOR.md`,
+  `docs/RI_MP2_GRADIENT_RESPONSE.md`).**
   - **One operator.** `Correlation::OrbitalHessian` applies the RHF or UHF
     orbital Hessian with one `SCF::two_electron_fock{,_uhf}` call. The RHF
     and UHF Z-vectors are GMRES on it, and RHF/UHF SOSCF pass it as `h_op`.

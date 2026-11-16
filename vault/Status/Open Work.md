@@ -62,7 +62,7 @@ teaching code) reorders it.
    gradients run in a spherical basis too (16). The scope is answered:
    `docs/RI_JK_ROUTINE_SCOPE.md`. RI-MP2 gradients meet their own energy FD
    and run spherical since the orbital-response fix
-   (`docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`). Still open:
+   (`docs/RI_MP2_GRADIENT_RESPONSE.md`). Still open:
    - **RI-DH** (O9 in §2), **G6** (the serial RI derivative loops, §5),
      and attenuated RI-K for range-separated functionals.
 
