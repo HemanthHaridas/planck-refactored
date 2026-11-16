@@ -2096,6 +2096,7 @@ namespace DFT::Driver
                         // (docs/SOSCF_DFT.md invariant 2/3).
                         DFT::Driver::KsOrbitalHessianInputs h_in;
                         h_in.basis = &calculator._shells;
+                        h_in.ri = calculator._scf._ri_jk ? &calculator : nullptr;
                         h_in.shell_pairs = &prepared.shell_pairs;
                         h_in.molecular_grid = &prepared.molecular_grid;
                         h_in.ao_grid = &prepared.ao_grid;
@@ -2650,6 +2651,7 @@ namespace DFT::Driver
 
                     DFT::Driver::UksOrbitalHessianInputs h_in;
                     h_in.basis = &calculator._shells;
+                    h_in.ri = calculator._scf._ri_jk ? &calculator : nullptr;
                     h_in.shell_pairs = &prepared.shell_pairs;
                     h_in.molecular_grid = &prepared.molecular_grid;
                     h_in.ao_grid = &prepared.ao_grid;
@@ -3066,10 +3068,8 @@ namespace DFT::Driver
                 return refuse("a range-separated functional (the RI integrals are Coulomb-kernel only)");
             if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
                 return refuse(workflow_label(calculator._calculation));
-            if (calculator._scf._scf_soscf_diis_tol > 0.0 || calculator._scf._scf_soscf_start > 0)
-                return refuse("SOSCF");
-            if (calculator._scf._stability_check || calculator._scf._stability_follow)
-                return refuse("stability analysis");
+            // SOSCF and stability: the KS orbital Hessian takes the fitted J/K
+            // under RI (KsOrbitalHessianInputs::ri, step 14).
             if (calculator._solvation._model != HartreeFock::SolvationModel::None)
                 return refuse("PCM");
             return {};
@@ -3710,6 +3710,7 @@ namespace DFT::Driver
 
             DFT::Driver::UksOrbitalHessianInputs h_in;
             h_in.basis = &calculator._shells;
+            h_in.ri = calculator._scf._ri_jk ? &calculator : nullptr;
             h_in.shell_pairs = &prepared.shell_pairs;
             h_in.molecular_grid = &prepared.molecular_grid;
             h_in.ao_grid = &prepared.ao_grid;
@@ -3790,6 +3791,7 @@ namespace DFT::Driver
 
             DFT::Driver::UksOrbitalHessianInputs h_in;
             h_in.basis = &calculator._shells;
+            h_in.ri = calculator._scf._ri_jk ? &calculator : nullptr;
             h_in.shell_pairs = &prepared.shell_pairs;
             h_in.molecular_grid = &prepared.molecular_grid;
             h_in.ao_grid = &prepared.ao_grid;

@@ -485,9 +485,11 @@ historical design context, but they are no longer the source of truth for
   adds the fitted J and K in the working basis after projecting the other
   terms. Water RKS/UKS PBE, spherical water RKS PBE, and water RKS, water⁺
   UKS and C1 H2O2 RKS B3LYP equal PySCF `density_fit()` to every printed
-  digit (6-31G*, def2-universal-JKFIT). Range-separated functionals,
-  derivatives, TDDFT, SOSCF, stability, PCM and counterpoise with
-  `scf_ri_jk` are refused by name.
+  digit (6-31G*, def2-universal-JKFIT). KS SOSCF and stability use the
+  fitted operator (step 14): stability eigenvalues equal PySCF on
+  `density_fit()` to all seven digits; the exact-integral Hessian was up to
+  6.7e-6 off. Range-separated functionals, derivatives, TDDFT, PCM and
+  counterpoise with `scf_ri_jk` are refused by name.
 
 - **RI pair factors cached per geometry (2026-11-16, B0;
   `docs/RI_JK_ROUTINE_SCOPE.md` step 11).** B = J V^{-1/2} is built once by

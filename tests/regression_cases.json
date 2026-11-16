@@ -1419,6 +1419,82 @@
    ]
   },
   {
+   "id": "water_rks_b3lyp_rijk_soscf_stability_631gd",
+   "input": "tests/inputs/regression/ri/water_rks_b3lyp_rijk_soscf_stability_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "KS orbital Hessian on the fitted operator (docs/RI_JK_ROUTINE_SCOPE.md step 14): singlet gen_g_hop_rhf/2 +0.3242326, triplet rhf_external +0.2702975. PySCF 2.15.0 on dft.RKS(...).density_fit(), 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590 (tests/pyscf/ri_jk_dft_references.py). Planck matches every printed digit. With the exact-integral Hessian at the RI orbitals (the pre-step-14 behaviour) the eigenvalues move by 6.7e-6 (singlet) and 5e-7 (triplet), so atol is 2e-7. SOSCF reaches the RI DIIS energy.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT SOSCF :",
+    "RKS -> RKS (real, internal)",
+    "RKS -> UKS (triplet, external)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4009488436,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_internal",
+     "expected": 0.3242326,
+     "atol": 2e-07
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_triplet",
+     "expected": 0.2702975,
+     "atol": 2e-07
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_pbe_rijk_soscf_stability_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_uks_pbe_rijk_soscf_stability_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft",
+    "open_shell"
+   ],
+   "_pyscf_reference": "UKS orbital Hessian on the fitted operator (step 14): gen_g_hop_uhf +0.0688955. PySCF 2.15.0 on dft.UKS(...).density_fit(), 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590 (tests/pyscf/ri_jk_dft_references.py). Planck matches every printed digit. With the exact-integral Hessian at the RI orbitals (the pre-step-14 behaviour) the eigenvalues move by 6.4e-6, so atol is 2e-7. SOSCF reaches the RI DIIS energy.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT UKS SOSCF :",
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.8534904952,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_uks_internal",
+     "expected": 0.0688955,
+     "atol": 2e-07
+    }
+   ]
+  },
+  {
    "id": "water_rks_pbe_rijk_gradient_rejected",
    "input": "tests/inputs/regression/ri/water_rks_pbe_rijk_gradient_rejected.hfinp",
    "executable": "planck-dft",

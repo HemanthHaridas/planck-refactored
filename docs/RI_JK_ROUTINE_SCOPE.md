@@ -20,9 +20,9 @@ for a Cartesian basis, equal to PySCF's density-fitted gradient to every
 printed digit. Spherical RI-JK derivatives are still refused by name.
 
 **Kohn-Sham: pure and global-hybrid single points work** (RI-J, RI-K), RKS
-and UKS, equal to PySCF to every printed digit. Range-separated functionals,
-derivatives, TDDFT, SOSCF, stability, PCM and counterpoise with RI-JK are
-refused by name in `planck-dft`.
+and UKS, equal to PySCF to every printed digit, and SOSCF and stability use
+the fitted operator. Range-separated functionals, derivatives, TDDFT, PCM and
+counterpoise with RI-JK are refused by name in `planck-dft`.
 
 | | Status |
 |---|---|
@@ -37,7 +37,8 @@ refused by name in `planck-dft`.
 | RI-JK RHF/UHF/ROHF gradient, geomopt, frequencies (Cartesian) | **Done**, = PySCF (steps 9–10) |
 | RI-JK spherical derivatives | **Refused** by name; step 16 |
 | `planck-dft` pure and global-hybrid energies (RI-J, RI-K) | **Done**, = PySCF (steps 12–13) |
-| `planck-dft` derivatives, SOSCF, stability | **Refused** by name; steps 14–15 |
+| `planck-dft` SOSCF, stability | **Done**, eigenvalues = PySCF DF (step 14) |
+| `planck-dft` derivatives | **Refused** by name; step 15 |
 | `planck-dft` range-separated with RI-JK | **Refused** by name; out of scope (attenuated RI) |
 | Full point-group symmetry | Refused; out of scope |
 
@@ -65,20 +66,10 @@ combination.
 
 | Step | What | Needs |
 |---|---|---|
-| 14 | KS SOSCF and stability on RI | — |
 | 15 | KS RI-JK gradient, Cartesian | — |
 | 16 | Spherical RI gradients: RI-JK HF and KS, and RI-MP2 | 15 |
 
-12 is next; every remaining step follows from it.
-
-### 14. KS consumers
-
-`ks_orbital_hessian.cpp` (SOSCF and stability) builds J/K directly at four
-sites: route them through RI under `_ri_jk`, as step 4 did for HF. Refuse by
-name with `scf_ri_jk`: TDDFT (`run_linear_response` builds a dense ERI
-tensor; RI response needs its own decision) and double hybrids
-(`dh_pt2_gradient.cpp`, `udh_ks_response.cpp`; RI-DH is its own item). Gates:
-as step 4, against PySCF stability on `density_fit()`.
+15 is next; 16 lifts the spherical refusals for HF, KS and RI-MP2 together.
 
 ### 15. KS RI-JK gradient, Cartesian
 
@@ -447,6 +438,32 @@ functionals by name: the RI 2c/3c integrals are Coulomb-kernel only.
 Gated by `water_rks_b3lyp_rijk_631gd` (was `water_rks_b3lyp_rijk_rejected`),
 `water_cation_uks_b3lyp_rijk_631gd`, `h2o2_rks_b3lyp_rijk_631gd` and the
 marker `water_rks_hse06_rijk_rejected`.
+
+### 14. KS SOSCF and stability use the fitted operator
+
+`KsOrbitalHessianInputs` and `UksOrbitalHessianInputs`
+(`src/dft/ks_orbital_hessian.h`) carry an optional `ri` Calculator pointer,
+set at the four call sites under `scf_ri_jk`. With it, the J and K responses
+come from `build_ri_j`/`build_ri_k` on a working-basis trial density, packed
+with the working MOs (the RI builders work in the working basis), with the
+direct path's prefactors (RKS J − ½c K under `kernel_scale`; UKS J − c K_σ).
+The unpacked factors are built once per operator, not per product. The XC
+kernel term stays on its Cartesian path. `validate_ri_jk_support` no longer
+refuses SOSCF or stability.
+
+| Case (6-31G*, def2-universal-JKFIT, 150 × 590) | PySCF on `density_fit()` | Planck | exact-integral Hessian |
+|---|---|---|---|
+| water RKS B3LYP, singlet (gen_g_hop_rhf/2) | +0.3242326 | +0.3242326 | +0.3242393 |
+| water RKS B3LYP, triplet (rhf_external) | +0.2702975 | +0.2702975 | +0.2702970 |
+| water⁺ UKS PBE (gen_g_hop_uhf) | +0.0688955 | +0.0688955 | +0.0689020 |
+
+SOSCF reaches the RI DIIS energy with superlinear gradient decay (RKS
+3.5e-3 → 2.3e-4 → 1.6e-5). Gated by
+`{water_rks_b3lyp,water_cation_uks_pbe}_rijk_soscf_stability_631gd` (core) at
+atol 2e-7, which the exact-integral Hessian fails on every eigenvalue (the
+existing KS stability gates' 1e-6 would miss the triplet's 5e-7). The SOSCF
+energy check cannot tell the two Hessians apart: both converge to the RI
+minimum.
 
 ## Not in this scope
 

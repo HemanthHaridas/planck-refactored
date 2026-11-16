@@ -1,8 +1,10 @@
 #include "ks_orbital_hessian.h"
+#include <memory>
 #include "analytic_hessian.h"
 #include "response_packing.h"
 #include "integrals/base.h"
 #include "basis/spherical.h"
+#include "post_hf/ri/ri_eri.h"
 
 namespace DFT::Driver
 {
@@ -11,6 +13,42 @@ namespace DFT::Driver
         bool spherical(const HartreeFock::Basis *basis) { return basis && basis->_spherical; }
 
         using HartreeFock::BasisFunctions::mos_to_cartesian;
+
+        // Fitted J/K response for one symmetric working-basis trial density
+        // (docs/RI_JK_ROUTINE_SCOPE.md step 14). The unpacked factors are built
+        // once per operator; the RI builders take and return working-basis
+        // matrices, so the caller packs them with the working MOs.
+        struct RiResponse
+        {
+            const HartreeFock::Calculator *calc = nullptr;
+            std::shared_ptr<const std::vector<Eigen::MatrixXd>> unpacked;
+
+            static RiResponse make(const HartreeFock::Calculator *calc, double exchange)
+            {
+                RiResponse r{calc, nullptr};
+                if (calc && exchange != 0.0)
+                    r.unpacked = std::make_shared<const std::vector<Eigen::MatrixXd>>(
+                        HartreeFock::Correlation::RI::build_ri_3index_unpacked(*calc));
+                return r;
+            }
+            Eigen::MatrixXd J(const Eigen::MatrixXd &D) const
+            {
+                return HartreeFock::Correlation::RI::build_ri_j(*calc, D);
+            }
+            Eigen::MatrixXd K(const Eigen::MatrixXd &D) const
+            {
+                return HartreeFock::Correlation::RI::build_ri_k(*calc, D, unpacked.get());
+            }
+        };
+
+        std::expected<void, std::string> check_ri(const HartreeFock::Calculator *ri, double c_sr)
+        {
+            if (ri && c_sr != 0.0)
+                return std::unexpected("orbital Hessian: RI-JK has no short-range (attenuated) exchange");
+            if (ri && ri->_ri_pair_factors.size() == 0)
+                return std::unexpected("orbital Hessian: RI-JK cache is not ready");
+            return {};
+        }
 
         std::expected<void, std::string> check_mo_rows(const HartreeFock::Basis &basis,
                                                        std::initializer_list<const Eigen::MatrixXd *> mos)
@@ -26,6 +64,11 @@ namespace DFT::Driver
     build_ks_orbital_hessian_op(const KsOrbitalHessianInputs &in_working)
     {
         KsOrbitalHessianInputs in = in_working;
+        if (auto ok = check_ri(in.ri, in.short_range_exchange_coefficient); !ok)
+            return std::unexpected(ok.error());
+        // Working-basis MOs for the RI response, before the Cartesian lift.
+        const Eigen::MatrixXd Co_w = in.C_occ, Cv_w = in.C_virt;
+        const RiResponse ri = RiResponse::make(in.ri, in.full_range_exchange_coefficient);
         if (spherical(in.basis))
         {
             if (auto ok = check_mo_rows(*in.basis, {&in.C_occ, &in.C_virt}); !ok)
@@ -42,7 +85,7 @@ namespace DFT::Driver
         const std::size_t nb = static_cast<std::size_t>(in.density.rows());
         const Eigen::VectorXd diag = orbital_energy_difference_diagonal(in.eps, nocc);
         return std::function<Eigen::VectorXd(const Eigen::VectorXd &)>(
-            [in = std::move(in), nocc, nvirt, nb, diag](const Eigen::VectorXd &x) -> Eigen::VectorXd
+            [in = std::move(in), nocc, nvirt, nb, diag, Co_w, Cv_w, ri](const Eigen::VectorXd &x) -> Eigen::VectorXd
         {
             Eigen::MatrixXd xm(nvirt, nocc);
             for (int a = 0; a < nvirt; ++a)
@@ -50,14 +93,25 @@ namespace DFT::Driver
                     xm(a, i) = x(a * nocc + i);
             const Eigen::MatrixXd d1 = in.C_virt * xm * in.C_occ.transpose();
             const Eigen::MatrixXd dp = d1 + d1.transpose();
-            const Eigen::MatrixXd dj = _compute_2e_j_direct(
-                *in.shell_pairs, dp, nb, in.engine, HartreeFock::ERIKernel::Coulomb,
-                0.0, in.tol_eri, in.sym_ops);
             const auto dvxc = compute_analytic_xc_hessian_vector_product(
                 *in.molecular_grid, *in.ao_grid, in.density, dp,
                 *in.x_functional, *in.c_functional);
             if (!dvxc)
                 return Eigen::VectorXd::Zero(x.size());
+            if (in.ri)
+            {
+                const Eigen::MatrixXd d1w = Cv_w * xm * Co_w.transpose();
+                const Eigen::MatrixXd dpw = d1w + d1w.transpose();
+                Eigen::MatrixXd djk = ri.J(dpw);
+                if (in.full_range_exchange_coefficient != 0.0)
+                    djk.noalias() -= 0.5 * in.full_range_exchange_coefficient * ri.K(dpw);
+                return diag.cwiseProduct(x) + in.kernel_scale * (
+                    pack_hessian_vector_product_cphf_order(djk, Co_w, Cv_w) +
+                    pack_hessian_vector_product_cphf_order(*dvxc, in.C_occ, in.C_virt));
+            }
+            const Eigen::MatrixXd dj = _compute_2e_j_direct(
+                *in.shell_pairs, dp, nb, in.engine, HartreeFock::ERIKernel::Coulomb,
+                0.0, in.tol_eri, in.sym_ops);
             Eigen::MatrixXd dk = Eigen::MatrixXd::Zero(dj.rows(), dj.cols());
             if (in.full_range_exchange_coefficient != 0.0)
                 dk.noalias() += in.full_range_exchange_coefficient * _compute_2e_k_direct(
@@ -78,6 +132,10 @@ namespace DFT::Driver
     build_uks_orbital_hessian_op(const UksOrbitalHessianInputs &in_working)
     {
         UksOrbitalHessianInputs in = in_working;
+        if (auto ok = check_ri(in.ri, in.short_range_exchange_coefficient); !ok)
+            return std::unexpected(ok.error());
+        const Eigen::MatrixXd Cao_w = in.Ca_occ, Cav_w = in.Ca_virt, Cbo_w = in.Cb_occ, Cbv_w = in.Cb_virt;
+        const RiResponse ri = RiResponse::make(in.ri, in.full_range_exchange_coefficient);
         if (spherical(in.basis))
         {
             if (auto ok = check_mo_rows(*in.basis, {&in.Ca_occ, &in.Ca_virt, &in.Cb_occ, &in.Cb_virt}); !ok)
@@ -103,7 +161,7 @@ namespace DFT::Driver
         const Eigen::VectorXd diag_b = orbital_energy_difference_diagonal(in.eps_b, nb_occ);
         return std::function<Eigen::VectorXd(const Eigen::VectorXd &)>(
             [in = std::move(in), kernel = std::move(*kernel), na, nva, nb_occ, nvb, nova, novb, nb, diag_a,
-             diag_b](const Eigen::VectorXd &x) -> Eigen::VectorXd
+             diag_b, Cao_w, Cav_w, Cbo_w, Cbv_w, ri](const Eigen::VectorXd &x) -> Eigen::VectorXd
         {
             Eigen::MatrixXd xa(nva, na), xb(nvb, nb_occ);
             for (int a = 0; a < nva; ++a)
@@ -116,6 +174,31 @@ namespace DFT::Driver
             const Eigen::MatrixXd dPa = d1a + d1a.transpose();
             const Eigen::MatrixXd d1b = in.Cb_virt * xb * in.Cb_occ.transpose();
             const Eigen::MatrixXd dPb = d1b + d1b.transpose();
+
+            if (in.ri)
+            {
+                const auto dV = kernel.apply(dPa, dPb);
+                if (!dV)
+                    return Eigen::VectorXd::Zero(x.size());
+                const Eigen::MatrixXd ea = Cav_w * xa * Cao_w.transpose(), eb = Cbv_w * xb * Cbo_w.transpose();
+                const Eigen::MatrixXd dPa_w = ea + ea.transpose(), dPb_w = eb + eb.transpose();
+                Eigen::MatrixXd Ga = ri.J(dPa_w + dPb_w);
+                Eigen::MatrixXd Gb = Ga;
+                const double c = in.full_range_exchange_coefficient;
+                if (c != 0.0)
+                {
+                    Ga.noalias() -= c * ri.K(dPa_w);
+                    Gb.noalias() -= c * ri.K(dPb_w);
+                }
+                Eigen::VectorXd out(nova + novb);
+                out.head(nova) = diag_a.cwiseProduct(x.head(nova)) +
+                                 pack_hessian_vector_product_cphf_order(Ga, Cao_w, Cav_w) +
+                                 pack_hessian_vector_product_cphf_order(dV->first, in.Ca_occ, in.Ca_virt);
+                out.tail(novb) = diag_b.cwiseProduct(x.tail(novb)) +
+                                 pack_hessian_vector_product_cphf_order(Gb, Cbo_w, Cbv_w) +
+                                 pack_hessian_vector_product_cphf_order(dV->second, in.Cb_occ, in.Cb_virt);
+                return out;
+            }
 
             // J from the total trial density, as the UKS Coulomb build.
             const Eigen::MatrixXd dJ = _compute_2e_j_direct(
