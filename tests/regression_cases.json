@@ -969,6 +969,21 @@
    ]
   },
   {
+   "id": "water_rks_pbe_rijk_rejected",
+   "input": "tests/inputs/regression/ri/water_rks_pbe_rijk_rejected.hfinp",
+   "executable": "planck-dft",
+   "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 6). planck-dft parsed scf_ri_jk but no Kohn-Sham path read it, so the run used exact integrals silently. Lift when KS RI-J lands (step 12).",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 1,
+   "contains": [
+    "RI-JK SCF (scf_ri_jk) is not supported in planck-dft"
+   ]
+  },
+  {
    "id": "nh3_rmp2_sto3g",
    "input": "inputs/examples/hf/mp2_validation/val_nh3.hfinp",
    "tags": [

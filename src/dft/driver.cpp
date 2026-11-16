@@ -5551,6 +5551,14 @@ namespace DFT::Driver
 
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Input Parsing :", "Successful");
 
+        // RI-JK is parsed by the shared input layer but no Kohn-Sham path uses
+        // it: without this refusal a KS run with scf_ri_jk would silently use
+        // exact integrals (docs/RI_JK_ROUTINE_SCOPE.md step 6; lifted by 12).
+        if (calculator._scf._ri_jk)
+            return std::unexpected(
+                "RI-JK SCF (scf_ri_jk) is not supported in planck-dft yet: Kohn-Sham "
+                "J and K are built with exact integrals. Disable RI-JK (scf_ri_jk false).");
+
         // Counterpoise: the shared five-calculation driver, each sub-calculation
         // a KS single point (docs/DFT_COUNTERPOISE.md §1).
         if (calculator._bsse._enabled)
