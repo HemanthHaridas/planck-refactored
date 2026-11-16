@@ -62,8 +62,8 @@ terms ~5 %, no pragma anywhere in `src/gradient/` or `mp2_gradient.cpp`.
 - `src/post_hf/mp2_gradient.cpp`: the RMP2/UMP2 gradient intermediates and the
   shared T2 → AO helpers (`pair_half_density`, `back_transform_half_density`,
   `add_symmetrized`).
-- `src/post_hf/uhf_response.cpp`: `UHFOrbitalHessian`, `solve_uhf_cphf`
-  (matrix-free GMRES), `build_uhf_cphf_matrix` (dense, for SOSCF).
+- `src/post_hf/orbital_hessian.cpp`: `OrbitalHessian`, the matrix-free
+  RHF/UHF orbital Hessian; `solve_rhf_cphf` / `solve_uhf_cphf` run GMRES on it.
 - `src/dft/response_gmres.h`: `DFT::Response::gmres`, shared with the
   double-hybrid Z-vector.
 

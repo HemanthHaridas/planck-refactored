@@ -295,7 +295,8 @@ The loop is standard: build G, F = H + G (RHF), α/β Fock (UHF), or the Roothaa
 |---|---|
 | `mp2.h`, `mp2_rmp2.cpp`, `mp2_ump2.cpp`, `mp2_internal.{h,cpp}`, `mp2_t2_storage.cpp` | `rmp2_kernel` / `ump2_kernel` (energies, frozen core), `rmp2_make_natural_orbitals`; layouts mirror PySCF's `_ChemistsERIs` |
 | `mp2_gradient.{h,cpp}` | RMP2 and UMP2 relaxed densities and gradient intermediates |
-| `rhf_response.{h,cpp}`, `uhf_response.{h,cpp}` | CPHF / Z-vector machinery and orbital Hessians (`build_rhf_cphf_matrix`, `build_uhf_cphf_matrix`), shared with SOSCF and stability; the UHF Z-vector is matrix-free GMRES |
+| `orbital_hessian.{h,cpp}` | `OrbitalHessian`: the matrix-free RHF/UHF orbital Hessian, one `SCF::two_electron_fock{,_uhf}` call per action (fitted under `scf_ri_jk`, exact otherwise); used by the Z-vector solves and HF SOSCF |
+| `rhf_response.{h,cpp}`, `uhf_response.{h,cpp}` | CPHF / Z-vector solves (`solve_rhf_cphf`, `solve_uhf_cphf`): GMRES on `OrbitalHessian` with the orbital-gap diagonal preconditioner |
 
 ### CI engine, FCI and FCIQMC (`ci/`, `fci.{h,cpp}`, `fciqmc_driver.{h,cpp}`)
 

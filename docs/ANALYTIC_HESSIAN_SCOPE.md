@@ -56,7 +56,7 @@ What it needs, none of which exists:
   derivative machinery (`_compute_eri_deriv_elem`) is first order only. This
   is the bulk of the work, and the ERI part is the expensive part.
 - **3N CPHF solves** for the orbital response to each nuclear coordinate.
-  `solve_rhf_cphf` and `build_rhf_cphf_matrix` (`rhf_response.h`) exist; the
+  `solve_rhf_cphf` and the matrix-free `OrbitalHessian` exist; the
   RHS (S^x, F^x in the MO basis) does not.
 - Assembly: Hellmann-Feynman second derivatives + response + overlap terms.
 

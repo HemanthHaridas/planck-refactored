@@ -1426,7 +1426,7 @@ which vanishes at the SCF stationary point exactly when \(\mathbf F^{\text{MO}}\
 is diagonal — the same condition DIIS's commutator error targets, seen from
 the orbital-rotation side instead of the AO-matrix side. The Hessian is the
 RHF orbital Hessian already used elsewhere in Planck for the MP2 Z-vector /
-CPHF equations (`build_rhf_cphf_matrix`, §15):
+CPHF equations (`OrbitalHessian`, §15):
 \[
 A_{ai,bj} = (\varepsilon_a - \varepsilon_i)\,\delta_{ab}\delta_{ij}
     + 4(ai|jb) - (ab|ji) - (aj|bi).
@@ -1478,15 +1478,16 @@ Hessian are now two coupled blocks. The rotation matrix splits into a
 \(\boldsymbol\kappa^\alpha\) and a \(\boldsymbol\kappa^\beta\), the gradient
 is \((g^\alpha_{ai}, g^\beta_{ai}) = (F^{\text{MO},\alpha}_{ai},
 F^{\text{MO},\beta}_{ai})\) packed into one vector, and the Hessian is the
-coupled \(\alpha/\beta\) CPHF matrix `build_uhf_cphf_matrix` already builds
-for the UMP2 Z-vector equations — split out into a standalone builder so
-SOSCF can call it every iteration. One shared step vector comes back from
+coupled \(\alpha/\beta\) CPHF operator the UMP2 Z-vector equations use
+(`OrbitalHessian::uhf`), applied directly by the augmented-Hessian solver.
+(It was first a dense matrix built one column per Fock build; the solver
+only ever needs its action, so no matrix is formed now.) One shared step vector comes back from
 the solver; it is unpacked into \(\boldsymbol\kappa^\alpha\) and
 \(\boldsymbol\kappa^\beta\) and `apply_orbital_rotation` is called once per
 spin channel (the same helper, not a forked copy).
 
 Two things had to be measured rather than assumed. First, the
-UHF gradient/Hessian scale: finite-differencing `build_uhf_cphf_matrix`
+UHF gradient/Hessian scale: finite-differencing the UHF orbital Hessian
 against the true \(E(\boldsymbol\kappa)\) over a full sweep of every
 occupied-virtual direction gives a clean, universal
 \(g_{\text{FD}}/g_{\text{used}} = 2\) — *not* the factor of 4 that appears
@@ -1505,7 +1506,7 @@ sweep.
 
 #### DFT: the Hessian Has No Single Matrix
 
-For Kohn-Sham DFT there is no `build_rhf_cphf_matrix` analogue — the KS
+For Kohn-Sham DFT there is no single two-electron operator to apply — the KS
 orbital Hessian is assembled from up to four pieces every time it acts on a
 trial vector \(\mathbf x\):
 \[
@@ -4670,16 +4671,22 @@ the dense \(n_{ao}^4\) pair density:
 \]
 
 which stays in the \(N^2 N_{\text{aux}}\) working set. The orbital-response
-half (§15) is fitted the same way: `build_rhf_cphf_matrix` routes to
-`build_rhf_cphf_matrix_ri` under `mp2_use_ri`, assembling the CPHF orbital
-Hessian from the three-center factors, and the Lagrangian `imat` is built by
-`build_ri_imat` through an \(N^2 N_{\text{aux}}\) intermediate rather than an
-\(N^4\) ERI.
+half (§15) is *not* fitted: the Lagrangian `imat` is built by `build_ri_imat`
+through an \(N^2 N_{\text{aux}}\) intermediate rather than an \(N^4\) ERI,
+because it differentiates the fitted correlation energy, but the CPHF orbital
+Hessian and the relaxed density's \(V_{\text{eff}}\) differentiate the SCF,
+which is exact. Planck once fitted those too ("every stage fitted"), and the
+gradient then missed its own energy finite difference by
+\(\sim4\times10^{-6}\) Ha/Bohr on water 6-31G*/cc-pVDZ-RIFIT; with the
+exact operator it is \(1.3\times10^{-7}\), the dense-MP2 floor. The rule:
+each term uses the operator of the energy it differentiates. Both response
+terms go through `SCF::two_electron_fock`, which is fitted only when the SCF
+itself ran RI-JK (`docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`).
 
 The payoff is that RI-MP2 gradients and geometry optimizations are available for
-both RHF and UHF references. RI-MP2 *frequencies* are refused by name: the
-Hessian loop would run them, but unlike dense MP2 frequencies they have no
-validating gate yet.
+both RHF and UHF references, in Cartesian and spherical bases, and RI-MP2
+frequencies are gated against a PySCF Hessian built from finite differences
+of its RI-MP2 energy.
 
 Functions: `compute_3c_eri_deriv`, `compute_2c_eri_deriv`, `build_ri_gamma3_ov`,
 `build_ri_gamma3_from_ao_dm2`, `build_ri_two_electron_gradient`,
@@ -5147,20 +5154,22 @@ assembled from the relaxed density and the appropriate derivative integrals.
 \(\mathbf A\) only through its action on a vector:
 \(\mathbf A\mathbf x = (\varepsilon_a - \varepsilon_i)\,x_{ai}\) plus the
 Coulomb/exchange response of the trial density \(C_v\,x\,C_o^{\mathsf T}\),
-which is one Fock build. RHF builds \(\mathbf A\) cheaply from MO integrals
-(`build_rhf_cphf_matrix`). The UHF solve used to build its
+which is one Fock build. The UHF solve used to build its
 \((n_{ov}^\alpha + n_{ov}^\beta)^2\) matrix one column at a time, one full
 direct UHF Fock build per unit column, then factor it. On 2 H2O⁺ / 6-31G\*
 that was 541 Fock builds, 59 % of the gradient. `solve_uhf_cphf` now hands
-the same operator (`UHFOrbitalHessian` in `uhf_response.cpp`) to the
+the same operator (now `OrbitalHessian` in `orbital_hessian.cpp`) to the
 restarted GMRES the double-hybrid Z-vector already uses
 (`DFT::Response::gmres`), preconditioned by the orbital-gap diagonal. It
 converges in 16 iterations, or 33 Fock builds, since GMRES spends one action
 per iteration on a fresh residual check. The operator is symmetric and
 positive definite at a stable minimum, so conjugate gradients would also
-work, but a second solver was not worth what it would save. The dense
-builder stays: SOSCF needs the matrix itself (§7), and it applies the same
-operator to unit vectors, so the two cannot drift apart.
+work, but a second solver was not worth what it would save. RHF later moved
+to the same operator and solver (it used to build \(\mathbf A\) from the full
+AO ERI tensor and an \(N^4\) MO transform, even inside a direct SCF), and SOSCF
+applies the operator too, so no consumer forms the matrix. On 4 H2O/cc-pVDZ
+direct, that made RHF SOSCF 7.1\(\times\) and the RMP2 gradient
+1.24\(\times\) faster (`docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md`).
 
 The comparison against the dense solution is worth knowing how to read: the
 two agree to \(1.2\times10^{-8}\) of \(\max|z|\), and tightening GMRES stops
@@ -10487,7 +10496,7 @@ driver.cpp
           DIIS.push(F, e)
           if SOSCF window active (RHF or UHF, §7):
               g, A = build orbital gradient/Hessian from PREVIOUS C, THIS F
-                     (build_rhf_cphf_matrix / build_uhf_cphf_matrix, {rhf,uhf}_response.cpp)
+                     (OrbitalHessian, orbital_hessian.cpp — applied, never formed)
               solve_augmented_hessian(g, A) → κ  (aug-hessian.h, shared with CASSCF)
               C = apply_orbital_rotation(C_prev, κ)   → new C directly (per spin for UHF)
           else:
@@ -10579,7 +10588,7 @@ driver.cpp
 | UHF SCF | `src/scf/scf.cpp` | `run_uhf` |
 | ROHF SCF | `src/scf/scf.cpp` | `run_rohf`, `_rohf_effective_fock`, `_reorder_rohf_orbitals` |
 | DIIS | `src/base/types.h` | `DIISState::push`, `DIISState::extrapolate` |
-| SOSCF (RHF/UHF augmented-Hessian orbital step) | `src/scf/scf.cpp` | the SOSCF branch inside `run_rhf` / `run_uhf`, using `build_rhf_cphf_matrix` / `build_uhf_cphf_matrix` and the shared `solve_augmented_hessian` / `apply_orbital_rotation` from CASSCF |
+| SOSCF (RHF/UHF augmented-Hessian orbital step) | `src/scf/scf.cpp` | the SOSCF branch inside `run_rhf` / `run_uhf`, applying `OrbitalHessian` (`orbital_hessian.cpp`) and the shared `solve_augmented_hessian` / `apply_orbital_rotation` from CASSCF |
 | SOSCF (RKS/UKS analytic-`fxc` orbital step) | `src/dft/driver.cpp` | the SOSCF branch inside `run_ks_scf_scaffold`, composing `orbital_energy_difference_diagonal` + Coulomb response + `compute_analytic_xc_hessian_vector_product{,_polarized}` (`src/dft/analytic_hessian.cpp`) into `h_op` |
 | Symmetry detection | `src/symmetry/symmetry.cpp` | `detectSymmetry` |
 | SAO basis | `src/symmetry/mo_symmetry.cpp` | `build_sao_basis` |
@@ -10596,7 +10605,7 @@ driver.cpp
 | RI-JK Fock builder | `src/post_hf/ri/ri_eri.cpp` | `build_ri_j`, `build_ri_k`, `build_ri_fock_rhf`, `build_ri_fock_uhf` |
 | RI derivative integrals (3c / 2c) | `src/post_hf/ri/ri_eri.cpp` | `compute_3c_eri_deriv`, `compute_2c_eri_deriv` |
 | RI 2-particle density and gradient | `src/post_hf/ri/ri_eri.cpp` | `build_ri_gamma3_ov`, `build_ri_gamma3_from_ao_dm2`, `build_ri_two_electron_gradient`, `build_ri_imat` |
-| RI-fitted CPHF orbital Hessian | `src/post_hf/rhf_response.cpp` | `build_rhf_cphf_matrix_ri` |
+| HF orbital Hessian (RHF/UHF, matrix-free; fitted only under `scf_ri_jk`) | `src/post_hf/orbital_hessian.cpp` | `OrbitalHessian::rhf` / `::uhf` over `SCF::two_electron_fock{,_uhf}` |
 | RCCSD setup/solve | `src/post_hf/cc/ccsd.cpp` | `prepare_rccsd`, `run_rccsd` |
 | UCCSD setup/solve | `src/post_hf/cc/ccsd.cpp` | `prepare_uccsd`, `run_uccsd` |
 | Determinant-space CC backend | `src/post_hf/cc/determinant_space.cpp` | `build_rhf_spin_orbital_system`, `build_uhf_spin_orbital_system`, `solve_determinant_cc` |
@@ -10611,8 +10620,8 @@ driver.cpp
 | Arbitrary-order runtime (amplitudes, denominators, residual dispatch) | `src/post_hf/cc/generated_arbitrary_runtime.cpp`, `generated_arbitrary_prepare.cpp` | `run_generated_arbitrary_order_iterations` |
 | The CC equation generator itself | `python/ccgen/` | see `docs/CCGEN_TEACHING_GUIDE.md` |
 | CC denominators/DIIS | `src/post_hf/cc/amplitudes.cpp`, `src/post_hf/cc/diis.cpp` | `build_denominator_cache`, `AmplitudeDIIS` |
-| CPHF Z-vector | `src/post_hf/rhf_response.cpp` | `build_rhf_cphf_matrix` |
-| UHF CPHF Z-vector (matrix-free) | `src/post_hf/uhf_response.cpp` | `solve_uhf_cphf` (GMRES over `UHFOrbitalHessian`); `build_uhf_cphf_matrix` (dense, for SOSCF) |
+| CPHF Z-vector | `src/post_hf/rhf_response.cpp` | `solve_rhf_cphf` (GMRES over `OrbitalHessian`) |
+| UHF CPHF Z-vector (matrix-free) | `src/post_hf/uhf_response.cpp` | `solve_uhf_cphf` (GMRES over `OrbitalHessian`) |
 | RMP2 gradient | `src/post_hf/mp2_gradient.cpp` | `compute_rmp2_gradient` |
 | Working-basis Fock build / MO lift | `src/scf/scf.cpp`, `src/basis/spherical.cpp` | `SCF::two_electron_fock{,_uhf}`, `BasisFunctions::mos_to_cartesian` |
 | Restricted double-hybrid gradient | `src/dft/dh_pt2_gradient.cpp`, `src/dft/driver.cpp` | `DHGradientDriverContract`; correction-only KS Z-vector, literal pair RHS/overlap, Eq. 33 assembly |
@@ -10692,7 +10701,7 @@ driver.cpp
 | Conventional and direct SCF | Complete |
 | Schwarz screening | Complete |
 | DIIS acceleration | Complete |
-| SOSCF (RHF/UHF, augmented-Hessian orbital step) | Complete. Runs as a transient window (default 3 iterations, `scf_soscf_cycles`) that hands back to DIIS; trigger by fixed iteration (`scf_soscf_start`) or DIIS-error threshold (`scf_soscf_diis_tol`/`scf_soscf_min_iter`). Reuses the CASSCF augmented-Hessian solver and the RHF/UHF CPHF orbital Hessian unchanged (UHF: `build_uhf_cphf_matrix` split out of `solve_uhf_cphf`, per-spin Cayley step). Off by default. ROHF, SAO, and PCM not yet covered; UHF and an active level shift are mutually exclusive |
+| SOSCF (RHF/UHF, augmented-Hessian orbital step) | Complete. Runs as a transient window (default 3 iterations, `scf_soscf_cycles`) that hands back to DIIS; trigger by fixed iteration (`scf_soscf_start`) or DIIS-error threshold (`scf_soscf_diis_tol`/`scf_soscf_min_iter`). Reuses the CASSCF augmented-Hessian solver and applies the matrix-free RHF/UHF orbital Hessian (`OrbitalHessian`) that the MP2 Z-vector uses (UHF: per-spin Cayley step). Off by default. ROHF, SAO, and PCM not yet covered; UHF and an active level shift are mutually exclusive |
 | SOSCF (RKS/UKS, analytic-`fxc` orbital step) | Complete for LDA, GGA, global hybrids (B3LYP, PBE0) and range-separated hybrids (HSE06). Same transient-window machinery. The KS orbital Hessian has no single matrix: `h_op` = orbital-energy diagonal + Coulomb response on the trial density + (hybrids) a direct exact-exchange response + an analytic XC second-derivative contraction (`compute_analytic_xc_hessian_vector_product{,_polarized}`, LDA + GGA), wired through libxc's `xc_{lda,gga}_fxc`. PCM and SAO blocking print a warning and fall back to DIIS. Off by default |
 | Level shifting | Complete |
 | Point group detection and SAO blocking | Complete |
@@ -10705,7 +10714,7 @@ driver.cpp
 | RI-MP2 / DF-MP2 energy (RHF and UHF references) | Complete (auxiliary basis, 2c metric with linear-dependence filtering, packed 3c tensor, fitted \(ov\) factors). Enable with `mp2_use_ri`; auxiliary basis via `mp2_ri_basis` |
 | RI-JK SCF (`scf_ri_jk`) | Complete for HF (RHF/UHF/ROHF) and pure or global-hybrid KS (RKS/UKS): energies, SOSCF, stability, analytic gradients, geometry optimization and frequencies, Cartesian and spherical, equal to PySCF density fitting (`docs/RI_JK_ROUTINE_SCOPE.md`). Range-separated functionals, TDDFT, PCM and counterpoise refused by name |
 | RI-routed CASSCF and FCI | Complete (the active-space transform routes through `transform_eri_ri` under `mp2_use_ri`; PySCF DF-CASSCF and DF-FCI gated to \(\sim10^{-9}\) Eh) |
-| RI-consistent analytic MP2 gradient (RMP2 and UMP2) | Complete (3-center and 2-center derivative integrals, fitted 3-index 2-particle density \(\Gamma^3\), RI-fitted CPHF orbital Hessian, RI Lagrangian; every stage of the gradient is fitted, meant to be the exact derivative of the RI energy). Known defect: misses its own energy FD by \(\sim4\times10^{-6}\) Ha/Bohr on water 6-31G*/cc-pVDZ-RIFIT (the STO-3G gate, \(\sim3\times10^{-7}\), is too loose to show it); spherical RI-MP2 gradients refused until it is fixed |
+| RI-consistent analytic MP2 gradient (RMP2 and UMP2) | Complete (3-center and 2-center derivative integrals, fitted 3-index 2-particle density \(\Gamma^3\), RI Lagrangian; the CPHF Hessian and relaxed-density \(V_{\text{eff}}\) use the exact SCF operator, since they differentiate the exact SCF). Matches its own energy FD to 1.1–1.5\(\times10^{-7}\) Ha/Bohr on water 6-31G*/cc-pVDZ-RIFIT, Cartesian and spherical (gates at 3\(\times10^{-7}\)) |
 | RI-MP2 geometry optimization (RHF and UHF references) | Complete |
 | RMP2 / UMP2 frequencies (dense) | Complete, Cartesian and spherical (semi-numerical Hessian of the analytic MP2 gradient; PySCF-gated by `water_radical_cation_ump2_freq_sto3g` and `water_rmp2_spherical_freq_631gd`) |
 | RI-MP2 frequencies (RHF and UHF references) | Complete (semi-numerical Hessian of the RI-MP2 gradient; gated by `water_ri_rmp2_freq_sto3g` and `water_radical_cation_ri_ump2_freq_sto3g` against a PySCF Hessian built from FD of the RI-MP2 energy) |
@@ -10748,7 +10757,7 @@ driver.cpp
 | Restricted global-double-hybrid analytic gradient | Complete for Cartesian AOs and LDA/GGA XC-II: gradient, geometry optimization, frequencies (central differences of analytic gradients) and geomopt+frequency. Water and C1 H2O2 B2PLYP/STO-3G energy-FD validated at two steps (Section 15). Range separation, solvent response, and DH response (TDDFT) workflows remain excluded |
 | UKS global-double-hybrid analytic gradient | Complete for `calculation gradient` only, with conventional all-active UMP2 (stored T2, no RI, no frozen core, no level shift), no solvent, and the qualified grid `grid_policy g4-3-v4` + `grid_radial_points 135` with no angular override. UKS DH geometry optimization and frequencies are rejected |
 | Range-separated double hybrids (for example \(\omega\)B2PLYP) | Complete for single-point energies |
-| Spherical harmonic basis | Complete for `hartree-fock` (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF, RHF/UHF/ROHF gradients, geomopt and frequencies, PCM). `planck-dft` runs spherical RKS/UKS single points, gradients, geomopt, frequencies, TDDFT, SOSCF, stability, checkpoint restart and PCM (`docs/SPHERICAL_DFT.md`). Dense RMP2/UMP2 gradients, geometry optimization and frequencies run spherical too (Section 15). Spherical RI-MP2 and double-hybrid gradients are rejected |
+| Spherical harmonic basis | Complete for `hartree-fock` (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF, RHF/UHF/ROHF gradients, geomopt and frequencies, PCM). `planck-dft` runs spherical RKS/UKS single points, gradients, geomopt, frequencies, TDDFT, SOSCF, stability, checkpoint restart and PCM (`docs/SPHERICAL_DFT.md`). Dense and RI RMP2/UMP2 gradients, geometry optimization and frequencies run spherical too (Section 15). Spherical double-hybrid gradients are rejected |
 | C-PCM solvation (RHF/UHF/RKS/UKS, Cartesian and spherical) | Complete: energies, analytic gradients, geometry optimization and frequencies (imaginary-mode following rejected) |
 | ESP-derived charges (CHELPG, RESP) | Complete for HF and DFT, optionally including the PCM reaction field |
 | PCM coupling to post-HF (MP2, CC, CASSCF) | Not implemented |

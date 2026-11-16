@@ -1,5 +1,10 @@
 # RHF SOSCF Architecture Note
 
+> **Since 2026-11-16 the dense orbital-Hessian builders this note names
+> (`build_rhf_cphf_matrix`, `build_uhf_cphf_matrix`) are gone.** SOSCF applies
+> the matrix-free `OrbitalHessian` instead; the Hessian and its conventions
+> are unchanged. See `docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md`.
+
 Canonical status now lives in:
 
 - `vault/Status/Completion.md`

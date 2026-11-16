@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-11-12
+Last updated: 2026-11-16
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -47,8 +47,8 @@ historical design context, but they are no longer the source of truth for
   genuinely open-shell (UHF/UKS) or closed-shell (RHF/RKS) systems, with
   superlinear gradient shrinkage.
   - **RHF/UHF** (`docs/SOSCF.md`, `docs/SOSCF_UHF.md`):
-    reuse `build_rhf_cphf_matrix` / `build_uhf_cphf_matrix` unchanged
-    (`build_uhf_cphf_matrix` split out of `solve_uhf_cphf` for this). UHF
+    reuse the MP2 Z-vector's orbital Hessian unchanged (since 2026-11-16
+    the matrix-free `OrbitalHessian`; it was first dense builders). UHF
     is FD-verified `g_true=2·g_used`, `H_true=2·Amat`; per-spin Cayley
     rotation + semicanonicalization; mutually exclusive with an active
     level shift.
@@ -451,6 +451,30 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **One matrix-free HF orbital Hessian; RI-MP2 gradients fixed and run
+  spherical (2026-11-16, `9e9c2623`; `docs/SCF_ORBITAL_HESSIAN_OPERATOR_SCOPE.md`,
+  `docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`).**
+  - **One operator.** `Correlation::OrbitalHessian` applies the RHF or UHF
+    orbital Hessian with one `SCF::two_electron_fock{,_uhf}` call. The RHF
+    and UHF Z-vectors are GMRES on it, and RHF/UHF SOSCF pass it as `h_op`.
+    Deleted: `build_rhf_cphf_matrix`, `build_rhf_cphf_matrix_ri`,
+    `build_uhf_cphf_matrix`, `UHFOrbitalHessian`, `RI::fitted_response`.
+  - **One fitted/exact choice.** `two_electron_fock` is fitted only when the
+    SCF ran RI-JK. Before, CPHF and the MP2 `veff` were fitted under
+    `mp2_use_ri` too, for an exact SCF.
+  - **RI-MP2 gradients** now meet their own energy FD on water
+    6-31G*/cc-pVDZ-RIFIT. Cartesian: RMP2 1.3e-7 (was 3.9e-6), UMP2⁺ 1.2e-7
+    (was 1.6e-6). Spherical: 1.1e-7 / 1.5e-7, so spherical RI-MP2 gradients
+    are no longer refused. Four `*_ri_*mp2_*gradient_631gd_fd` gates at
+    3e-7 replace `water_ri_rmp2_spherical_gradient_rejected`, and the STO-3G
+    RI-MP2 FD gates are tightened from 3e-4 to 3e-7.
+  - **Cost** (4 threads). 4 H2O/cc-pVDZ direct: RHF SOSCF 17.5 → 2.45 s,
+    RMP2 gradient 16.8 → 13.6 s. The old RHF path built the full AO tensor
+    inside a direct run. Small conventional cases lose ≤ 40 ms (water/6-31G*);
+    no cached-tensor path was added.
+  - Energies and gradients are unchanged to printed digits elsewhere; core
+    174/174.
+
 - **RI-JK SCF gated against PySCF (2026-11-12, `docs/RI_JK_ROUTINE_SCOPE.md`
   step 0).** `scf_ri_jk` had no regression case. Water, water⁺, C1 H2O2 and
   H2O2⁺ (RHF/UHF, Cartesian 6-31G*, cc-pVDZ-RIFIT) now equal PySCF
@@ -486,9 +510,9 @@ historical design context, but they are no longer the source of truth for
   loops (orbital Cᵀ G C per aux column, aux × T_aux, metric T_auxᵀ γ T_aux).
   Spherical water RHF, C1 H2O2⁺ UHF and water RKS PBE gradients equal PySCF
   density fitting to every printed digit.
-  - **Found, not fixed:** the RI-MP2 gradient misses its own energy FD by
-    ~4e-6 Ha/Bohr, Cartesian too (dense MP2 1.5e-7, FD-step independent), so
-    spherical RI-MP2 gradients stay refused with that reason.
+  - **Found:** the RI-MP2 gradient missed its own energy FD by ~4e-6
+    Ha/Bohr, Cartesian too, so spherical RI-MP2 gradients were refused.
+    Fixed the same day (orbital-Hessian entry above).
 
 - **RI-JK in `planck-dft` for pure and global-hybrid single points
   (2026-11-16, `docs/RI_JK_ROUTINE_SCOPE.md` steps 12–13).** The KS assembly
@@ -605,9 +629,8 @@ historical design context, but they are no longer the source of truth for
     CH3 UMP2 gradients against a fourth-order FD of PySCF's MP2 energy
     (≤ 1e-8, every component). Water RMP2 geomopt E_opt −76.1955706453
     equals PySCF `geometric` GAU_TIGHT to every printed digit.
-  - **Refusals.** Spherical RI-MP2 gradients stay refused
-    (`water_ri_rmp2_spherical_gradient_rejected`; reason updated 2026-11-16,
-    see the spherical RI gradients entry). MP2 frequencies stay
+  - **Refusals.** Spherical RI-MP2 gradients were refused here; enabled
+    2026-11-16 (orbital-Hessian entry above). MP2 frequencies stay
     refused in every basis (step 5).
   - **Found.** PySCF < 2.15's analytic `mp2.Gradients` misses its own
     energy FD by up to 4.2e-7 Ha/Bohr on C1 fixtures, so it was not used as

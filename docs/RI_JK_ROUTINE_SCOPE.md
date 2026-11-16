@@ -41,7 +41,7 @@ found in step 16 (below).
 | `planck-dft` pure and global-hybrid energies (RI-J, RI-K) | **Done**, = PySCF (steps 12–13) |
 | `planck-dft` SOSCF, stability | **Done**, eigenvalues = PySCF DF (step 14) |
 | `planck-dft` gradients, geomopt (RKS, UKS) | **Done**, = PySCF, Cartesian and spherical (steps 15–16) |
-| Spherical RI-MP2 gradients | **Refused**: the RI-MP2 gradient misses its own FD by ~4e-6 (Cartesian too) |
+| RI-MP2 gradients at the FD floor; spherical RI-MP2 gradients | **Done** (`docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`): 1.1–1.5e-7 against its own energy FD, Cartesian and spherical |
 | `planck-dft` range-separated with RI-JK | **Refused** by name (attenuated RI not implemented) |
 | Full point-group symmetry | Refused |
 
@@ -69,18 +69,6 @@ combination.
 
 ## Still open
 
-- **The RI-MP2 gradient misses its own energy FD by ~4e-6 Ha/Bohr**, found
-  in step 16. Cartesian water, 6-31G*/cc-pVDZ-RIFIT: RMP2 3.9e-6, UMP2
-  1.6e-6, independent of the FD step (4.16/3.93/3.93e-6 at 2e-3/1e-3/5e-4
-  Bohr); dense RMP2 on the same input 1.5e-7. So the error is in the
-  RI-specific terms (RI Lagrangian, RI CPHF or the 2e term's RI-MP2
-  density), not in the derivative integrals or the spherical lift, which the
-  HF/KS gates pin exactly. The existing gate (`water_ri_rmp2_gradient_fd`,
-  STO-3G, tolerance 3e-4) was too loose to see it. Cartesian RI-MP2
-  gradients ship with it today; spherical stays refused until it is fixed.
-  Cause found: the CPHF Hessian and `veff` use the fitted operator while the
-  SCF is exact; keying them on `scf_ri_jk` brings both to the FD floor
-  (1.3e-7 / 1.2e-7). Scope: `docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`.
 - **RI-DH (O9)**: RI-JK in `planck-dft` and the streamed contraction are
   in place.
 - **G6, profile the RI 2c/3c integrals**
@@ -176,6 +164,10 @@ machinery RI-MP2 already had:
 
 - The CPHF builders (`rhf_response.cpp`, `uhf_response.cpp`) take their
   fitted route under `RI::fitted_response(calc)` = `mp2_use_ri || scf_ri_jk`.
+  (Since replaced: the orbital-Hessian operator applies
+  `SCF::two_electron_fock{,_uhf}`, which is fitted under `scf_ri_jk` alone;
+  the `mp2_use_ri` half was the RI-MP2 gradient defect,
+  `docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`.)
 - Stability (`stability.cpp`) reads its MO blocks through `transform_eri_ri`
   under `scf_ri_jk`. It keys on `scf_ri_jk` alone, because it analyses the
   SCF operator, which RI-MP2 does not change.
@@ -511,11 +503,12 @@ Gated by `water_rhf_rijk_spherical_gradient_631gd` (was
 unpack factor fails both HF spherical cases and leaves the Cartesian ones
 green.
 
-**Spherical RI-MP2 stays refused.** The lift serves it too (its γ3 comes
-from the working-basis pair density), but its FD check failed by 3.5e-6
-(RMP2) / 1.6e-6 (UMP2), and the same check in a Cartesian basis fails by the
-same amount: the RI-MP2 gradient itself is off (see Still open).
-`water_ri_rmp2_spherical_gradient_rejected` now names that reason.
+**Spherical RI-MP2 was refused here, then enabled.** The lift serves it too
+(its γ3 comes from the working-basis pair density), but its FD check failed
+by 3.5e-6 (RMP2) / 1.6e-6 (UMP2), as did the same check in a Cartesian basis:
+the RI-MP2 gradient itself was off. Once that was fixed
+(`docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`) the refusal was removed; the
+spherical FD gates read 1.1e-7 / 1.5e-7.
 
 ## Not in this scope
 

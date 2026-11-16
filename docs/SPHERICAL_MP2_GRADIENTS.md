@@ -150,8 +150,10 @@ Every printed digit, frequencies and MP2 energy:
 The cost is 6N MP2 gradients for N atoms, each with its own SCF and Z-vector
 solve, so MP2 frequencies are for small molecules.
 
-**Refusals kept:** `water_ri_rmp2_spherical_gradient_rejected`. (RI-MP2
-frequencies were refused here too until `docs/RI_JK_ROUTINE_SCOPE.md` step 8.)
+**Refusals:** none left. Spherical RI-MP2 gradients were refused
+(`water_ri_rmp2_spherical_gradient_rejected`) until the RI-MP2 response was
+fixed (`docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`); RI-MP2 frequencies until
+`docs/RI_JK_ROUTINE_SCOPE.md` step 8.
 
 ### Why the gradient reference was PySCF's energy FD
 
@@ -177,10 +179,9 @@ frequency references rely on.
 
 - **Frozen-core MP2 gradients**: what they need is above. The next
   most-asked MP2 feature; it gets its own scope.
-- **Spherical RI-MP2 gradients**: the RI derivative contraction is no
-  longer the obstacle; it lifts to Cartesian exactly
-  (`docs/RI_JK_ROUTINE_SCOPE.md` step 16). They stay refused because the
-  RI-MP2 gradient misses its own energy FD by ~4e-6 Ha/Bohr in Cartesian too
-  (that doc, "Still open").
+- **Spherical RI-MP2 gradients**: done 2026-11-16. The RI derivative
+  contraction lifts to Cartesian exactly (`docs/RI_JK_ROUTINE_SCOPE.md`
+  step 16), and the RI-MP2 response defect is fixed
+  (`docs/RI_MP2_GRADIENT_RESPONSE_SCOPE.md`).
 - **RI-MP2 frequencies**: done 2026-11-16 (`docs/RI_JK_ROUTINE_SCOPE.md`
   step 8).
