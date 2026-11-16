@@ -255,6 +255,34 @@ Fock builds), not RI bookkeeping. Left alone: the 3c/2c kernels still run
 per Cartesian component, rebuilding the VRR for each; a shell-block kernel,
 as the 4-centre engines have, is the next lever if RI gradients grow.
 
+### The RI-MP2 pair density: factored, not nao⁴
+
+After G6 the RI-MP2 gradient still built the AO pair density as a full
+nao⁴ buffer (`rmp2_pair_density`; UMP2 built two), only to contract it with
+fitted aux factors. That made the RI gradient cheaper in time but not in
+memory. The pair density has a factored form: each block is
+L_o(p,i) L_v(q,a) t[(ia),(jb)] R_v(r,b) R_o(s,j) plus its p↔q image, and a
+contraction with a symmetric aux factor F[Q] over the ket is
+W[Q] = L_o G_Q L_vᵀ + its transpose, with G = t · (R_oᵀ F R_v) as one GEMM
+(`RI::PairDensityBlock`, `build_ri_gamma3_from_pair_blocks`,
+`build_ri_imat_from_pair_blocks`). RMP2 is one block (t = 4T − 2Tᵀ); UMP2 is
+αα, αβ and ββ, with the αβ block read bra↔ket for D_β. Under RI no nao⁴
+buffer is built; the dense path is unchanged.
+
+Benzene 6-31G\*/cc-pVDZ-RIFIT, 4 threads, peak memory footprint (resident
+memory is not a usable measure on this machine: macOS compresses pages near
+its 8 GiB limit, and one binary gave 1147 and 1852 MiB on two runs):
+
+| RI-MP2 gradient run | Before | After |
+|---|---|---|
+| direct SCF | 2137 MiB, 26.9 s | 332 MiB, 20.3 s |
+| default SCF (conventional, holds the 0.9 GB AO ERI tensor) | 2970 MiB, 27.6–29.2 s | 1993 MiB, 22.0 s |
+
+Gradients identical to every printed digit. `planck-ri-imat` now expands two
+synthetic blocks (unequal sizes, different bra and ket orbitals, weights 1
+and 2) into the dense pair density and requires both contractions to match
+it to 1e-12 (measured 4e-16 / 7e-16).
+
 ### Defects found on the way
 
 - **The SCF stored the DIIS extrapolation's orbitals.** G2's new summation
@@ -287,9 +315,10 @@ as the 4-centre engines have, is the next lever if RI gradients grow.
   - back-transforms ≤ 2 %.
 - The conventional MP2 gradients are bounded by their dense nao⁴ tensors
   (D_α, D_β, the ERI) in memory, not time. RI-MP2 is the route past that.
-- **RI gradients** (benzene 6-31G\*, G6): RI-JK 7.9 s for the whole run,
-  2.9 s of it SCF; RI-MP2 28.4 s, led by the 3c derivative kernel and the
-  dense reference terms.
+- **RI gradients** (benzene 6-31G\*): RI-JK 7.9 s for the whole run,
+  2.9 s of it SCF; RI-MP2 20.3 s and 332 MiB with a direct SCF, led by the
+  3c derivative kernel and the dense reference terms. With a conventional
+  SCF the AO ERI tensor sets the memory, not RI.
 
 ## What invariants matter
 

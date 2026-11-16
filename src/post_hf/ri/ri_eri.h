@@ -166,32 +166,41 @@ namespace HartreeFock::Correlation::RI
         const Eigen::MatrixXd &Pb,
         double exchange_coefficient = 1.0);
 
-    // Packed 3-index density and raw X factors for the RI 2e-gradient term
-    // (Step RG3.4), built from the AO separable density dm2buf[μ,ν,r,s] (the
-    // transitional nao⁴ buffer, row-major). Returns:
-    //   gamma3[(μν),Q] = Σ_{rs} dm2buf[μ,ν,r,s]·X[Q](r,s)   (packed μ≥ν × aux)
-    //   x_proj[(μν),Q] = X[(μν),Q]                          (raw J V^{-1} factors)
-    // both feeding build_ri_two_electron_gradient. X = J V^{-1} (build_ri_pair
-    // _factors then one more V^{-1/2}); dm2buf's bra μν is packed on the way out.
-    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_ri_gamma3_from_ao_dm2(
-        const HartreeFock::Calculator &calculator,
-        const std::vector<double> &dm2buf,
-        int nao);
+    // One block of an MP2 AO pair density, kept in factored form:
+    //   B[p,q,r,s] = Σ L_o(p,i) L_v(q,a) t[(ia),(jb)] R_v(r,b) R_o(s,j)
+    // (t rows i*n_a+a, columns j*n_b+b). The pair density is
+    //   dm2[p,q,r,s] = Σ_blocks weight · (B[p,q,r,s] + B[q,p,r,s]),
+    // the p<->q image always included. It is only ever contracted over its
+    // ket (r,s) with a symmetric factor, so an r<->s image is a factor 2 in
+    // weight, and a block read bra<->ket is the block with L and R swapped and
+    // t transposed. RMP2: one block, t = 4T - 2T^T, weight 1. UMP2: αα, ββ
+    // (½(T - T^T)) and αβ, weight 2 (mp2_gradient.cpp).
+    struct PairDensityBlock
+    {
+        Eigen::MatrixXd bra_occ, bra_virt; // L_o (nao × n_i), L_v (nao × n_a)
+        Eigen::MatrixXd ket_occ, ket_virt; // R_o (nao × n_j), R_v (nao × n_b)
+        Eigen::MatrixXd t;                 // (n_i·n_a) × (n_j·n_b)
+        double weight = 1.0;
+    };
 
-    // RI Lagrangian imat for the RMP2 gradient (Step RG3.3):
-    //   imat(q,v) = Σ_{p,r,s} (pq|rs) · dm2buf[p,v,r,s]
-    // factored through the fitted ERI (pq|rs) = Σ_Q B[Q](p,q) B[Q](r,s):
-    //   W[Q](p,v) = Σ_{rs} B[Q](r,s) · dm2buf[p,v,r,s]
-    //   imat(q,v) = Σ_Q Σ_p B[Q](p,q) · W[Q](p,v)  =  Σ_Q (B[Q]ᵀ W[Q])(q,v)
-    // dm2buf is the (transitional) dense nao⁴ separable density, laid out
-    // row-major [p][v][r][s]. Uses the unpacked per-aux factors
-    // (build_ri_3index_unpacked); intermediate is nao²·naux, never nao⁴ ERI.
-    // Matches the dense imat (before the −1 sign flip the caller applies) to
-    // fitting accuracy. Requires a ready RI cache.
-    Eigen::MatrixXd build_ri_imat(
+    // Packed 3-index density and raw X factors for the RI 2e-gradient term,
+    // from the factored pair density (never the nao⁴ AO buffer):
+    //   gamma3[(μν),Q] = Σ_{rs} (dm2[μ,ν,r,s] + dm2[ν,μ,r,s]) X[Q](r,s)  (μ≥ν packed)
+    //   x_proj[(μν),Q] = X[(μν),Q]                                       (J V^{-1})
+    // both feeding build_ri_two_electron_gradient with bra_prefolded = true.
+    // Working memory is ov·naux and npair·naux.
+    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_ri_gamma3_from_pair_blocks(
         const HartreeFock::Calculator &calculator,
-        const std::vector<double> &dm2buf,
-        int nao);
+        const std::vector<PairDensityBlock> &blocks);
+
+    // RI Lagrangian for the MP2 gradients, from the same factored density:
+    //   imat(q,v) = Σ_{p,r,s} (pq|rs)_fit · dm2[p,v,r,s] = Σ_Q (B[Q]^T W[Q])(q,v),
+    //   W[Q](p,v) = Σ_{rs} B[Q](r,s) dm2[p,v,r,s],
+    // with B the fitted factors (pq|rs)_fit = Σ_Q B[Q](p,q) B[Q](r,s). Before
+    // the caller's sign flip. Requires a ready RI cache.
+    Eigen::MatrixXd build_ri_imat_from_pair_blocks(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<PairDensityBlock> &blocks);
 
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator);

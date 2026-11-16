@@ -1465,40 +1465,80 @@ namespace HartreeFock::Correlation::RI
         }
     }
 
-    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_ri_gamma3_from_ao_dm2(
-        const HartreeFock::Calculator &calculator,
-        const std::vector<double> &dm2buf,
-        int nao)
+    namespace
     {
-        using RowMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+        // The shared core of the two pair-block contractions. For every aux
+        // function Q and a symmetric factor F[Q] (nao × nao, from factor(Q, F)),
+        //   W[Q](p,q) = Σ_{rs} dm2[p,q,r,s] F[Q](r,s)
+        //             = Σ_blocks weight (M + M^T),  M = L_o G_Q L_v^T,
+        //   G_Q(i,a)  = Σ_{jb} t[(ia),(jb)] (R_o^T F[Q] R_v)(j,b),
+        // and sink(Q, W) receives it. Two passes over Q (the ket factors, one
+        // GEMM per block, then W), each threaded over Q with Q-owned writes;
+        // sink runs concurrently for different Q and must write only Q-owned
+        // storage. Memory: (n_j·n_b + n_i·n_a) · naux per block.
+        template <typename Factor, typename Sink>
+        void for_each_pair_block_w(const std::vector<PairDensityBlock> &blocks,
+                                   Eigen::Index nao, Eigen::Index naux,
+                                   Factor &&factor, Sink &&sink)
+        {
+            using RowMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+            std::vector<Eigen::MatrixXd> ket(blocks.size());
+            for (std::size_t k = 0; k < blocks.size(); ++k)
+                ket[k].resize(blocks[k].ket_occ.cols() * blocks[k].ket_virt.cols(), naux);
+#pragma omp parallel for schedule(dynamic)
+            for (Eigen::Index Q = 0; Q < naux; ++Q)
+            {
+                Eigen::MatrixXd F(nao, nao);
+                factor(Q, F);
+                for (std::size_t k = 0; k < blocks.size(); ++k)
+                {
+                    const RowMat f = blocks[k].ket_occ.transpose() * F * blocks[k].ket_virt; // (j, b)
+                    ket[k].col(Q) = Eigen::Map<const Eigen::VectorXd>(f.data(), f.size());
+                }
+            }
+            std::vector<Eigen::MatrixXd> G(blocks.size());
+            for (std::size_t k = 0; k < blocks.size(); ++k)
+                G[k] = blocks[k].t * ket[k]; // (ia) × Q
+            ket.clear();
+#pragma omp parallel for schedule(dynamic)
+            for (Eigen::Index Q = 0; Q < naux; ++Q)
+            {
+                Eigen::MatrixXd W = Eigen::MatrixXd::Zero(nao, nao);
+                for (std::size_t k = 0; k < blocks.size(); ++k)
+                {
+                    const auto &b = blocks[k];
+                    const Eigen::Map<const RowMat> GQ(G[k].col(Q).data(), b.bra_occ.cols(), b.bra_virt.cols());
+                    const Eigen::MatrixXd M = b.bra_occ * GQ * b.bra_virt.transpose();
+                    W += b.weight * (M + M.transpose());
+                }
+                sink(Q, W);
+            }
+        }
+    }
+
+    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_ri_gamma3_from_pair_blocks(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<PairDensityBlock> &blocks)
+    {
         const Eigen::MatrixXd x_pair = build_ri_x_pair_factors(calculator);
         const Eigen::Index naux = x_pair.cols();
-        const Eigen::Index n = nao;
-        const Eigen::Index npair = n * (n + 1) / 2;
-
-        // Unpack X to full (r s) rows, one column per aux function:
-        // Xfull(r*n+s, Q) = X[Q](r,s) = X[Q](s,r).
-        Eigen::MatrixXd Xfull(n * n, naux);
-        for (Eigen::Index mu = 0, pr = 0; mu < n; ++mu)
-            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pr)
+        const auto n = static_cast<Eigen::Index>(calculator.working_nbasis());
+        Eigen::MatrixXd gamma3(n * (n + 1) / 2, naux);
+        for_each_pair_block_w(
+            blocks, n, naux,
+            [&](Eigen::Index Q, Eigen::MatrixXd &F)
             {
-                Xfull.row(mu * n + nu) = x_pair.row(pr);
-                Xfull.row(nu * n + mu) = x_pair.row(pr);
-            }
-
-        // dm2buf viewed as [(μ ν) full × (r s) full] row-major (μ,ν both full).
-        const Eigen::Map<const RowMat> D(dm2buf.data(), n * n, n * n);
-
-        // W[(μν) full, Q] = Σ_{rs} dm2buf[μ,ν,r,s] X[Q](r,s): one GEMM, not
-        // naux serial matrix-vector products (G6: 7 s of a benzene gradient).
-        const Eigen::MatrixXd W = D * Xfull;
-
-        // Packed bra folds μ<ν into μ≥ν: dm2buf[μν] + dm2buf[νμ].
-        Eigen::MatrixXd gamma3(npair, naux);
-        for (Eigen::Index mu = 0, pr = 0; mu < n; ++mu)
-            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pr)
-                gamma3.row(pr) = (mu == nu) ? Eigen::RowVectorXd(W.row(mu * n + nu))
-                                            : Eigen::RowVectorXd(W.row(mu * n + nu) + W.row(nu * n + mu));
+                for (Eigen::Index mu = 0, pr = 0; mu < n; ++mu)
+                    for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pr)
+                        F(mu, nu) = F(nu, mu) = x_pair(pr, Q);
+            },
+            [&](Eigen::Index Q, const Eigen::MatrixXd &W)
+            {
+                // Packed bra folds μ<ν into μ≥ν: dm2[μν] + dm2[νμ].
+                for (Eigen::Index mu = 0, pr = 0; mu < n; ++mu)
+                    for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pr)
+                        gamma3(pr, Q) = (mu == nu) ? W(mu, nu) : W(mu, nu) + W(nu, mu);
+            });
         return {gamma3, x_pair};
     }
 
@@ -1554,38 +1594,31 @@ namespace HartreeFock::Correlation::RI
         return build_ri_two_electron_gradient(calculator, gamma3, X);
     }
 
-    Eigen::MatrixXd build_ri_imat(
+    Eigen::MatrixXd build_ri_imat_from_pair_blocks(
         const HartreeFock::Calculator &calculator,
-        const std::vector<double> &dm2buf,
-        int nao)
+        const std::vector<PairDensityBlock> &blocks)
     {
-        using RowMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
         const std::vector<Eigen::MatrixXd> B = build_ri_3index_unpacked(calculator);
-        const Eigen::Index n = nao;
-
-        // dm2buf is row-major [p][v][r][s]; view as [(p v) × (r s)] row-major.
-        const Eigen::Map<const RowMat> M(dm2buf.data(), n * n, n * n);
-
-        // vec(B[Q]) over (r,s) with r*n+s packing to match M's columns, one
-        // column per aux function.
-        const Eigen::Index naux = static_cast<Eigen::Index>(B.size());
-        Eigen::MatrixXd Bfull(n * n, naux);
-        for (Eigen::Index Q = 0; Q < naux; ++Q)
-        {
-            const RowMat BQr = B[static_cast<std::size_t>(Q)]; // pack row-major to be exact
-            Bfull.col(Q) = Eigen::Map<const Eigen::VectorXd>(BQr.data(), n * n);
-        }
-        // W[Q](p,v) = Σ_rs B[Q](r,s) dm2buf[p,v,r,s]: one GEMM, not naux
-        // serial matrix-vector products (G6: 7 s of a benzene gradient).
-        const Eigen::MatrixXd Wall = M * Bfull;
-
+        const auto n = static_cast<Eigen::Index>(calculator.working_nbasis());
+        const auto naux = static_cast<Eigen::Index>(B.size());
+        // imat = Σ_Q B[Q]^T W[Q]: one partial per bin (Q mod kBins, a function
+        // of Q only), summed in bin order, so the result is the same at any
+        // thread count.
+        constexpr Eigen::Index kBins = 64;
+        std::vector<Eigen::MatrixXd> part(kBins, Eigen::MatrixXd::Zero(n, n));
+        std::vector<Eigen::MatrixXd> W_all(static_cast<std::size_t>(naux));
+        for_each_pair_block_w(
+            blocks, n, naux,
+            [&](Eigen::Index Q, Eigen::MatrixXd &F) { F = B[static_cast<std::size_t>(Q)]; },
+            [&](Eigen::Index Q, const Eigen::MatrixXd &W) { W_all[static_cast<std::size_t>(Q)] = W; });
+#pragma omp parallel for schedule(static)
+        for (Eigen::Index bin = 0; bin < kBins; ++bin)
+            for (Eigen::Index Q = bin; Q < naux; Q += kBins)
+                part[bin].noalias() += B[static_cast<std::size_t>(Q)].transpose() *
+                                       W_all[static_cast<std::size_t>(Q)];
         Eigen::MatrixXd imat = Eigen::MatrixXd::Zero(n, n);
-        for (Eigen::Index Q = 0; Q < naux; ++Q)
-        {
-            const Eigen::Map<const RowMat> W(Wall.col(Q).data(), n, n); // rows p, cols v
-            // imat(q,v) += Σ_p B[Q](p,q) W(p,v) = (B[Q]ᵀ W)(q,v).
-            imat.noalias() += B[static_cast<std::size_t>(Q)].transpose() * W;
-        }
+        for (const auto &p : part)
+            imat += p;
         return imat;
     }
 

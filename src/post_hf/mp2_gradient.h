@@ -48,7 +48,7 @@ namespace HartreeFock::Correlation
         Eigen::MatrixXd imat_mo;      // C^T imat_ao S C
         Eigen::MatrixXd Xvo;          // Z-vector RHS, n_virt x n_occ
 
-        std::vector<double> dm2buf_full; // T2->AO 2-RDM buffer; RI 2e-grad term reuses it
+        std::vector<double> dm2buf_full; // T2->AO 2-RDM buffer, dense path only (empty under RI)
     };
 
     // Mean-field response applied to an AO density, i.e. the quantity

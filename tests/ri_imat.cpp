@@ -1,10 +1,13 @@
-// RI-MP2 gradient: RI Lagrangian imat (Step RG3.3).
+// RI-MP2 gradient: the factored pair density (RI::PairDensityBlock) and its
+// two contractions, build_ri_imat_from_pair_blocks and
+// build_ri_gamma3_from_pair_blocks, which replaced the nao⁴ AO buffer.
 //
-// build_ri_imat computes  imat(q,v) = Σ_{p,r,s} (pq|rs)·dm2buf[p,v,r,s]
-// through the fitted ERI (pq|rs) = Σ_Q B[Q](p,q) B[Q](r,s), never forming the
-// nao⁴ ERI. Gate: RI imat vs a dense imat built from _compute_2e, to fitting
-// accuracy. dm2buf is a synthetic nao⁴ tensor — the contraction identity is
-// independent of whether it comes from real T2.
+// Two synthetic blocks (unequal occ/virt counts, different bra and ket
+// orbitals, weights 1 and 2) are expanded into the dense nao⁴ pair density by
+// the documented formula, and each contraction is checked against the same
+// contraction of that dense density through the same fitted factors (exact
+// algebra, 1e-12). The imat is also checked against the exact-ERI imat, to
+// fitting accuracy.
 
 #include <Eigen/Dense>
 #include <cmath>
@@ -83,39 +86,105 @@ int main()
         return ((static_cast<std::size_t>(p) * nao + q) * nao + r) * nao + s;
     };
 
-    // Synthetic nao⁴ dm2buf, row-major [p][v][r][s]. No symmetry assumed.
-    std::vector<double> dm2buf(static_cast<std::size_t>(nao) * nao * nao * nao);
-    for (int p = 0; p < nao; ++p)
-        for (int v = 0; v < nao; ++v)
-            for (int r = 0; r < nao; ++r)
-                for (int s = 0; s < nao; ++s)
-                    dm2buf[idx(p, v, r, s)] =
-                        std::sin(0.4 * p - 0.3 * v + 0.6 * r + 0.2 * s + 0.5);
+    // Synthetic orbitals and amplitudes; any values serve, the identity is
+    // algebraic.
+    const auto synth = [](Eigen::Index r, Eigen::Index c, double seed)
+    {
+        Eigen::MatrixXd m(r, c);
+        for (Eigen::Index i = 0; i < r; ++i)
+            for (Eigen::Index j = 0; j < c; ++j)
+                m(i, j) = std::sin(seed + 0.37 * i - 0.53 * j + 0.11 * i * j);
+        return m;
+    };
+    std::vector<PairDensityBlock> blocks;
+    blocks.push_back({synth(nao, 2, 0.1), synth(nao, 5, 0.2), synth(nao, 2, 0.1), synth(nao, 5, 0.2),
+                      synth(2 * 5, 2 * 5, 0.3), 1.0});
+    blocks.push_back({synth(nao, 3, 0.4), synth(nao, 4, 0.5), synth(nao, 2, 0.6), synth(nao, 5, 0.7),
+                      synth(3 * 4, 2 * 5, 0.8), 2.0});
 
-    // RI imat.
-    const Eigen::MatrixXd imat_ri = build_ri_imat(calc, dm2buf, nao);
+    // Dense dm2[p,q,r,s] = Σ weight (B[p,q,r,s] + B[q,p,r,s]),
+    // B[p,q,r,s] = Σ L_o(p,i) L_v(q,a) t[(ia),(jb)] R_v(r,b) R_o(s,j).
+    std::vector<double> dm2(static_cast<std::size_t>(nao) * nao * nao * nao, 0.0);
+    for (const auto &b : blocks)
+    {
+        const Eigen::Index ni = b.bra_occ.cols(), na = b.bra_virt.cols();
+        const Eigen::Index nj = b.ket_occ.cols(), nb = b.ket_virt.cols();
+        for (int p = 0; p < nao; ++p)
+            for (int q = 0; q < nao; ++q)
+                for (int r = 0; r < nao; ++r)
+                    for (int s = 0; s < nao; ++s)
+                    {
+                        double v = 0.0;
+                        for (Eigen::Index i = 0; i < ni; ++i)
+                            for (Eigen::Index a = 0; a < na; ++a)
+                                for (Eigen::Index j = 0; j < nj; ++j)
+                                    for (Eigen::Index c = 0; c < nb; ++c)
+                                    {
+                                        const double tv = b.t(i * na + a, j * nb + c) *
+                                                          b.ket_virt(r, c) * b.ket_occ(s, j);
+                                        v += (b.bra_occ(p, i) * b.bra_virt(q, a) +
+                                              b.bra_occ(q, i) * b.bra_virt(p, a)) * tv;
+                                    }
+                        dm2[idx(p, q, r, s)] += b.weight * v;
+                    }
+    }
 
-    // Dense imat from _compute_2e: imat(q,v) = Σ_prs (pq|rs) dm2buf[p,v,r,s].
+    // W[Q](p,v) = Σ_rs F[Q](r,s) dm2[p,v,r,s] for a symmetric factor F[Q].
+    const auto dense_w = [&](const Eigen::MatrixXd &F)
+    {
+        Eigen::MatrixXd W = Eigen::MatrixXd::Zero(nao, nao);
+        for (int p = 0; p < nao; ++p)
+            for (int v = 0; v < nao; ++v)
+                for (int r = 0; r < nao; ++r)
+                    for (int s = 0; s < nao; ++s)
+                        W(p, v) += F(r, s) * dm2[idx(p, v, r, s)];
+        return W;
+    };
+    const auto rel = [](const Eigen::MatrixXd &a, const Eigen::MatrixXd &b)
+    { return (a - b).norm() / std::max(b.norm(), 1e-300); };
+
+    // imat: Σ_Q B[Q]^T W[Q] through the same fitted factors.
+    const std::vector<Eigen::MatrixXd> B = build_ri_3index_unpacked(calc);
+    Eigen::MatrixXd imat_ref = Eigen::MatrixXd::Zero(nao, nao);
+    for (const auto &BQ : B)
+        imat_ref += BQ.transpose() * dense_w(BQ);
+    const Eigen::MatrixXd imat_ri = build_ri_imat_from_pair_blocks(calc, blocks);
+    std::cout << "imat, blocks vs dense pair density: " << rel(imat_ri, imat_ref) << '\n';
+    if (rel(imat_ri, imat_ref) > 1e-12)
+        fail("build_ri_imat_from_pair_blocks disagrees with the dense pair density");
+
+    // gamma3: packed (μ≥ν) W(μν) + W(νμ) against X = J V^{-1}.
+    const auto [gamma3, x_proj] = build_ri_gamma3_from_pair_blocks(calc, blocks);
+    Eigen::MatrixXd gamma3_ref(gamma3.rows(), gamma3.cols());
+    for (Eigen::Index Q = 0; Q < x_proj.cols(); ++Q)
+    {
+        Eigen::MatrixXd XQ(nao, nao);
+        for (int mu = 0, pr = 0; mu < nao; ++mu)
+            for (int nu = 0; nu <= mu; ++nu, ++pr)
+                XQ(mu, nu) = XQ(nu, mu) = x_proj(pr, Q);
+        const Eigen::MatrixXd W = dense_w(XQ);
+        for (int mu = 0, pr = 0; mu < nao; ++mu)
+            for (int nu = 0; nu <= mu; ++nu, ++pr)
+                gamma3_ref(pr, Q) = (mu == nu) ? W(mu, nu) : W(mu, nu) + W(nu, mu);
+    }
+    std::cout << "gamma3, blocks vs dense pair density: " << rel(gamma3, gamma3_ref) << '\n';
+    if (rel(gamma3, gamma3_ref) > 1e-12)
+        fail("build_ri_gamma3_from_pair_blocks disagrees with the dense pair density");
+
+    // Fitting accuracy: the RI imat against the exact-ERI imat.
     const std::vector<double> eri = _compute_2e(
         build_shellpairs(calc._shells), static_cast<std::size_t>(nao),
         calc._integral._engine, HartreeFock::ERIKernel::Coulomb, 0.0, 1e-12, nullptr);
     Eigen::MatrixXd imat_dense = Eigen::MatrixXd::Zero(nao, nao);
     for (int q = 0; q < nao; ++q)
         for (int v = 0; v < nao; ++v)
-        {
-            double val = 0.0;
             for (int p = 0; p < nao; ++p)
                 for (int r = 0; r < nao; ++r)
                     for (int s = 0; s < nao; ++s)
-                        val += eri[idx(p, q, r, s)] * dm2buf[idx(p, v, r, s)];
-            imat_dense(q, v) = val;
-        }
-
-    const double rel =
-        (imat_ri - imat_dense).norm() / std::max(imat_dense.norm(), 1e-300);
-    std::cout << "RI imat vs dense imat: ‖Δ‖/‖ref‖ = " << rel << '\n';
-    if (rel > 1e-2)
-        fail("RI imat disagrees with dense beyond fitting accuracy (>1e-2)");
+                        imat_dense(q, v) += eri[idx(p, q, r, s)] * dm2[idx(p, v, r, s)];
+    std::cout << "RI imat vs exact-ERI imat: " << rel(imat_ri, imat_dense) << '\n';
+    if (rel(imat_ri, imat_dense) > 1e-2)
+        fail("RI imat disagrees with the exact-ERI imat beyond fitting accuracy (>1e-2)");
 
     if (g_ok)
         std::cout << "PASS: ri_imat\n";

@@ -451,6 +451,16 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **RI-MP2 gradient without the nao⁴ AO pair density (2026-11-16,
+  `docs/GRADIENT_INTEGRAL_PERFORMANCE.md`).** The RI-MP2 gradient built the
+  full AO pair density (UMP2 two), then fitted it, so RI saved time but not
+  memory. The density is now kept factored (`RI::PairDensityBlock`: RMP2
+  one block, UMP2 αα/αβ/ββ), and γ³ and the Lagrangian come from ov-sized
+  intermediates and one GEMM per block. Benzene 6-31G\*/cc-pVDZ-RIFIT,
+  direct SCF: peak footprint 2137 → 332 MiB, 26.9 → 20.3 s; gradients equal
+  to every printed digit. `planck-ri-imat` checks both contractions against
+  the dense pair density to 1e-12; 57/57 RI cases pass.
+
 - **RI integral and derivative loops threaded (G6, 2026-11-16,
   `docs/GRADIENT_INTEGRAL_PERFORMANCE.md`).** Measured first on benzene
   6-31G\* at 4 threads: the gradient was 23.1 of 27.4 s (RI-JK, JKFIT) and

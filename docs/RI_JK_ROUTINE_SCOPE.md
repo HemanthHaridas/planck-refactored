@@ -42,6 +42,7 @@ found in step 16 (below).
 | `planck-dft` SOSCF, stability | **Done**, eigenvalues = PySCF DF (step 14) |
 | `planck-dft` gradients, geomopt (RKS, UKS) | **Done**, = PySCF, Cartesian and spherical (steps 15–16) |
 | RI 3c/2c integral and derivative loops threaded (G6) | **Done**: benzene 6-31G* RI-JK gradient 27.4 → 7.9 s, RI-MP2 51.1 → 28.4 s (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`) |
+| RI-MP2 gradient without the nao⁴ AO pair density | **Done**: factored pair density; benzene 6-31G* direct-SCF peak 2137 → 332 MiB (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`) |
 | RI-MP2 gradients at the FD floor; spherical RI-MP2 gradients | **Done** (`docs/RI_MP2_GRADIENT_RESPONSE.md`): 1.1–1.5e-7 against its own energy FD, Cartesian and spherical |
 | `planck-dft` range-separated with RI-JK | **Refused** by name (attenuated RI not implemented) |
 | Full point-group symmetry | Refused |

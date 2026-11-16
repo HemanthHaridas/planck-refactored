@@ -4704,7 +4704,13 @@ the dense \(n_{ao}^4\) pair density:
 \Gamma^3_{(ia),Q} = \sum_{jb} D_{(ia),(jb)}\, \widetilde B_{(jb),Q}
 \]
 
-which stays in the \(N^2 N_{\text{aux}}\) working set. The orbital-response
+which stays in the \(N^2 N_{\text{aux}}\) working set. Planck never forms the
+AO pair density to get there: each amplitude block is kept factored as
+\(C_o\,\tilde t\,C_v\) on both legs, the ket legs are contracted with the
+auxiliary factor first, and one GEMM over the amplitudes gives the
+occupied-virtual intermediate (`RI::PairDensityBlock`). An RI-MP2 gradient on
+benzene/6-31G\* with a direct SCF peaks at 332 MiB this way, against 2.1 GiB
+when the \(N^4\) AO pair density was built and then fitted. The orbital-response
 half (§15) is *not* fitted: the Lagrangian `imat` is built by `build_ri_imat`
 through an \(N^2 N_{\text{aux}}\) intermediate rather than an \(N^4\) ERI,
 because it differentiates the fitted correlation energy, but the CPHF orbital

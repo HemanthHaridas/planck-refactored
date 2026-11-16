@@ -246,6 +246,67 @@ namespace
         return {std::move(Da), std::move(Db)};
     }
 
+    // The same pair densities in factored form, for the RI consumers, which
+    // contract them over the ket with symmetric aux factors and so never need
+    // the nao⁴ buffers (RI::PairDensityBlock says how a block reads).
+    // ov × ov amplitude matrix t[(i a), (j b)] = amp(i, j, a, b).
+    template <class Amp>
+    Eigen::MatrixXd ovov_matrix(int ni, int na, int nj, int nb, Amp amp)
+    {
+        Eigen::MatrixXd t(static_cast<Eigen::Index>(ni) * na, static_cast<Eigen::Index>(nj) * nb);
+#pragma omp parallel for schedule(static)
+        for (int i = 0; i < ni; ++i)
+            for (int a = 0; a < na; ++a)
+                for (int j = 0; j < nj; ++j)
+                    for (int b = 0; b < nb; ++b)
+                        t(i * na + a, j * nb + b) = amp(i, j, a, b);
+        return t;
+    }
+
+    // rmp2_pair_density: one block, t = 4T - 2T^T, the p<->q image only.
+    std::vector<HartreeFock::Correlation::RI::PairDensityBlock> rmp2_pair_blocks(
+        const HartreeFock::Correlation::RMP2Result &result, const Eigen::MatrixXd &C)
+    {
+        using HartreeFock::Correlation::detail::idx_t2;
+        const int no = result.n_occ, nv = result.n_virt;
+        const Eigen::MatrixXd Co = C.leftCols(no), Cv = C.middleCols(no, nv);
+        return {{Co, Cv, Co, Cv,
+                 ovov_matrix(no, nv, no, nv, [&](int i, int j, int a, int b)
+                 {
+                     return 4.0 * result.t2[idx_t2(i, j, a, b, no, nv)] -
+                            2.0 * result.t2[idx_t2(i, j, b, a, no, nv)];
+                 }),
+                 1.0}};
+    }
+
+    // ump2_pair_densities: D_α = αα + αβ, D_β = ββ + αβ read bra<->ket; each
+    // carries its r<->s image, hence weight 2.
+    std::pair<std::vector<HartreeFock::Correlation::RI::PairDensityBlock>,
+              std::vector<HartreeFock::Correlation::RI::PairDensityBlock>>
+    ump2_pair_blocks(const HartreeFock::Correlation::UMP2Result &result,
+                     const Eigen::MatrixXd &Ca, const Eigen::MatrixXd &Cb)
+    {
+        const int noa = result.nocca, nob = result.noccb, nva = result.nvira, nvb = result.nvirb;
+        const Eigen::MatrixXd Cao = Ca.leftCols(noa), Cav = Ca.middleCols(noa, nva);
+        const Eigen::MatrixXd Cbo = Cb.leftCols(nob), Cbv = Cb.middleCols(nob, nvb);
+        const auto same_spin = [](const std::vector<double> &t2, int no, int nv)
+        {
+            return ovov_matrix(no, nv, no, nv, [&](int i, int j, int a, int b)
+            {
+                const std::size_t ij = (static_cast<std::size_t>(i) * no + j) * nv * nv;
+                return 0.5 * (t2[ij + a * nv + b] - t2[ij + b * nv + a]);
+            });
+        };
+        const Eigen::MatrixXd tab = ovov_matrix(noa, nva, nob, nvb, [&](int i, int j, int a, int b)
+        { return result.t2_ab[(static_cast<std::size_t>(i) * nob + j) * nva * nvb + a * nvb + b]; });
+        std::vector<HartreeFock::Correlation::RI::PairDensityBlock> da, db;
+        da.push_back({Cao, Cav, Cao, Cav, same_spin(result.t2_aa, noa, nva), 2.0});
+        da.push_back({Cao, Cav, Cbo, Cbv, tab, 2.0});
+        db.push_back({Cbo, Cbv, Cbo, Cbv, same_spin(result.t2_bb, nob, nvb), 2.0});
+        db.push_back({Cbo, Cbv, Cao, Cav, tab.transpose(), 2.0});
+        return {std::move(da), std::move(db)};
+    }
+
     Eigen::MatrixXd contract_imat_from_pair_density(
         const std::vector<double> &eri,
         const std::vector<double> &pair_dm2,
@@ -354,8 +415,11 @@ namespace HartreeFock::Correlation
                 ? empty_eri
                 : ensure_eri(calculator, shell_pairs, eri_local, "RMP2 Lagrangian :");
 
-        // T2 -> AO 2-RDM buffer in the working basis (rmp2_pair_density).
-        out.dm2buf_full = rmp2_pair_density(result, result.mo_coeff);
+        // T2 -> AO 2-RDM buffer in the working basis (rmp2_pair_density),
+        // dense path only: under RI the pair density stays factored
+        // (rmp2_pair_blocks) and no nao⁴ buffer is built.
+        if (!calculator._mp2.use_ri)
+            out.dm2buf_full = rmp2_pair_density(result, result.mo_coeff);
 
         // Orbital Lagrangian imat(q,v) += sum_{p,r,s} (pq|rs) dm2buf[p,v,r,s].
         // In build_rmp2_gradient_intermediates this contraction is fused into
@@ -364,8 +428,8 @@ namespace HartreeFock::Correlation
         Eigen::MatrixXd imat_ao = Eigen::MatrixXd::Zero(nao, nao);
         if (calculator._mp2.use_ri)
         {
-            imat_ao = HartreeFock::Correlation::RI::build_ri_imat(
-                calculator, out.dm2buf_full, nao);
+            imat_ao = HartreeFock::Correlation::RI::build_ri_imat_from_pair_blocks(
+                calculator, rmp2_pair_blocks(result, result.mo_coeff));
         }
         else
         {
@@ -557,13 +621,13 @@ namespace HartreeFock::Correlation
 
         // RI 2e-gradient term (Step RG3.4): contract the fitted 3-index density
         // against the RG1 derivative tensors instead of the dense 4-center
-        // derivative ERIs the dense path uses. dm2buf's bra is non-symmetric, so
+        // derivative ERIs the dense path uses. The pair density's bra is non-symmetric, so
         // gamma3 sums both orderings and the contraction runs bra_prefolded.
         if (calculator._mp2.use_ri)
         {
             auto [gamma3, x_proj] =
-                HartreeFock::Correlation::RI::build_ri_gamma3_from_ao_dm2(
-                    calculator, dm2buf_full, nao);
+                HartreeFock::Correlation::RI::build_ri_gamma3_from_pair_blocks(
+                    calculator, rmp2_pair_blocks(result, result.mo_coeff));
             auto ri_two_e = HartreeFock::Correlation::RI::build_ri_two_electron_gradient(
                 calculator, gamma3, x_proj, /*bra_prefolded=*/true);
             if (!ri_two_e)
@@ -803,10 +867,12 @@ namespace HartreeFock::Correlation
         // inside a per-atom derivative sweep, once per q for every v: N^7.)
         // Built in the working basis here (ump2_pair_densities); the 2e term
         // below uses a Cartesian copy in spherical mode.
-        auto pair_densities = ump2_pair_densities(result, result.mo_coeff_alpha, result.mo_coeff_beta);
+        // Dense path only: RI keeps them factored (ump2_pair_blocks).
+        auto pair_densities = calculator._mp2.use_ri
+                                  ? std::pair<std::vector<double>, std::vector<double>>{}
+                                  : ump2_pair_densities(result, result.mo_coeff_alpha, result.mo_coeff_beta);
         std::vector<double> &Da = pair_densities.first;
         std::vector<double> &Db = pair_densities.second;
-        const std::size_t nao4 = Da.size();
 
         // Lagrangians Imat_σ(q,v) = ½ Σ_{p,r,s} (pq|rs) D_σ[p,v,r,s]: the dense
         // nao⁴ ERI, or under RI the 3-center factors (Step RG4.3, the dense
@@ -815,8 +881,10 @@ namespace HartreeFock::Correlation
         Eigen::MatrixXd Imatb = Eigen::MatrixXd::Zero(nao, nao);
         if (calculator._mp2.use_ri)
         {
-            Imata = 0.5 * HartreeFock::Correlation::RI::build_ri_imat(calculator, Da, nao);
-            Imatb = 0.5 * HartreeFock::Correlation::RI::build_ri_imat(calculator, Db, nao);
+            auto [blocks_a, blocks_b] =
+                ump2_pair_blocks(result, result.mo_coeff_alpha, result.mo_coeff_beta);
+            Imata = 0.5 * HartreeFock::Correlation::RI::build_ri_imat_from_pair_blocks(calculator, blocks_a);
+            Imatb = 0.5 * HartreeFock::Correlation::RI::build_ri_imat_from_pair_blocks(calculator, blocks_b);
 
             // RI 2e-gradient term (Step RG4.3): contract the fitted 3-index
             // density built from the spin-summed AO separable density (Da + Db)
@@ -831,12 +899,11 @@ namespace HartreeFock::Correlation
             // straight in double-counts by exactly 2 -- measured RI/dense =
             // 2.0000 on every non-zero component, uniform across atoms and axes.
             // Halving restores the UMP2 convention.
-            std::vector<double> pair_dm2_ao(nao4);
-            for (std::size_t k = 0; k < nao4; ++k)
-                pair_dm2_ao[k] = Da[k] + Db[k];
+            // D_α + D_β as one block list.
+            for (auto &b : blocks_b)
+                blocks_a.push_back(std::move(b));
             auto [gamma3, x_proj] =
-                HartreeFock::Correlation::RI::build_ri_gamma3_from_ao_dm2(
-                    calculator, pair_dm2_ao, nao);
+                HartreeFock::Correlation::RI::build_ri_gamma3_from_pair_blocks(calculator, blocks_a);
             auto ri_two_e = HartreeFock::Correlation::RI::build_ri_two_electron_gradient(
                 calculator, gamma3, x_proj, /*bra_prefolded=*/true);
             if (!ri_two_e)
