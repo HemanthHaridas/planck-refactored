@@ -451,6 +451,18 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **libecpint repinned to upstream; one ECP engine per thread (2026-11-16,
+  `docs/DEF2_ECP.md`).** PR #81 merged upstream as a squash on top of #78 and
+  the fork branch Planck pinned was deleted, so a fresh clone could not
+  build. Now pinned to `robashaw/libecpint` `436d9c48`. #78 made a shared
+  `const ECPIntegral` race (mutable scratch in `RadialIntegral`): 26/31 ECP
+  cases failed at four threads. `_compute_ecp` and `_compute_ecp_gradient`
+  now build one engine per thread. A standalone reproducer (8.7e2 / 1.7e4
+  max differences at four threads on `436d9c48`, 0 before #78) went upstream
+  as robashaw/libecpint#82. All 31 ECP cases pass; `planck-ecp-gradient-fd`
+  passes at 1, 4 and 8 threads; energies and gradients are identical to the
+  old pin to every printed digit.
+
 - **RI-MP2 gradient without the nao⁴ AO pair density (2026-11-16,
   `docs/GRADIENT_INTEGRAL_PERFORMANCE.md`).** The RI-MP2 gradient built the
   full AO pair density (UMP2 two), then fitted it, so RI saved time but not
@@ -957,7 +969,7 @@ historical design context, but they are no longer the source of truth for
   re-pinned after the 2026-11-01 Å→Bohr fix (the one-centre element did not
   move); `planck-population-analysis` linked `spherical.cpp`. Planck ctest
   (`-R ^planck`): 94 tests, failures only the four known RCCSDT routing
-  cases. Open: the libecpint repin when PR #81 merges.
+  cases. The libecpint repin followed on 2026-11-16 (entry above).
 
 - **HF RHF → UHF stability channel fixed (2026-11-05,
   `docs/KS_STABILITY.md` R0).** The "external triplet" channel built
@@ -1126,8 +1138,8 @@ historical design context, but they are no longer the source of truth for
   with the density; `one_electron_gradient` adds it inside `core()`, so
   RHF/UHF/ROHF (and the RKS/UKS/MP2/DH paths once those accept ECPs) inherit
   it with no per-caller code. Stock libecpint's derivatives miss FD by 4.6e-5
-  relative on HI/def2-QZVP; libecpint is pinned to unmerged upstream PR #81,
-  which passes (see Open Work for the repin). PySCF gates: HI and C1 AuH·H2O
+  relative on HI/def2-QZVP; PR #81 fixes them (pinned at the time as the
+  PR head; upstream `master` since 2026-11-16). PySCF gates: HI and C1 AuH·H2O
   RHF gradients (≤3e-8 Ha/Bohr), HI⁺ UHF/ROHF (every printed digit), HI
   geomopt (E_opt 1.6e-9 Eh) and frequency (0.03 cm⁻¹); plus
   `planck-ecp-gradient-fd` (ctest) and an AuH·H2O energy-FD case. Found on

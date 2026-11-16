@@ -22,7 +22,7 @@ tags: [build, cmake, dependencies]
 | Eigen 3.4.0 | `FetchContent` | Header-only, never compiled separately |
 | libmsym | `ExternalProject_Add` | Static archive, point-group detection |
 | libxc | `ExternalProject_Add` | Static archive, XC functionals; only linked to `planck-dft` |
-| libecpint | `ExternalProject_Add` | Static archive, ECP integrals; linked to every target via a global `link_libraries`. Built with Planck's C++ compiler (libc++ vs libstdc++ would not link). Pinned to the head of unmerged upstream PR #81 (fork `loriab/libecpint`), which fixes its kernel constants and derivative accuracy; repin to upstream when it merges |
+| libecpint | `ExternalProject_Add` | Static archive, ECP integrals; linked to every target via a global `link_libraries`. Built with Planck's C++ compiler (libc++ vs libstdc++ would not link). Pinned to upstream `master` `436d9c48`, which carries PR #81 (kernel constants and derivative accuracy). Since upstream #78 an `ECPIntegral` is not safe to share between threads, so `ecp.cpp` builds one per thread (robashaw/libecpint#82) |
 
 All deps are hermetic — no system installs needed, fully reproducible.
 

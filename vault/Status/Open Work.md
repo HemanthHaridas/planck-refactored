@@ -10,7 +10,8 @@ tags: [status, open-work, canonical, roadmap]
 # Open Work
 
 Last updated: 2026-11-16 (rewrite: RI-JK answered and removed from the
-priority list; libecpint #81 and PySCF #3598 merged upstream).
+priority list; libecpint repinned to upstream, #82 filed; PySCF #3598 merged
+upstream).
 
 This is the canonical list of what remains. What is done lives in
 `vault/Status/Completion.md`. Each item names its scope or answer doc, which
@@ -46,23 +47,19 @@ teaching code) reorders it.
    rotational-covariance check, so default-settings geometries and
    frequencies carry grid noise. A decision and a migration, not new code. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
 5. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
-6. **A fresh clone builds** (§1, libecpint). The pinned commit is no longer
-   reachable from any branch of the URL CMake clones, so only existing build
-   trees work. Small, and it blocks CI and every new checkout.
-
 RI-JK for routine HF and DFT is no longer on this list: it is answered
 (`docs/RI_JK_ROUTINE.md`).
 
 **Expected, with a workaround.**
 
-7. ROHF-MP2 and ROHF coupled cluster; UHF-based versions exist. Matters more
+6. ROHF-MP2 and ROHF coupled cluster; UHF-based versions exist. Matters more
     once CCSD(T) exists. Scope: `docs/ROHF_CORRELATION_SCOPE.md`.
-8. Analytic Hessian; semi-numerical frequencies work, this is cost on large
+7. Analytic Hessian; semi-numerical frequencies work, this is cost on large
     systems. Scope: `docs/ANALYTIC_HESSIAN_SCOPE.md`.
-9. Spherical double-hybrid gradients, frozen-core PT2 in the gradient, RI-DH.
+8. Spherical double-hybrid gradients, frozen-core PT2 in the gradient, RI-DH.
     Necessary if double hybrids are a headline feature; spherical first. Scope: `docs/DH_GRADIENT_EXTENSIONS_SCOPE.md`.
-10. D4 dispersion; D3(BJ) covers most uses. Scope: `docs/DISPERSION_D4_SCOPE.md`.
-11. Range-separated functionals with RI-JK (attenuated erf 2c/3c integrals);
+9. D4 dispersion; D3(BJ) covers most uses. Scope: `docs/DISPERSION_D4_SCOPE.md`.
+10. Range-separated functionals with RI-JK (attenuated erf 2c/3c integrals);
     refused by name today, and the exact path works. §2, DFT.
 
 **Nice to have.** Imaginary-mode following in `planck-dft` and under PCM;
@@ -90,18 +87,10 @@ further post-HF ghost-atom checks.
   libxc 7.1.0 fixed a second wPBEh seam at small s (`EGscut`, issue #627),
   which Planck's 2023 pin lacks.
 
-- **libecpint: repin to upstream, and a fresh clone cannot build until
-  then.** Planck pins `4e8767fc` on `loriab/libecpint`, the head of
-  robashaw/libecpint#81, because stock libecpint's derivatives missed FD by
-  4.6e-5 relative on HI/def2-QZVP. #81 merged on 2026-11-12 as a squash,
-  `436d9c48` on upstream `master`, and the fork's PR branch is gone. So
-  `4e8767fc` is unreachable from any branch of the URL `CMakeLists.txt`
-  clones: a clean configure failed on 2026-11-16 with "unable to read tree
-  (4e8767fc…)". Existing build trees keep their fetched copy. Repin to
-  upstream `robashaw/libecpint` at `436d9c48` (or later), then rerun
-  `planck-ecp-gradient-fd` and every `*_ecp` regression case. It is a
-  squash plus two newer upstream commits, so do not assume byte-identical
-  output.
+- **libecpint thread safety upstream** (robashaw/libecpint#82, filed
+  2026-11-16). Since #78 a shared `ECPIntegral` races; Planck builds one per
+  thread, so nothing here depends on the outcome. Follow the issue; if
+  upstream restores re-entrant `const` methods, no change is needed.
 
 - **PySCF's DFT gradient is wrong on ECP atoms.** `grad/rks.py`
   `grids_response_becke` looks up Bragg radii by `atom_charges()` (Z − n_core).

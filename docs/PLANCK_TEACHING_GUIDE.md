@@ -2110,7 +2110,10 @@ core-Hamiltonian term. Every gradient (RHF, UHF, ROHF, RKS, UKS) therefore
 inherits it, and so do the geometry and frequency loops built on them. Stock
 libecpint's derivatives missed finite differences by 4.6e-5 relative on
 HI/def2-QZVP. The same upstream PR #81 fixes them, and `planck-ecp-gradient-fd`
-pins the fix.
+pins the fix. That test also caught a later upstream change (#78) that made a
+shared `ECPIntegral` unsafe across threads: correct at one thread, garbage at
+four. Planck now gives each thread its own engine, which does not depend on a
+library keeping its `const` methods re-entrant.
 
 #### Validation case study: the electron counts nobody indexed
 
@@ -2153,8 +2156,8 @@ A constant relative factor is a constant. libecpint *generates* its type-2
 kernels at build time, and its generator wrote the angular prefactors at
 default stream precision: `157.914` for \(16\pi^2 = 157.91367\ldots\), and
 \(157.914/16\pi^2 = 1 + 2.09\times10^{-6}\). Planck patched the generator at
-fetch time to 17 digits; the fix now comes from upstream PR #81, which Planck
-pins. Afterwards HI matches
+fetch time to 17 digits; the fix now comes from upstream PR #81, which
+Planck's pin carries. Afterwards HI matches
 PySCF to every printed digit and the matrices agree to about 1e-11 relative.
 
 Two rules carry over:

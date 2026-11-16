@@ -333,20 +333,21 @@ externalproject_add(
 )
 
 # libecpint (MIT): ECP integrals and derivatives (docs/DEF2_ECP.md).
-# ponytail: pinned to the head of UNMERGED upstream PR #81 (loriab's fork), which
-# sits on upstream HEAD 95203c68 and fixes seven type-2/quadrature defects,
-# including the 6-digit kernel constants Planck used to patch. Stock derivatives
-# miss finite differences by 4.6e-5 on HI/def2-QZVP (planck-ecp-gradient-fd).
-# When robashaw/libecpint#81 merges, repin to the upstream merge commit and
-# rerun planck-ecp-gradient-fd plus the *_ecp regression cases.
+# Pinned to upstream master 436d9c48 (2026-11-12): PR #81 (seven type-2 and
+# quadrature fixes, including the 6-digit kernel constants Planck used to
+# patch) squashed on top of #78 (efficiency, shell-pair screening). Older
+# releases miss finite differences by 4.6e-5 on HI/def2-QZVP
+# (planck-ecp-gradient-fd). Pin a commit on a branch of the cloned URL: the
+# earlier pin was the head of the fork's PR branch, which upstream deleted on
+# merge, and a fresh clone could not fetch it.
 # Built with Planck's own C++ compiler because its API passes std::vector across
 # the boundary (libc++ vs libstdc++ would not link).
-set(LIBECPINT_GIT_TAG 4e8767fc8d74fd2f23f70d75ae2af2ddf4a01dec)
+set(LIBECPINT_GIT_TAG 436d9c4877aecbbe27e730b5aeec2b0ce4dc53dd)
 set(LIBECPINT_INSTALL_DIR ${SRC_DIR}/external/libecpint/install)
 externalproject_add(
     libecpint_ep
     PREFIX ${SRC_DIR}/external/libecpint
-    GIT_REPOSITORY https://github.com/loriab/libecpint.git
+    GIT_REPOSITORY https://github.com/robashaw/libecpint.git
     GIT_TAG ${LIBECPINT_GIT_TAG}
     UPDATE_DISCONNECTED TRUE
     CMAKE_ARGS
