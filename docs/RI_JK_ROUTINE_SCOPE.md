@@ -19,8 +19,8 @@ RIFIT set. SOSCF and stability use the fitted operator.
 for a Cartesian basis, equal to PySCF's density-fitted gradient to every
 printed digit. Spherical RI-JK derivatives are still refused by name.
 
-**Kohn-Sham: pure-functional single points work** (RI-J), RKS and UKS,
-Cartesian and spherical, equal to PySCF to every printed digit. Hybrids,
+**Kohn-Sham: pure and global-hybrid single points work** (RI-J, RI-K), RKS
+and UKS, equal to PySCF to every printed digit. Range-separated functionals,
 derivatives, TDDFT, SOSCF, stability, PCM and counterpoise with RI-JK are
 refused by name in `planck-dft`.
 
@@ -36,8 +36,9 @@ refused by name in `planck-dft`.
 | RI-MP2 frequencies | **Done** (step 8) |
 | RI-JK RHF/UHF/ROHF gradient, geomopt, frequencies (Cartesian) | **Done**, = PySCF (steps 9–10) |
 | RI-JK spherical derivatives | **Refused** by name; step 16 |
-| `planck-dft` pure-functional energies (RI-J) | **Done**, = PySCF (step 12) |
-| `planck-dft` hybrids, derivatives, SOSCF, stability | **Refused** by name; steps 13–15 |
+| `planck-dft` pure and global-hybrid energies (RI-J, RI-K) | **Done**, = PySCF (steps 12–13) |
+| `planck-dft` derivatives, SOSCF, stability | **Refused** by name; steps 14–15 |
+| `planck-dft` range-separated with RI-JK | **Refused** by name; out of scope (attenuated RI) |
 | Full point-group symmetry | Refused; out of scope |
 
 ## How `scf_ri_jk` is wired
@@ -53,9 +54,9 @@ indices to the spherical working basis.
 The boundaries: the RI-JK gate in `src/hf_driver.cpp` (full symmetry, and
 derivative workflows other than Cartesian HF without correlation or PCM)
 and `validate_ri_jk_support` in `src/dft/driver.cpp` (everything but
-pure-functional single points; counterpoise at the top of
+pure and global-hybrid single points; counterpoise at the top of
 `DFT::Driver::run`). In `planck-dft`, `assemble_current_ks_potential` adds
-the RI J in the working basis after projecting the other KS terms. HF
+the RI J and K in the working basis after projecting the other KS terms. HF
 SOSCF and stability check the flag (step 4). Post-HF methods (MP2, CC,
 CASSCF) on RI-JK orbitals keep exact integrals, which is a legitimate
 combination.
@@ -64,22 +65,11 @@ combination.
 
 | Step | What | Needs |
 |---|---|---|
-| 13 | KS RI-K, global hybrids | — |
-| 14 | KS SOSCF and stability on RI; refusals for TDDFT and DH | 13 |
-| 15 | KS RI-JK gradient, Cartesian | 13 |
+| 14 | KS SOSCF and stability on RI | — |
+| 15 | KS RI-JK gradient, Cartesian | — |
 | 16 | Spherical RI gradients: RI-JK HF and KS, and RI-MP2 | 15 |
 
 12 is next; every remaining step follows from it.
-
-### 13. KS RI-K, global hybrids
-
-`build_ri_k` per spin, unscaled. Keep the unscaled-K contract: each caller
-applies its own prefactor (−½c for RKS, −c per spin for UKS), and the
-exchange energy comes from the same matrices. Share one
-`build_ri_3index_unpacked` between J and K. Range-separated functionals stay
-refused: the RI 2c/3c integrals are Coulomb-kernel only, and attenuated RI-K
-is outside this scope. Gates: water and H2O2 B3LYP RKS, water⁺ B3LYP UKS, the
-range-separated refusal.
 
 ### 14. KS consumers
 
@@ -437,6 +427,26 @@ running. Gated by `water_rks_pbe_rijk_631gd` (was
 `water_rks_b3lyp_rijk_rejected` and `water_rks_pbe_rijk_gradient_rejected`
 (the KS gradient would otherwise use exact J at RI orbitals, the step-3
 defect). References: `tests/pyscf/ri_jk_dft_references.py`.
+
+### 13. KS RI-K, global hybrids
+
+The post-projection RI block in `assemble_current_ks_potential` now also adds
+the exchange under `scf_ri_jk`: one `build_ri_3index_unpacked` shared by the
+spins, `build_ri_k` unscaled, and the direct path's prefactors and energy
+unchanged (RKS −½c K with E = −¼c tr(P K); UKS −c K_σ per spin with
+E = −½c Σ_σ tr(P_σ K_σ)). The direct exchange is skipped under RI.
+`validate_ri_jk_support` admits global hybrids and refuses range-separated
+functionals by name: the RI 2c/3c integrals are Coulomb-kernel only.
+
+| Case (B3LYP, 6-31G*, def2-universal-JKFIT, 150 × 590) | PySCF RI | exact | Planck |
+|---|---|---|---|
+| water RKS | −76.4009488436 | −76.4009350142 | every printed digit |
+| water⁺ UKS | −75.9401245123 | −75.9401084943 | every printed digit |
+| C1 H2O2 RKS | −151.5278433929 | −151.5278251054 | every printed digit |
+
+Gated by `water_rks_b3lyp_rijk_631gd` (was `water_rks_b3lyp_rijk_rejected`),
+`water_cation_uks_b3lyp_rijk_631gd`, `h2o2_rks_b3lyp_rijk_631gd` and the
+marker `water_rks_hse06_rijk_rejected`.
 
 ## Not in this scope
 

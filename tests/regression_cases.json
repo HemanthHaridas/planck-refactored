@@ -1331,8 +1331,8 @@
    ]
   },
   {
-   "id": "water_rks_b3lyp_rijk_rejected",
-   "input": "tests/inputs/regression/ri/water_rks_b3lyp_rijk_rejected.hfinp",
+   "id": "water_rks_b3lyp_rijk_631gd",
+   "input": "tests/inputs/regression/ri/water_rks_b3lyp_rijk_631gd.hfinp",
    "executable": "planck-dft",
    "tags": [
     "core",
@@ -1340,10 +1340,82 @@
     "ri",
     "dft"
    ],
-   "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 12): RI-JK in planck-dft covers pure functionals only; global hybrids need RI-K (step 13).",
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit(), B3LYP, def2-universal-JKFIT and 6-31G* from Planck's GBS, unpruned 150 x 590 grid (tests/pyscf/ri_jk_dft_references.py): -76.4009488436; exact-integral energy -76.4009350142. Planck matches every printed digit. RI-J + RI-K for a global hybrid (docs/RI_JK_ROUTINE_SCOPE.md step 13). Was water_rks_b3lyp_rijk_rejected (step 12).",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4009488436,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_b3lyp_rijk_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_uks_b3lyp_rijk_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.UKS(...).density_fit(), B3LYP, def2-universal-JKFIT and 6-31G* from Planck's GBS, unpruned 150 x 590 grid (tests/pyscf/ri_jk_dft_references.py): -75.9401245123; exact-integral energy -75.9401084943. Planck matches every printed digit. UKS: K per spin with -c, energy -1/2 c sum_sigma tr(P_sigma K_sigma).",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.9401245123,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rks_b3lyp_rijk_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_rks_b3lyp_rijk_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit(), B3LYP, def2-universal-JKFIT and 6-31G* from Planck's GBS, unpruned 150 x 590 grid (tests/pyscf/ri_jk_dft_references.py): -151.5278433929; exact-integral energy -151.5278251054. Planck matches every printed digit. C1 H2O2.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -151.5278433929,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rks_hse06_rijk_rejected",
+   "input": "tests/inputs/regression/ri/water_rks_hse06_rijk_rejected.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 13): the RI 2c/3c integrals are Coulomb-kernel only, so range-separated functionals are refused under scf_ri_jk.",
    "expected_exit_code": 1,
    "contains": [
-    "supports pure-functional single-point energies only so far, not a hybrid functional"
+    "not a range-separated functional"
    ]
   },
   {
@@ -1359,7 +1431,7 @@
    "_note": "Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 12): a KS gradient with RI-J would use exact J at RI orbitals (the step-3 defect for HF). Refused until the KS RI-JK gradient lands (step 15).",
    "expected_exit_code": 1,
    "contains": [
-    "supports pure-functional single-point energies only so far, not analytic gradients"
+    "single-point energies only so far, not analytic gradients"
    ]
   },
   {

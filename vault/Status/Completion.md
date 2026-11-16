@@ -480,13 +480,14 @@ historical design context, but they are no longer the source of truth for
   (RI-MP2's CPHF route and `transform_eri_ri`); before, SOSCF rebuilt the AO
   tensor every step and stability used the exact Hessian. Eigenvalues equal
   PySCF stability on a density-fitted SCF (RHF and UHF).
-- **RI-J in `planck-dft` for pure functionals (2026-11-16,
-  `docs/RI_JK_ROUTINE_SCOPE.md` step 12).** The KS assembly adds the fitted J
-  in the working basis after projecting the other terms; water RKS PBE,
-  water⁺ UKS PBE and spherical water RKS PBE equal PySCF `density_fit()` to
-  every printed digit (6-31G*, def2-universal-JKFIT). Everything else with
-  `scf_ri_jk` (hybrids, derivatives, TDDFT, SOSCF, stability, PCM,
-  counterpoise) is refused by name.
+- **RI-JK in `planck-dft` for pure and global-hybrid single points
+  (2026-11-16, `docs/RI_JK_ROUTINE_SCOPE.md` steps 12–13).** The KS assembly
+  adds the fitted J and K in the working basis after projecting the other
+  terms. Water RKS/UKS PBE, spherical water RKS PBE, and water RKS, water⁺
+  UKS and C1 H2O2 RKS B3LYP equal PySCF `density_fit()` to every printed
+  digit (6-31G*, def2-universal-JKFIT). Range-separated functionals,
+  derivatives, TDDFT, SOSCF, stability, PCM and counterpoise with
+  `scf_ri_jk` are refused by name.
 
 - **RI pair factors cached per geometry (2026-11-16, B0;
   `docs/RI_JK_ROUTINE_SCOPE.md` step 11).** B = J V^{-1/2} is built once by

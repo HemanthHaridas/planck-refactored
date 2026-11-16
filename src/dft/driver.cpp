@@ -3043,7 +3043,8 @@ namespace DFT::Driver
         }
 
         // RI-JK in planck-dft (docs/RI_JK_ROUTINE_SCOPE.md steps 12-15): the
-        // fitted Coulomb matrix replaces the direct one for pure functionals.
+        // fitted J and K replace the direct ones for pure and global-hybrid
+        // functionals.
         // Everything that would still build exact J or K, or differentiate the
         // energy, is refused by name until its step lands.
         std::expected<void, std::string> validate_ri_jk_support(
@@ -3053,7 +3054,7 @@ namespace DFT::Driver
                 return {};
             const auto refuse = [](const std::string &what) -> std::expected<void, std::string>
             {
-                return std::unexpected("RI-JK (scf_ri_jk) in planck-dft supports pure-functional "
+                return std::unexpected("RI-JK (scf_ri_jk) in planck-dft supports pure and global-hybrid "
                                        "single-point energies only so far, not " + what +
                                        ". Disable RI-JK (scf_ri_jk false).");
             };
@@ -3061,9 +3062,8 @@ namespace DFT::Driver
                 return std::unexpected("RI-JK SCF (scf_ri_jk) needs an auxiliary basis: set mp2_ri_basis.");
             if (functionals.has_double_hybrid_pt2)
                 return refuse("a double-hybrid functional");
-            if (functionals.has_range_separation ||
-                std::abs(functionals.implemented_exact_exchange_coefficient) > 1.0e-14)
-                return refuse("a hybrid functional (exact exchange)");
+            if (functionals.has_range_separation)
+                return refuse("a range-separated functional (the RI integrals are Coulomb-kernel only)");
             if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
                 return refuse(workflow_label(calculator._calculation));
             if (calculator._scf._scf_soscf_diis_tol > 0.0 || calculator._scf._scf_soscf_start > 0)
@@ -4752,7 +4752,8 @@ namespace DFT::Driver
         // the screened omega either — the short-range K calls below pass the
         // omega straight to the fused loop.
 
-        if (std::abs(exact_exchange_coefficient) > 1.0e-14)
+        // RI-K is added in the working basis after the projection below.
+        if (!ri_j && std::abs(exact_exchange_coefficient) > 1.0e-14)
         {
             if (calculator._scf._scf == HartreeFock::SCFType::UHF)
             {
@@ -4847,20 +4848,52 @@ namespace DFT::Driver
                 *M = std::move(*M_w);
             }
 
-        // RI-J (docs/RI_JK_ROUTINE_SCOPE.md step 12). The RI builders take and
-        // return working-basis matrices, so this uses the stored working
-        // densities and is added after the projection above, never before it.
+        // RI-J and RI-K (docs/RI_JK_ROUTINE_SCOPE.md steps 12-13). The RI
+        // builders take and return working-basis matrices, so this uses the
+        // stored working densities and is added after the projection above,
+        // never before it. K is unscaled from build_ri_k; the prefactors and
+        // the energy are the direct path's (-1/2 c for RKS, -c per spin for
+        // UKS). Range separation is refused by validate_ri_jk_support.
         if (ri_j)
         {
-            if (auto ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calculator); !ready)
-                return std::unexpected("RI-J: " + ready.error());
-            Eigen::MatrixXd P_working = calculator._info._scf.alpha.density;
-            if (calculator._scf._scf == HartreeFock::SCFType::UHF)
-                P_working += calculator._info._scf.beta.density;
-            const Eigen::MatrixXd J = HartreeFock::Correlation::RI::build_ri_j(calculator, P_working);
+            namespace RI = HartreeFock::Correlation::RI;
+            if (auto ready = RI::ensure_ri_3c_ready(calculator); !ready)
+                return std::unexpected("RI-JK: " + ready.error());
+            const bool uks = calculator._scf._scf == HartreeFock::SCFType::UHF;
+            const Eigen::MatrixXd &Pa = calculator._info._scf.alpha.density;
+            const Eigen::MatrixXd P_working = uks ? Eigen::MatrixXd(Pa + calculator._info._scf.beta.density) : Pa;
+            const Eigen::MatrixXd J = RI::build_ri_j(calculator, P_working);
             potential.coulomb += J;
             potential.alpha += J;
             potential.beta += J;
+
+            const double c = full_range_exchange_coefficient;
+            if (std::abs(c) > 1.0e-14)
+            {
+                const std::vector<Eigen::MatrixXd> unpacked = RI::build_ri_3index_unpacked(calculator);
+                Eigen::MatrixXd Xa, Xb;
+                double energy = 0.0;
+                if (uks)
+                {
+                    const Eigen::MatrixXd &Pb = calculator._info._scf.beta.density;
+                    const Eigen::MatrixXd Ka = RI::build_ri_k(calculator, Pa, &unpacked);
+                    const Eigen::MatrixXd Kb = RI::build_ri_k(calculator, Pb, &unpacked);
+                    Xa = -c * Ka;
+                    Xb = -c * Kb;
+                    energy = -0.5 * c * (density_trace_product(Pa, Ka) + density_trace_product(Pb, Kb));
+                }
+                else
+                {
+                    const Eigen::MatrixXd K = RI::build_ri_k(calculator, Pa, &unpacked);
+                    Xa = Xb = -0.5 * c * K;
+                    energy = -0.25 * c * density_trace_product(Pa, K);
+                }
+                potential.exact_exchange_alpha += Xa;
+                potential.exact_exchange_beta += Xb;
+                potential.alpha += Xa;
+                potential.beta += Xb;
+                potential.exact_exchange_energy += energy;
+            }
         }
         return potential;
     }

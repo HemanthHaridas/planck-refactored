@@ -1,5 +1,6 @@
-# Boundary marker (docs/RI_JK_ROUTINE_SCOPE.md step 12): RI-JK in planck-dft
-# covers pure functionals only; global hybrids (RI-K) are step 13.
+# RI-JK Kohn-Sham gate (docs/RI_JK_ROUTINE_SCOPE.md step 13): C1 H2O2 RKS B3LYP,
+# def2-universal-JKFIT, unpruned 150 x 590 grid, against PySCF
+# dft.RKS/UKS(...).density_fit() (tests/pyscf/ri_jk_dft_references.py).
 %begin_control
     basis       6-31g*
     calculation energy
@@ -35,9 +36,10 @@
 %end_geom
 
 %begin_coords
-3
+4
 0 1
-O 0.000000 0.000000 0.000000
-H 0.758602 0.000000 0.504284
-H -0.758602 0.000000 0.504284
+O 0.000000 0.700000 -0.050000
+O 0.020000 -0.710000 0.040000
+H 0.880000 0.900000 0.420000
+H -0.650000 -0.950000 0.780000
 %end_coords

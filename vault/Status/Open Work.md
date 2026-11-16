@@ -57,7 +57,7 @@ teaching code) reorders it.
    contraction is streamed, RI-MP2 frequencies are gated (steps 6–8), and
    Cartesian RHF/UHF/ROHF RI-JK gradients, geomopt and frequencies equal
    PySCF (steps 9–10); the B0 pair-factor cache landed (11); `planck-dft`
-   pure-functional single points use RI-J (12). Remaining, in dependency
+   pure and global-hybrid single points use RI-J/K (12–13). Remaining, in dependency
    order: KS RI-J/K and consumers (12–14),
    the KS RI-JK gradient (15), spherical RI gradients for HF, KS and RI-MP2
    (16). Scope: `docs/RI_JK_ROUTINE_SCOPE.md`.
