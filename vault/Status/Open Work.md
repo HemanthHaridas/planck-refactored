@@ -9,9 +9,8 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-11-16 (RI-MP2 gradient response fixed; 2026-11-12: MP2 frequencies and UKS DH geomopt/freq done; DFT counterpoise 2026-11-11; UKS DH step list 2026-11-10;
-rewrite at `8570139a` on 2026-11-08, then the Yukawa and `hcore` decisions and
-the CI blocker).
+Last updated: 2026-11-16 (rewrite: RI-JK answered and removed from the
+priority list; libecpint #81 and PySCF #3598 merged upstream).
 
 This is the canonical list of what remains. What is done lives in
 `vault/Status/Completion.md`. Each item names its scope or answer doc, which
@@ -19,12 +18,12 @@ holds the measurements and the ruled-out routes. Superseded plans are in
 [the historical archive](History/Open%20Work%20investigations%20through%202026-11-06.md),
 which is not a work queue.
 
-This rewrite removed what landed since the 2026-11-07 one: D3 dispersion
-(#183, merged) and the whole PCM geometry scope (smooth cavity, spherical
-PCM, analytic gradients, geometry optimization and frequencies;
-`docs/PCM_GEOMETRY.md`). Every item below was re-checked on 2026-11-08
-against the tree, and the upstream and CI items against GitHub. The core
-suite was 132/132 at `1b3ffc9b`.
+This rewrite removed what landed since 2026-11-08: the RI-JK routine-use
+scope (`docs/RI_JK_ROUTINE.md`, now an answer), the RI-MP2 gradient response
+fix and spherical RI-MP2 gradients (`docs/RI_MP2_GRADIENT_RESPONSE.md`), the
+matrix-free HF orbital Hessian (`docs/SCF_ORBITAL_HESSIAN_OPERATOR.md`), G6
+and the factored RI-MP2 pair density (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`).
+The upstream items were re-checked against GitHub on 2026-11-16.
 
 ## Priority for a final product (2026-11-10)
 
@@ -47,24 +46,12 @@ teaching code) reorders it.
    rotational-covariance check, so default-settings geometries and
    frequencies carry grid noise. A decision and a migration, not new code. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
 5. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
-6. **RI-JK validated and usable for routine DFT/HF** (§5, RI-JK and BLAS).
-   Steps 0–2 done (2026-11-12): HF RI-JK equals PySCF density fitting,
-   Cartesian and spherical; JKFIT sets cut the fitting error from ~1e-3 to
-   ≤ 9e-5 Eh; the fitted aux follows `basis_type`
-   (`docs/RI_SPHERICAL_AUX.md`); derivative workflows refused (no RI-JK
-   gradient); ROHF, SOSCF and stability on the fitted operator. 2026-11-16:
-   `planck-dft` refuses `scf_ri_jk` (it ignored it), the RI derivative
-   contraction is streamed, RI-MP2 frequencies are gated (steps 6–8), and
-   Cartesian RHF/UHF/ROHF RI-JK gradients, geomopt and frequencies equal
-   PySCF (steps 9–10); the B0 pair-factor cache landed (11); `planck-dft`
-   pure and global-hybrid single points use RI-J/K, KS SOSCF and stability
-   the fitted operator, KS gradients/geomopt equal PySCF (12–15), and RI
-   gradients run in a spherical basis too (16). The scope is answered:
-   `docs/RI_JK_ROUTINE.md`. RI-MP2 gradients meet their own energy FD
-   and run spherical since the orbital-response fix
-   (`docs/RI_MP2_GRADIENT_RESPONSE.md`). Still open:
-   - **RI-DH** (O9 in §2) and attenuated RI-K for range-separated
-     functionals. (G6, the serial RI derivative loops, is done.)
+6. **A fresh clone builds** (§1, libecpint). The pinned commit is no longer
+   reachable from any branch of the URL CMake clones, so only existing build
+   trees work. Small, and it blocks CI and every new checkout.
+
+RI-JK for routine HF and DFT is no longer on this list: it is answered
+(`docs/RI_JK_ROUTINE.md`).
 
 **Expected, with a workaround.**
 
@@ -75,6 +62,8 @@ teaching code) reorders it.
 9. Spherical double-hybrid gradients, frozen-core PT2 in the gradient, RI-DH.
     Necessary if double hybrids are a headline feature; spherical first. Scope: `docs/DH_GRADIENT_EXTENSIONS_SCOPE.md`.
 10. D4 dispersion; D3(BJ) covers most uses. Scope: `docs/DISPERSION_D4_SCOPE.md`.
+11. Range-separated functionals with RI-JK (attenuated erf 2c/3c integrals);
+    refused by name today, and the exact path works. §2, DFT.
 
 **Nice to have.** Imaginary-mode following in `planck-dft` and under PCM;
 HF-D3 and modified D3 damping; counterpoise-corrected gradients and N-body
@@ -101,13 +90,18 @@ further post-HF ghost-atom checks.
   libxc 7.1.0 fixed a second wPBEh seam at small s (`EGscut`, issue #627),
   which Planck's 2023 pin lacks.
 
-- **libecpint is pinned to an unmerged upstream PR** (still open on
-  2026-11-08). Planck pins
-  robashaw/libecpint#81 at `4e8767fc` on `loriab/libecpint`, because stock
-  libecpint's derivatives miss FD by 4.6e-5 relative on HI/def2-QZVP. When #81
-  merges: repin to the merge commit, then rerun `planck-ecp-gradient-fd` and
-  every `*_ecp` regression case. If the fork branch disappears first, the
-  commit is still reachable as upstream `refs/pull/81/head`.
+- **libecpint: repin to upstream, and a fresh clone cannot build until
+  then.** Planck pins `4e8767fc` on `loriab/libecpint`, the head of
+  robashaw/libecpint#81, because stock libecpint's derivatives missed FD by
+  4.6e-5 relative on HI/def2-QZVP. #81 merged on 2026-11-12 as a squash,
+  `436d9c48` on upstream `master`, and the fork's PR branch is gone. So
+  `4e8767fc` is unreachable from any branch of the URL `CMakeLists.txt`
+  clones: a clean configure failed on 2026-11-16 with "unable to read tree
+  (4e8767fc…)". Existing build trees keep their fetched copy. Repin to
+  upstream `robashaw/libecpint` at `436d9c48` (or later), then rerun
+  `planck-ecp-gradient-fd` and every `*_ecp` regression case. It is a
+  squash plus two newer upstream commits, so do not assume byte-identical
+  output.
 
 - **PySCF's DFT gradient is wrong on ECP atoms.** `grad/rks.py`
   `grids_response_becke` looks up Bragg radii by `atom_charges()` (Z − n_core).
@@ -120,13 +114,12 @@ further post-HF ghost-atom checks.
   `tests/pyscf/upstream/`; all six tests fail on master and pass with the
   patch. R4 also found that ghost atoms trigger the same mismatch on
   PySCF ≥ 2.14 (#3302 updated `radi.py` but not the gradient): 1.4e-5
-  Ha/Bohr on a counterpoise water dimer. R5 filed
-  2026-11-07: issue pyscf/pyscf#3597, PR pyscf/pyscf#3598 (both open,
-  review required, on 2026-11-08). Remaining: follow the review. Once a
-  release carries the fix, R6: drop
-  `patch_pyscf_grid_response_radii` and pin that PySCF version
-  (`docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`).
-  Planck's reference script patches it at runtime meanwhile.
+  Ha/Bohr on a counterpoise water dimer. R5: issue pyscf/pyscf#3597 and PR
+  pyscf/pyscf#3598, **merged 2026-11-15** (`6eb9abd1`). The latest release,
+  v2.15.0 (2026-11-05), predates it. Remaining, R6, once a release carries
+  the fix: drop `patch_pyscf_grid_response_radii` and pin that PySCF version
+  (`docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`). Planck's reference script
+  patches it at runtime meanwhile.
 
 ## 2. Capability gaps
 
@@ -137,6 +130,18 @@ further post-HF ghost-atom checks.
   Hessian, no CPHF), the response kernel, and VV10. Step 1 must make every
   non-SCF workflow refuse meta-GGA by name: the KS gradient picks its terms by
   `vsigma.cols()` and would otherwise silently drop the τ term.
+- **Rydberg states** (`docs/RYDBERG_ORBITALS_SCOPE.md`). Diffuse-basis
+  TDDFT runs, but no regression case uses a diffuse basis. On water
+  aug-cc-pVDZ CAM-B3LYP, the `legacy` grid's angular pruning misses PySCF by
+  7.2e-7 Eh and 0.7–2.2 meV per root; `g4-3-v4` is within 4.4e-9 Eh. The wall
+  is dense TDDFT: two nb⁴ tensors for range-separated functionals, so benzene
+  aug-cc-pVDZ needs 28 GB. Matrix-free TDDFT can reuse the KS stability (A+B)
+  operators and their Davidson solver. Canonical orthogonalization is not
+  needed yet (benzene aug-cc-pVTZ λ_min 7.7e-8, against a 1e-8 wall).
+- **Range-separated functionals with RI-JK.** `planck-dft` refuses them by
+  name: the RI 2c/3c integrals are Coulomb-kernel only. Needs attenuated
+  (erf) 2c/3c integrals and their derivatives (`docs/RI_JK_ROUTINE.md`, Not
+  in this scope).
 - **PCM leftovers** (`docs/PCM_GEOMETRY.md`, now an answer; see
   Completion). Imaginary-mode following under PCM is rejected (the loops
   would carry the cavity, but no case gates it). Deferred from step 3:
@@ -309,11 +314,13 @@ None of these blocks correctness. Take each up only with a current profile.
   - Screened and explicit-engine derivative block fallbacks.
   - Phase E: shell-level `ShellPair`. Last, because it changes the shared
     contract.
-- **RI-JK and BLAS** (`docs/ERI_FOCK_BLAS_SCOPE.md`). Nothing has landed.
-  - B0: cache the density-independent `build_ri_pair_factors`, which is ~61 %
-    of the RI-JK Fock build. The `*_rijk_631gd` cases (2026-11-12) gate it.
-  - B1: optional `USE_BLAS`.
-  - B2: RI-K from `C_occ`.
+- **RI-JK and BLAS** (`docs/ERI_FOCK_BLAS_SCOPE.md`).
+  - B0 landed for the pair factors (cached per geometry, 2026-11-16); the
+    unpacked per-aux `B_Q` matrices are still rebuilt on every Fock build
+    (~8 % of the RI-JK Fock build when measured).
+  - B2: RI-K from `C_occ` at the two SCF call sites (4.4–4.8× on RI-K,
+    serial). `build_ri_k` contracts the full density today.
+  - B1: optional `USE_BLAS` (RI-K GEMMs 4.3–7.8×).
   - B3 (`dsyevd`) is deferred.
 - **Gradients** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`):
   - RI shell-block 3c/2c kernels (G6 threaded the per-component loops;
