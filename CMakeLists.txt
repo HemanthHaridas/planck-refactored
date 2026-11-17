@@ -997,7 +997,7 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/udh_gradient_main.cpp
         ${BASE_SRC} ${DFT_LIB_SRC} ${LOOKUP_SRC} ${SYMM_SRC} ${BASIS_SRC}
         ${INT_SRC} ${IO_SRC} ${SCF_SRC} ${SOLVATION_SRC} ${POPULATIONS_SRC}
-        ${POSTHF_DFT_SRC} ${GRADIENT_SRC} ${OPT_SRC} ${FREQ_SRC})
+        ${POSTHF_DFT_SRC} ${GRADIENT_SRC} ${OPT_SRC} ${FREQ_SRC} ${BSSE_SRC})
     target_include_directories(planck-udh-validation PRIVATE ${SRC_DIR} ${CMAKE_BINARY_DIR}
         ${MSYM_INSTALL_DIR}/include ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
     target_link_libraries(planck-udh-validation ${MSYM_INSTALL_DIR}/lib/libmsym.a ${LIBXC_INSTALL_DIR}/lib/libxc.a)
