@@ -451,6 +451,20 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **RI work split across MPI ranks (M0–M1, 2026-11-17,
+  `docs/RI_MPI_SCOPE.md`).** Before, every `planck-mpi` rank ran the whole
+  RI calculation (2 ranks slower than 1). Now the 3c build, the fitted
+  factors, RI-J, RI-K, the RI-MP2 `B_pq` and Gram products, the RMP2 tile
+  stream, and the RI gradient loops each take the indices this rank owns
+  (`Mpi::Stripe`) and one allreduce completes them; data stay replicated,
+  and only owned `B_Q` are unpacked. Serial output is byte-identical on all
+  45 RI inputs. Seven `*_mpi_smoke` gates (RHF/UHF/RKS RI-JK, gradient,
+  SOSCF + stability, UMP2, RMP2 gradient, RI CASSCF) match serial exactly at
+  2 and 3 ranks. 16 H2O / 6-31G / JKFIT: 31.8 / 19.6 / 16.5 s at 1/2/4
+  ranks. A dropped reduce shows as a deadlock, not a wrong energy, so
+  `tests/mpi_smoke_compare.py` gained a per-run timeout; the mutation fails
+  in 31 s with no ranks left.
+
 - **RI-K from a low-rank factor of the density (B2, 2026-11-17,
   `docs/ERI_FOCK_BLAS_SCOPE.md`).** `build_ri_k(D)` factors
   `D = X s Xᵀ` over its nonzero eigenvalues and contracts `B_Q X` instead

@@ -45,6 +45,21 @@ namespace HartreeFock::Mpi
     // single-rank case, keeping the serial path byte-identical.
     inline bool distributed() noexcept { return size() > 1; }
 
+    // Round-robin ownership of an index range: this rank owns i when
+    // i % size == rank, and owns everything in a serial build. Construct
+    // once per loop, not per index (rank()/size() are MPI calls).
+    // ponytail: round-robin; a cost-weighted split only if a profile shows
+    // the per-index costs imbalance it.
+    struct Stripe
+    {
+        int rank = Mpi::rank();
+        int size = Mpi::size();
+        bool owns(std::size_t i) const noexcept
+        {
+            return size == 1 || static_cast<int>(i % static_cast<std::size_t>(size)) == rank;
+        }
+    };
+
     // In-place sum-reduce of a double buffer across all ranks, leaving the full
     // result replicated on every rank (MPI_Allreduce). No-op when serial.
     //

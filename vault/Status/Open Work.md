@@ -61,12 +61,6 @@ RI-JK for routine HF and DFT is no longer on this list: it is answered
 9. D4 dispersion; D3(BJ) covers most uses. Scope: `docs/DISPERSION_D4_SCOPE.md`.
 10. Range-separated functionals with RI-JK (attenuated erf 2c/3c integrals);
     refused by name today, and the exact path works. §2, DFT.
-11. RI under MPI, steps M0–M1: today every `planck-mpi` rank runs the
-    full RI calculation (correct, no speedup, no warning, no MPI gate).
-    M0 adds the gate and a warning; M1 splits the 3c build, RI-J/K, RI-MP2
-    and RI gradients over aux shells with one allreduce each. Ranked here
-    because one node with RI already removes the nb⁴ wall. Scope:
-    `docs/RI_MPI_SCOPE.md`.
 
 **Nice to have.** Imaginary-mode following in `planck-dft` and under PCM;
 HF-D3 and modified D3 damping; counterpoise-corrected gradients and N-body
@@ -75,7 +69,8 @@ ROHF CASSCF; range-separated, solvent, SCS/DOS, meta-GGA and TDDFT
 double-hybrid variants; the incremental KS J/K build and PCM performance
 leftovers; `TensorOptimized` RCCSDT; conventional symmetry-unique ERI storage;
 further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
-3-center tensor; matters past nb ≈ 1000–1500).
+3-center tensor; matters past nb ≈ 1000–1500; M0–M1 landed,
+`docs/RI_MPI_SCOPE.md`).
 
 ## 1. Correctness decisions and external dependencies
 
@@ -325,8 +320,9 @@ None of these blocks correctness. Take each up only with a current profile.
 - **Post-HF threading and MPI** (`docs/HPC_MPI.md` Gap 5). The hand-written
   `tensor_backend.cpp` has no OpenMP. Profile MP2 and CC at a realistic size
   first. The dense post-HF MPI stripe (outer MO index) is untouched. RI is a
-  memory strategy, not a prerequisite for it. RI itself is not distributed
-  either: `docs/RI_MPI_SCOPE.md` (priority #11 and Nice to have).
+  memory strategy, not a prerequisite for it. RI work is split across ranks
+  with the data replicated (M1, 2026-11-17); distributing the 3-center
+  tensor (M2) is open: `docs/RI_MPI_SCOPE.md`.
 - **CASSCF** (`docs/CASSCF_PERFORMANCE.md`). Stopped at 1.3× behind PySCF at
   water cc-pVTZ C2v, which was accepted. Leftovers, only with a new target:
   re-profile cc-pVTZ C2v, a better relaxed-solve preconditioner, and the RI

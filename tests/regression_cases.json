@@ -2836,6 +2836,90 @@
    "_note": "Gap 3 (docs/HPC_MPI.md): 16 waters, 6-31G, nb=208, direct SCF with the default engine. Large enough for a partition defect to show; serial, 2 and 4 ranks must agree on every printed digit."
   },
   {
+   "id": "water_rhf_rijk_631gd_mpi_smoke",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_631gd.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "3", "--atol", "2e-10", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI (docs/RI_MPI_SCOPE.md M1): 3c build, pair factors, RI-J and RI-K split across ranks. Serial vs 2 and 3 ranks. Not bitwise: the partial sums reassociate, so the energy may move in its last printed digit."
+  },
+  {
+   "id": "water_cation_uhf_rijk_gradient_631gd_mpi_smoke",
+   "input": "tests/inputs/regression/ri/water_cation_uhf_rijk_gradient_631gd.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "3", "--atol", "2e-8", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI: UHF RI-JK SCF plus the RI-JK gradient (gamma3 over owned Q, derivative loops over owned aux shells). Gradient rows print 8 decimals, hence 2e-8."
+  },
+  {
+   "id": "water_rks_b3lyp_rijk_631gd_mpi_smoke",
+   "input": "tests/inputs/regression/ri/water_rks_b3lyp_rijk_631gd.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "3", "--atol", "2e-10", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI: KS assembly with the split RI-J and RI-K (global hybrid)."
+  },
+  {
+   "id": "water_rhf_rijk_soscf_stability_631gd_mpi_smoke",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_soscf_stability_631gd.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "--atol", "2e-10", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI: SOSCF orbital-Hessian products through the split RI-J/K, and stability through transform_eri_ri (fitted_gram over owned Q)."
+  },
+  {
+   "id": "water_cation_rimp2_ccpvdz_mpi_smoke",
+   "input": "tests/inputs/regression/ri/water_cation_rimp2_ccpvdz.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "3", "--atol", "2e-10", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI: UMP2 energy. build_ri_mo_block over owned AO pairs, the ovov/ovOV Gram over owned Q. The MP2 total energy is compared too."
+  },
+  {
+   "id": "water_ri_rmp2_gradient_631gd_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water_ri_rmp2_gradient_631gd_mpi.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "3", "--atol", "2e-8", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI: RI-RMP2 gradient (OVOV tile stream, imat and gamma3 from pair blocks over owned Q, derivative loops over owned aux shells)."
+  },
+  {
+   "id": "water_casscf_ri_ccpvdz_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water_casscf_ri_ccpvdz_mpi.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "--atol", "2e-10", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI: RI CASSCF (fitted core/active Fock through build_ri_fock_rhf, active integrals through transform_eri_ri). The final Total Energy line is compared."
+  },
+  {
    "id": "h2_rmp2_gradient_smoke",
    "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
    "tags": [

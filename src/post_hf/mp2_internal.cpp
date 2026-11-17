@@ -36,7 +36,7 @@ namespace
 
     std::vector<double> ov_block_to_ovov(const Eigen::MatrixXd &b_ov, int nocc, int nvirt)
     {
-        const Eigen::MatrixXd gram = b_ov * b_ov.transpose();
+        const Eigen::MatrixXd gram = HartreeFock::Correlation::RI::fitted_gram(b_ov, b_ov);
         const int nov = nocc * nvirt;
         std::vector<double> ovov(static_cast<std::size_t>(nov) * nov);
         for (int i = 0; i < nocc; ++i)
@@ -57,7 +57,7 @@ namespace
         int left_nvirt,
         int right_nvirt)
     {
-        const Eigen::MatrixXd gram = left_b_ov * right_b_ov.transpose();
+        const Eigen::MatrixXd gram = HartreeFock::Correlation::RI::fitted_gram(left_b_ov, right_b_ov);
         const int left_nov = left_nocc * left_nvirt;
         const int right_nov = right_nocc * right_nvirt;
 

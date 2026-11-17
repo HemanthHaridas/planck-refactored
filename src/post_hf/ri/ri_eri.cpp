@@ -7,6 +7,7 @@
 #include <numbers>
 #include <vector>
 
+#include "base/mpi_env.h"      // RI under MPI: docs/RI_MPI_SCOPE.md (M1)
 #include "base/tables.h"
 #include "basis/basis.h"        // BasisFunctions::_cartesian_shell_order
 #include "basis/spherical.h"    // BasisFunctions::cart_to_sph_block (spherical aux)
@@ -16,6 +17,21 @@
 
 namespace
 {
+    // RI under MPI (docs/RI_MPI_SCOPE.md, M1): every RI contraction is a sum
+    // over aux functions (or AO pairs), so each rank sums the indices it owns
+    // (HartreeFock::Mpi::Stripe) and one allreduce completes it. The data stay
+    // replicated. Serial builds own every index and the reduce is a no-op,
+    // so the serial path is unchanged. Every rank must reach every reduce:
+    // never call these from a rank-dependent branch or an OpenMP region.
+    void sum_over_ranks(Eigen::MatrixXd &M)
+    {
+        HartreeFock::Mpi::allreduce_inplace(M.data(), static_cast<std::size_t>(M.size()));
+    }
+    void sum_over_ranks(Eigen::RowVectorXd &v)
+    {
+        HartreeFock::Mpi::allreduce_inplace(v.data(), static_cast<std::size_t>(v.size()));
+    }
+
     struct ThreeCenterScratch
     {
         int ax_dim = 0;
@@ -930,10 +946,15 @@ namespace HartreeFock::Correlation::RI
         j3c_cart.setZero();
 
         // Each aux shell fills its own columns: threads never share an element.
+        // Under MPI each rank fills its own shells and the sum below completes
+        // the tensor (the other columns are still zero).
         const auto &aux = *calculator._ri_aux_basis;
+        const HartreeFock::Mpi::Stripe stripe;
 #pragma omp parallel for schedule(dynamic)
         for (std::size_t shell_idx = 0; shell_idx < aux.shells.size(); ++shell_idx)
         {
+            if (!stripe.owns(shell_idx))
+                continue;
             const auto &shellC = aux.shells[shell_idx];
             std::size_t aux_col = aux.offsets[shell_idx];
             const unsigned L = static_cast<unsigned>(shellC._shell);
@@ -974,6 +995,7 @@ namespace HartreeFock::Correlation::RI
                 ++aux_col;
             }
         }
+        sum_over_ranks(j3c_cart);
 
         const Eigen::MatrixXd &T_aux = calculator._ri_aux_basis->cart_to_sph;
         if (!calculator._shells._spherical)
@@ -1104,9 +1126,11 @@ namespace HartreeFock::Correlation::RI
         // must write only K-owned storage (aux_col belongs to K; a reduction
         // keeps one partial per K and sums them in K order, which keeps the
         // result independent of the thread count).
+        // Only shells stripe.owns(K) are visited: a caller passing the rank's
+        // Stripe must sum its result over ranks; Stripe{0, 1} visits all.
         template <typename Fn>
         std::expected<void, std::string> for_each_3c_deriv(
-            const HartreeFock::Calculator &calculator, Fn &&fn)
+            const HartreeFock::Calculator &calculator, const HartreeFock::Mpi::Stripe &stripe, Fn &&fn)
         {
             if (!calculator._ri_aux_basis)
                 return std::unexpected("RI 3-center derivative: RI auxiliary basis is not loaded.");
@@ -1116,6 +1140,8 @@ namespace HartreeFock::Correlation::RI
 #pragma omp parallel for schedule(dynamic)
             for (std::size_t K = 0; K < aux.shells.size(); ++K)
             {
+                if (!stripe.owns(K))
+                    continue;
                 const auto &shellC = aux.shells[K];
                 std::size_t aux_col = aux.offsets[K];
                 const auto components = HartreeFock::BasisFunctions::_cartesian_shell_order(
@@ -1149,7 +1175,7 @@ namespace HartreeFock::Correlation::RI
         // for_each_3c_deriv: fn writes only K-owned storage.
         template <typename Fn>
         std::expected<void, std::string> for_each_2c_deriv(
-            const HartreeFock::Calculator &calculator, Fn &&fn)
+            const HartreeFock::Calculator &calculator, const HartreeFock::Mpi::Stripe &stripe, Fn &&fn)
         {
             if (!calculator._ri_aux_basis)
                 return std::unexpected("RI 2-center derivative: RI auxiliary basis is not loaded.");
@@ -1161,6 +1187,8 @@ namespace HartreeFock::Correlation::RI
 #pragma omp parallel for schedule(dynamic)
             for (std::size_t K = 0; K < nshells; ++K)
             {
+                if (!stripe.owns(K))
+                    continue;
                 const auto &shP = aux.shells[K];
                 const auto compP = HartreeFock::BasisFunctions::_cartesian_shell_order(
                     static_cast<unsigned>(shP._shell));
@@ -1196,7 +1224,7 @@ namespace HartreeFock::Correlation::RI
         // Scatter the 9 components to the atoms their legs sit on (atoms may
         // coincide; += accumulates, so translational invariance holds).
         auto ok = for_each_3c_deriv(
-            calculator,
+            calculator, HartreeFock::Mpi::Stripe{0, 1}, // whole tensor on every rank
             [&](std::size_t, Eigen::Index row, Eigen::Index col, std::size_t atomA,
                 std::size_t atomB, std::size_t atomC, const std::array<double, 9> &d)
             {
@@ -1288,7 +1316,7 @@ namespace HartreeFock::Correlation::RI
         std::vector<Eigen::MatrixXd> dV(calculator._molecule.natoms * 3,
                                         Eigen::MatrixXd::Zero(naux, naux));
         auto ok = for_each_2c_deriv(
-            calculator,
+            calculator, HartreeFock::Mpi::Stripe{0, 1}, // whole tensor on every rank
             [&](std::size_t, Eigen::Index r, Eigen::Index c, std::size_t atomP,
                 std::size_t atomQ, const std::array<double, 6> &d)
             {
@@ -1395,8 +1423,10 @@ namespace HartreeFock::Correlation::RI
         std::vector<Eigen::MatrixXd> part2 = part3;
 
         // 3-center: Σ_{(μν),Q} w·gamma3·dJ, each leg on its own atom.
+        // Each rank visits its own aux shells; two_e is summed over ranks below.
+        const HartreeFock::Mpi::Stripe stripe;
         auto ok3 = for_each_3c_deriv(
-            calculator,
+            calculator, stripe,
             [&](std::size_t K, Eigen::Index row, Eigen::Index col, std::size_t atomA,
                 std::size_t atomB, std::size_t atomC, const std::array<double, 9> &d)
             {
@@ -1416,7 +1446,7 @@ namespace HartreeFock::Correlation::RI
         // balances the metric leg against the (unfactored) 3-center leg,
         // matching the dense two_e term to fitting accuracy (gated RG2.2).
         auto ok2 = for_each_2c_deriv(
-            calculator,
+            calculator, stripe,
             [&](std::size_t K, Eigen::Index r, Eigen::Index c, std::size_t atomP,
                 std::size_t atomQ, const std::array<double, 6> &d)
             {
@@ -1436,6 +1466,7 @@ namespace HartreeFock::Correlation::RI
             two_e += p3;
         for (const auto &p2 : part2)
             two_e += p2;
+        sum_over_ranks(two_e);
         return two_e;
     }
 
@@ -1475,19 +1506,24 @@ namespace HartreeFock::Correlation::RI
         // and sink(Q, W) receives it. Two passes over Q (the ket factors, one
         // GEMM per block, then W), each threaded over Q with Q-owned writes;
         // sink runs concurrently for different Q and must write only Q-owned
-        // storage. Memory: (n_j·n_b + n_i·n_a) · naux per block.
+        // storage. Memory: (n_j·n_b + n_i·n_a) · naux per block. Under MPI only
+        // this rank's Q (Mpi::Stripe) reach factor and sink; the caller sums
+        // its result over ranks.
         template <typename Factor, typename Sink>
         void for_each_pair_block_w(const std::vector<PairDensityBlock> &blocks,
                                    Eigen::Index nao, Eigen::Index naux,
                                    Factor &&factor, Sink &&sink)
         {
             using RowMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+            const HartreeFock::Mpi::Stripe stripe;
             std::vector<Eigen::MatrixXd> ket(blocks.size());
             for (std::size_t k = 0; k < blocks.size(); ++k)
-                ket[k].resize(blocks[k].ket_occ.cols() * blocks[k].ket_virt.cols(), naux);
+                ket[k].setZero(blocks[k].ket_occ.cols() * blocks[k].ket_virt.cols(), naux);
 #pragma omp parallel for schedule(dynamic)
             for (Eigen::Index Q = 0; Q < naux; ++Q)
             {
+                if (!stripe.owns(static_cast<std::size_t>(Q)))
+                    continue;
                 Eigen::MatrixXd F(nao, nao);
                 factor(Q, F);
                 for (std::size_t k = 0; k < blocks.size(); ++k)
@@ -1503,6 +1539,8 @@ namespace HartreeFock::Correlation::RI
 #pragma omp parallel for schedule(dynamic)
             for (Eigen::Index Q = 0; Q < naux; ++Q)
             {
+                if (!stripe.owns(static_cast<std::size_t>(Q)))
+                    continue;
                 Eigen::MatrixXd W = Eigen::MatrixXd::Zero(nao, nao);
                 for (std::size_t k = 0; k < blocks.size(); ++k)
                 {
@@ -1523,7 +1561,7 @@ namespace HartreeFock::Correlation::RI
         const Eigen::MatrixXd x_pair = build_ri_x_pair_factors(calculator);
         const Eigen::Index naux = x_pair.cols();
         const auto n = static_cast<Eigen::Index>(calculator.working_nbasis());
-        Eigen::MatrixXd gamma3(n * (n + 1) / 2, naux);
+        Eigen::MatrixXd gamma3 = Eigen::MatrixXd::Zero(n * (n + 1) / 2, naux);
         for_each_pair_block_w(
             blocks, n, naux,
             [&](Eigen::Index Q, Eigen::MatrixXd &F)
@@ -1539,6 +1577,7 @@ namespace HartreeFock::Correlation::RI
                     for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pr)
                         gamma3(pr, Q) = (mu == nu) ? W(mu, nu) : W(mu, nu) + W(nu, mu);
             });
+        sum_over_ranks(gamma3);
         return {gamma3, x_pair};
     }
 
@@ -1576,10 +1615,13 @@ namespace HartreeFock::Correlation::RI
 
         // ponytail: Pσ X[Q] Pσ is nb³ per aux function; from C_occ it would be
         // nb²·n_occ (B2 in docs/ERI_FOCK_BLAS_SCOPE.md does that for RI-K).
-        Eigen::MatrixXd gamma3(npair, naux);
+        const HartreeFock::Mpi::Stripe stripe;
+        Eigen::MatrixXd gamma3 = Eigen::MatrixXd::Zero(npair, naux);
 #pragma omp parallel for schedule(dynamic)
         for (Eigen::Index Q = 0; Q < naux; ++Q)
         {
+            if (!stripe.owns(static_cast<std::size_t>(Q)))
+                continue;
             Eigen::MatrixXd XQ(n, n);
             for (Eigen::Index mu = 0, r = 0; mu < n; ++mu)
                 for (Eigen::Index nu = 0; nu <= mu; ++nu, ++r)
@@ -1591,6 +1633,7 @@ namespace HartreeFock::Correlation::RI
                 for (Eigen::Index nu = 0; nu <= mu; ++nu, ++r)
                     gamma3(r, Q) = Pt(mu, nu) * c(Q) - exchange_coefficient * K(mu, nu);
         }
+        sum_over_ranks(gamma3);
         return build_ri_two_electron_gradient(calculator, gamma3, X);
     }
 
@@ -1611,14 +1654,18 @@ namespace HartreeFock::Correlation::RI
             blocks, n, naux,
             [&](Eigen::Index Q, Eigen::MatrixXd &F) { F = B[static_cast<std::size_t>(Q)]; },
             [&](Eigen::Index Q, const Eigen::MatrixXd &W) { W_all[static_cast<std::size_t>(Q)] = W; });
+        // Under MPI only this rank's Q are filled (B[Q] and W_all[Q] empty
+        // otherwise); the sum over ranks completes imat.
 #pragma omp parallel for schedule(static)
         for (Eigen::Index bin = 0; bin < kBins; ++bin)
             for (Eigen::Index Q = bin; Q < naux; Q += kBins)
-                part[bin].noalias() += B[static_cast<std::size_t>(Q)].transpose() *
-                                       W_all[static_cast<std::size_t>(Q)];
+                if (W_all[static_cast<std::size_t>(Q)].size())
+                    part[bin].noalias() += B[static_cast<std::size_t>(Q)].transpose() *
+                                           W_all[static_cast<std::size_t>(Q)];
         Eigen::MatrixXd imat = Eigen::MatrixXd::Zero(n, n);
         for (const auto &p : part)
             imat += p;
+        sum_over_ranks(imat);
         return imat;
     }
 
@@ -1645,15 +1692,32 @@ namespace HartreeFock::Correlation::RI
             return {};
 
         // B = J V^{-1/2}: the same metric factor the gradient's X uses.
+        // Rows are independent, so under MPI each rank fits its own AO pairs
+        // and the sum over ranks completes B; serial takes the whole matrix.
         const Eigen::MatrixXd &j3c = calculator._ri_j3c;
         const auto &metric = *calculator._ri_metric_factor;
-        if (metric.method == MetricFactorization::Method::Eigen)
-            calculator._ri_pair_factors = j3c * metric.transform.transpose();
+        const auto fit = [&](const Eigen::MatrixXd &rows) -> Eigen::MatrixXd
+        {
+            if (metric.method == MetricFactorization::Method::Eigen)
+                return rows * metric.transform.transpose();
+            Eigen::MatrixXd t = rows.transpose();
+            metric.transform.triangularView<Eigen::Lower>().solveInPlace(t);
+            return t.transpose();
+        };
+        const HartreeFock::Mpi::Stripe stripe;
+        if (stripe.size == 1)
+            calculator._ri_pair_factors = fit(j3c);
         else
         {
-            Eigen::MatrixXd pair_factors_t = j3c.transpose();
-            metric.transform.triangularView<Eigen::Lower>().solveInPlace(pair_factors_t);
-            calculator._ri_pair_factors = pair_factors_t.transpose();
+            std::vector<Eigen::Index> mine;
+            for (Eigen::Index r = 0; r < j3c.rows(); ++r)
+                if (stripe.owns(static_cast<std::size_t>(r)))
+                    mine.push_back(r);
+            const Eigen::MatrixXd part = fit(j3c(mine, Eigen::all));
+            Eigen::MatrixXd B = Eigen::MatrixXd::Zero(j3c.rows(), part.cols());
+            B(mine, Eigen::all) = part;
+            sum_over_ranks(B);
+            calculator._ri_pair_factors = std::move(B);
         }
         return {};
     }
@@ -1673,6 +1737,9 @@ namespace HartreeFock::Correlation::RI
         const int nfit = static_cast<int>(pair_factors.cols());
         const int npq = nrow * ncol;
 
+        // Under MPI each rank sums its own AO pairs; the sum over ranks below
+        // completes b_pq.
+        const HartreeFock::Mpi::Stripe stripe;
         Eigen::MatrixXd b_pq = Eigen::MatrixXd::Zero(npq, nfit);
         std::size_t pair_row = 0;
         for (Eigen::Index mu = 0; mu < C_row.rows(); ++mu)
@@ -1681,6 +1748,8 @@ namespace HartreeFock::Correlation::RI
             const Eigen::RowVectorXd col_mu = C_col.row(mu);
             for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pair_row)
             {
+                if (!stripe.owns(pair_row))
+                    continue;
                 const Eigen::RowVectorXd factors =
                     pair_factors.row(static_cast<Eigen::Index>(pair_row));
                 const Eigen::RowVectorXd row_nu = C_row.row(nu);
@@ -1702,7 +1771,22 @@ namespace HartreeFock::Correlation::RI
                 }
             }
         }
+        sum_over_ranks(b_pq);
         return b_pq;
+    }
+
+    Eigen::MatrixXd fitted_gram(const Eigen::MatrixXd &left, const Eigen::MatrixXd &right)
+    {
+        const HartreeFock::Mpi::Stripe stripe;
+        if (stripe.size == 1)
+            return left * right.transpose();
+        std::vector<Eigen::Index> mine;
+        for (Eigen::Index Q = 0; Q < left.cols(); ++Q)
+            if (stripe.owns(static_cast<std::size_t>(Q)))
+                mine.push_back(Q);
+        Eigen::MatrixXd gram = left(Eigen::all, mine) * right(Eigen::all, mine).transpose();
+        sum_over_ranks(gram);
+        return gram;
     }
 
     Eigen::MatrixXd build_ri_j(
@@ -1713,6 +1797,10 @@ namespace HartreeFock::Correlation::RI
         const Eigen::Index nb = D.rows();
         const Eigen::Index nfit = pair_factors.cols();
 
+        // Under MPI each rank takes its own AO pairs in both passes; c and J
+        // are each summed over ranks.
+        const HartreeFock::Mpi::Stripe stripe;
+
         // c_Q = Σ_{μν} B_{(μν),Q} D_{μν}. The packed factors store μ≥ν only, so
         // off-diagonal pairs contribute twice (D symmetric): weight = (μ==ν?1:2).
         Eigen::RowVectorXd c = Eigen::RowVectorXd::Zero(nfit);
@@ -1721,9 +1809,10 @@ namespace HartreeFock::Correlation::RI
             for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pair_row)
             {
                 const double w = (mu == nu ? 1.0 : 2.0) * D(mu, nu);
-                if (w != 0.0)
+                if (w != 0.0 && stripe.owns(pair_row))
                     c.noalias() += w * pair_factors.row(static_cast<Eigen::Index>(pair_row));
             }
+        sum_over_ranks(c);
 
         // J_{μν} = Σ_Q B_{(μν),Q} c_Q; scatter to both (μ,ν) and (ν,μ).
         Eigen::MatrixXd J = Eigen::MatrixXd::Zero(nb, nb);
@@ -1731,11 +1820,14 @@ namespace HartreeFock::Correlation::RI
         for (Eigen::Index mu = 0; mu < nb; ++mu)
             for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pair_row)
             {
+                if (!stripe.owns(pair_row))
+                    continue;
                 const double val =
                     pair_factors.row(static_cast<Eigen::Index>(pair_row)).dot(c);
                 J(mu, nu) = val;
                 J(nu, mu) = val;
             }
+        sum_over_ranks(J);
         return J;
     }
 
@@ -1747,8 +1839,14 @@ namespace HartreeFock::Correlation::RI
             static_cast<Eigen::Index>(calculator.working_nbasis());
         const Eigen::Index naux = pair_factors.cols();
 
-        std::vector<Eigen::MatrixXd> B(
-            static_cast<std::size_t>(naux), Eigen::MatrixXd::Zero(nb, nb));
+        // Under MPI only this rank's Q are allocated; the others stay empty
+        // (0×0), so the list keeps its Q indexing and memory drops by 1/size.
+        // Consumers skip empty entries and sum their result over ranks.
+        const HartreeFock::Mpi::Stripe stripe;
+        std::vector<Eigen::MatrixXd> B(static_cast<std::size_t>(naux));
+        for (Eigen::Index Q = 0; Q < naux; ++Q)
+            if (stripe.owns(static_cast<std::size_t>(Q)))
+                B[static_cast<std::size_t>(Q)].setZero(nb, nb);
 
         std::size_t pair_row = 0;
         for (Eigen::Index mu = 0; mu < nb; ++mu)
@@ -1758,6 +1856,8 @@ namespace HartreeFock::Correlation::RI
                     pair_factors.row(static_cast<Eigen::Index>(pair_row));
                 for (Eigen::Index Q = 0; Q < naux; ++Q)
                 {
+                    if (B[static_cast<std::size_t>(Q)].size() == 0)
+                        continue;
                     const double v = factors(Q);
                     B[static_cast<std::size_t>(Q)](mu, nu) = v;
                     B[static_cast<std::size_t>(Q)](nu, mu) = v;
@@ -1814,21 +1914,30 @@ namespace HartreeFock::Correlation::RI
             }
         }
 
+        // Empty B[Q] belong to other ranks (build_ri_3index_unpacked); the
+        // sum over ranks completes K.
         if (rank < nb)
         {
             for (const Eigen::MatrixXd &BQ : B)
             {
+                if (BQ.size() == 0)
+                    continue;
                 const Eigen::MatrixXd Y = BQ * X;
                 K.noalias() += Y * s.asDiagonal() * Y.transpose();
             }
-            return K;
         }
-        for (const Eigen::MatrixXd &BQ : B)
+        else
         {
-            // H = B[Q] D ; K += H B[Q]ᵀ  ⇒  K_{μν} += Σ_{λσ} B_{μλ} D_{λσ} B_{νσ}.
-            const Eigen::MatrixXd H = BQ * D;
-            K.noalias() += H * BQ.transpose();
+            for (const Eigen::MatrixXd &BQ : B)
+            {
+                if (BQ.size() == 0)
+                    continue;
+                // H = B[Q] D ; K += H B[Q]ᵀ  ⇒  K_{μν} += Σ_{λσ} B_{μλ} D_{λσ} B_{νσ}.
+                const Eigen::MatrixXd H = BQ * D;
+                K.noalias() += H * BQ.transpose();
+            }
         }
+        sum_over_ranks(K);
         return K;
     }
 

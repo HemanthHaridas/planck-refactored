@@ -3,7 +3,8 @@
 **Question.** How should `planck-mpi` split the RI work (RI-JK SCF, RI-MP2,
 RI gradients) across ranks, and in what order?
 
-Status: scope, 2026-11-17. Nothing here is built.
+Status: **M0 and M1 landed 2026-11-17** (see "M1 as implemented" at the
+end). M2 is not started and is still scope.
 
 ## Where it stands
 
@@ -108,6 +109,78 @@ Design to settle first (a decision, not code):
 - RI-MP2 needs `B_ov` (o·v·naux), which is small enough to keep replicated
   after one distributed build.
 - Gradients would need the 3-index density striped the same way.
+
+## M1 as implemented (2026-11-17)
+
+One ownership rule, `Mpi::Stripe` (`src/base/mpi_env.h`: rank r owns index
+i when i % size == r; a serial build owns everything), and one reduce,
+`sum_over_ranks` (`ri_eri.cpp`, a no-op when serial). Each split function
+reduces its own result, so no caller changed.
+
+| Function | Split over | Reduced |
+|---|---|---|
+| `compute_3c_eri` | aux shells | the Cartesian 3c tensor, before the transforms |
+| `ensure_ri_3c_ready` (B = J V^{-1/2}) | AO pair rows (serial path unchanged) | B |
+| `build_ri_j` | AO pair rows, both passes | c, then J |
+| `build_ri_3index_unpacked` | aux Q: other ranks' B_Q stay empty (0×0) | — |
+| `build_ri_k` | the B_Q this rank holds | K |
+| `build_ri_mo_block` | AO pair rows | B_pq |
+| `fitted_gram` (new; MP2 ovov/ovOV and `transform_eri_ri`) | aux Q | the Gram |
+| RMP2 OVOV tile stream (`mp2_internal.h`) | aux Q | each tile, before the consumer |
+| `for_each_pair_block_w` → `build_ri_imat_from_pair_blocks`, `build_ri_gamma3_from_pair_blocks` | aux Q | imat, gamma3 |
+| `build_ri_scf_two_electron_gradient` (gamma3) | aux Q | gamma3 |
+| `for_each_{3c,2c}_deriv` → `build_ri_two_electron_gradient` | aux shells | the gradient |
+
+Differences from the plan above:
+
+- **RI-MP2 energy** is split over aux Q in the `B_ov B_ovᵀ` products, not
+  over the occupied index. The MP2 kernels consume the ovov tensor or tile
+  stream; splitting where it is built leaves them untouched.
+- **No M0 warning.** M1 makes it untrue, so it was never written.
+- **Still replicated:** the 2-center metric and its factorization (naux²,
+  small), and `build_ri_x_pair_factors` (one npair·naux² product per
+  gradient). Split them only if a profile shows them.
+- `compute_3c_eri_deriv` / `compute_2c_eri_deriv` (test-only full tensors)
+  pass `Stripe{0, 1}` and stay whole on every rank.
+
+Contract: every rank must reach every reduce. None of these functions may
+be called from a rank-dependent branch or inside an OpenMP region.
+
+Gates (`tests/regression_cases.json`, tag `ri`, through
+`tests/mpi_smoke_compare.py`, which now also compares printed MP2 energies
+and gradient rows): `water_rhf_rijk_631gd`, `water_cation_uhf_rijk_gradient_631gd`,
+`water_rks_b3lyp_rijk_631gd`, `water_rhf_rijk_soscf_stability_631gd`,
+`water_cation_rimp2_ccpvdz`, `water_ri_rmp2_gradient_631gd` and
+`water_casscf_ri_ccpvdz`, each `_mpi_smoke`, serial against 2 (and 3) ranks.
+Tolerance is 2e-10 for energies and 2e-8 where gradient rows (8 decimals)
+are compared: the partial sums reassociate, so this is not bitwise.
+
+### Measured
+
+- **Serial unchanged:** all 45 RI regression inputs print byte-identical
+  output to the build before M1; the nine `planck-ri-*` ctest gates pass.
+- **MPI gates:** all seven pass. In practice every energy, MP2 energy and
+  gradient row matched serial exactly (|Δ| = 0) at 2 and 3 ranks.
+- **Speed**, 16 H2O / 6-31G / def2-universal-JKFIT RHF, one OpenMP thread
+  per rank (post-B2 build):
+
+  | ranks | wall | speedup | energy |
+  |---|---|---|---|
+  | 1 | 31.8 s | 1.00× | −1215.7175270085 |
+  | 2 | 19.6 s | 1.62× | −1215.7175270085 |
+  | 4 | 16.5 s | 1.93× | −1215.7175270085 |
+
+  The work still replicated (metric factorization, diagonalization, SCF
+  bookkeeping) caps it; profile before splitting more.
+- **Mutation:** removing the sum in `build_ri_k` does **not** give a wrong
+  energy. It gives a hang. Each rank holds a different K, the SCFs diverge
+  and stop making matching collective calls, and rank 0 waits forever in
+  `MPI_Allreduce`. `tests/mpi_smoke_compare.py` therefore now has a per-run
+  `--timeout` (SIGTERM first, so `mpirun` takes its ranks down) and names
+  the likely cause; the RI gates use 30 s. Against the mutation the gate
+  fails in 31 s with no ranks left behind. Lesson for any future split:
+  **a missing reduce shows up as a deadlock, not a wrong number**, so every
+  MPI gate needs a timeout.
 
 ## Not in this scope
 

@@ -221,6 +221,11 @@ namespace HartreeFock::Correlation::RI
         const Eigen::MatrixXd &C_row,
         const Eigen::MatrixXd &C_col);
 
+    // (pq|rs) from two fitted blocks: left · rightᵀ = Σ_Q left[:,Q] right[:,Q]ᵀ.
+    // Under MPI each rank takes its own Q and the result is summed over ranks
+    // (docs/RI_MPI_SCOPE.md); serial is the plain product.
+    Eigen::MatrixXd fitted_gram(const Eigen::MatrixXd &left, const Eigen::MatrixXd &right);
+
     // RI Coulomb matrix J_{μν} = Σ_Q B_{(μν),Q} c_Q, with the fitted charge
     // c_Q = Σ_{λσ} B_{(λσ),Q} D_{λσ}. Both use the packed (μ≥ν) pair factors, so
     // off-diagonal pairs carry an explicit factor 2 in the c_Q accumulation and
