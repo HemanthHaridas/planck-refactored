@@ -3429,6 +3429,90 @@ static void test_literal_canonical_merge_matches_map_output()
           "contiguous canonical compaction preserves determinant order");
 }
 
+// Code review finding 1: surviving weights below the occupation threshold are
+// stochastically rounded to 0 or +/-threshold. Unbiased per determinant, a
+// pure function of (root, determinant), and inert above the threshold.
+static void test_occupation_rounding()
+{
+    const DetKey small_pos{CIString{0b0011}, CIString{0b0011}};
+    const DetKey small_neg{CIString{0b0101}, CIString{0b0011}};
+    const DetKey large{CIString{0b0110}, CIString{0b0011}};
+    const std::vector<CanonicalWalkerPopulation::Entry> entries = {
+        {small_pos, 0.3}, {small_neg, -0.7}, {large, 2.5}};
+
+    double sum_pos = 0.0, sum_neg = 0.0;
+    bool levels_ok = true, large_ok = true;
+    const int trials = 200000;
+    for (int t = 0; t < trials; ++t)
+    {
+        CanonicalWalkerPopulation pop;
+        pop.assign_sorted(entries);
+        const RandomSource root(static_cast<std::uint64_t>(t) * 7919u + 1u);
+        const auto res = pop.compress_with_l1_norm(1e-12, 1.0, &root);
+        const double wp = pop.weight_at(small_pos), wn = pop.weight_at(small_neg);
+        levels_ok = levels_ok && (wp == 0.0 || wp == 1.0) && (wn == 0.0 || wn == -1.0);
+        large_ok = large_ok && pop.weight_at(large) == 2.5
+                   && res.l1_norm == std::abs(wp) + std::abs(wn) + 2.5;
+        sum_pos += wp;
+        sum_neg += wn;
+    }
+    check(levels_ok, "occupation rounding gives 0 or +/-threshold below it");
+    check(large_ok, "occupation rounding leaves weights above it and the L1 norm consistent");
+    const double tol = 6.0 * std::sqrt(0.25 / trials);
+    check_close(sum_pos / trials, 0.3, tol, "occupation rounding is unbiased (positive)");
+    check_close(sum_neg / trials, -0.7, tol, "occupation rounding is unbiased (negative)");
+
+    // Same root, same result -- independent of anything but (root, det).
+    CanonicalWalkerPopulation a, b;
+    a.assign_sorted(entries);
+    b.assign_sorted(entries);
+    const RandomSource root(42);
+    a.compress_with_l1_norm(1e-12, 1.0, &root);
+    b.compress_with_l1_norm(1e-12, 1.0, &root);
+    check(a.size() == b.size() && a.weight_at(small_pos) == b.weight_at(small_pos)
+              && a.weight_at(small_neg) == b.weight_at(small_neg),
+          "occupation rounding is reproducible from its root");
+
+    // No root or zero occupation: the old continuous-weight behaviour.
+    CanonicalWalkerPopulation c;
+    c.assign_sorted(entries);
+    c.compress_with_l1_norm(1e-12, 1.0, nullptr);
+    check(c.weight_at(small_pos) == 0.3 && c.weight_at(small_neg) == -0.7,
+          "occupation rounding is off without a root");
+}
+
+// Code review finding 3: blocking must report when it has not reached a
+// plateau. AR(1) x_t = phi x_{t-1} + e_t has integrated correlation time
+// (1+phi)/(1-phi). Short tau against N converges; tau ~ N/10 must not.
+static void test_blocking_reports_unconverged_plateau()
+{
+    const auto ar1 = [](double phi, int n, std::uint64_t seed) {
+        RandomSource rng(seed);
+        std::vector<double> x(static_cast<std::size_t>(n));
+        double v = 0.0;
+        for (auto &xi : x)
+        {
+            // Sum of 12 uniforms - 6: unit-variance, near-Gaussian noise.
+            double e = -6.0;
+            for (int k = 0; k < 12; ++k)
+                e += rng.uniform();
+            v = phi * v + e;
+            xi = v;
+        }
+        return x;
+    };
+    const int n = 10000;
+    check(blocking_analysis(ar1(0.0, n, 1)).converged,
+          "blocking converges on an uncorrelated series");
+    check(blocking_analysis(ar1(0.9, n, 2)).converged,
+          "blocking converges when tau (19) << N");
+    // tau = (1 + 0.9998) / 0.0002 ~ 1e4 ~ N: the curve is still rising.
+    const auto slow = blocking_analysis(ar1(0.9998, n, 3));
+    check(!slow.converged, "blocking reports unconverged when tau ~ N");
+    check(slow.error == blocked_standard_error(ar1(0.9998, n, 3)),
+          "blocked_standard_error returns the blocking_analysis error");
+}
+
 // M1.1: each pair at a tree level has disjoint input and a predetermined
 // output slot.  Exercise every level with cross-bin duplicate keys whose
 // non-associative sums make a changed tree observable.
@@ -4959,6 +5043,8 @@ int main()
     test_trajectory_digest_is_sensitive();
     test_profile_is_a_passive_trajectory_observer();
     test_low_weight_parent_sampling();
+    test_occupation_rounding();
+    test_blocking_reports_unconverged_plateau();
     test_literal_canonical_merge_matches_map_output();
     test_level_parallel_pairwise_merge_matches_sequential();
     test_parent_keyed_stream_is_independent_of_parent_visit_order();

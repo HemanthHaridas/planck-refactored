@@ -20,6 +20,10 @@
 %begin_scf
     scf_type    rhf
     correlation fciqmc
+    # Longer than the default 8000: at dt = 0.001 the slowest mode decorrelates
+    # over ~1000 steps, and at 8000 the projected error understated a 20-seed
+    # spread by 1.3x. At 128000 the ratio is 0.88 with no unconverged flags.
+    fciqmc_steps 128000
     ci_max_dim  200000
     use_diis    .true.
     diis_dim    8

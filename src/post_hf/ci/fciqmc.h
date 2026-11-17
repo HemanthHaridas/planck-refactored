@@ -92,6 +92,8 @@ namespace HartreeFock::Correlation::CI::QMC
     // It must never depend on OpenMP thread count or population capacity.
     inline constexpr std::size_t kFciqmcBins = 64;
 
+    class RandomSource;
+
     // The sparse walker population: determinant -> signed weight.
     //
     // This is the piece the existing CI layer cannot supply. CIDeterminantSpace
@@ -217,27 +219,25 @@ namespace HartreeFock::Correlation::CI::QMC
         // In-place stable compaction retains canonical determinant order.  The
         // fixed determinant partition and bin-order reduction make the L1
         // population control scalar independent of storage capacity.
-        CompressResult compress_with_l1_norm(Weight threshold = 0.0) noexcept
-        {
-            CompressResult result;
-            std::array<Weight, kFciqmcBins> bins{};
-            std::size_t out = 0;
-            for (const Entry &entry : _entries)
-            {
-                const Weight aw = std::abs(entry.second);
-                if (aw <= threshold)
-                {
-                    ++result.removed;
-                    continue;
-                }
-                _entries[out++] = entry;
-                bins[DetKeyHash{}(entry.first) % kFciqmcBins] += aw;
-            }
-            _entries.resize(out);
-            for (const Weight bin : bins)
-                result.l1_norm += bin;
-            return result;
-        }
+        //
+        // OCCUPATION ROUNDING (code review finding 1, 2026-11-17). With
+        // `occupation > 0` and a `rounding_root`, every surviving weight with
+        // |w| < occupation becomes sign(w)*occupation with probability
+        // |w|/occupation and is removed otherwise -- unbiased in expectation.
+        // Without it the death step's unrounded weight*(1 - dt(H_ii - S))
+        // left every determinant ever spawned onto carrying a slowly decaying
+        // fractional weight: 94,048 occupied parents for a 25,000-walker
+        // target on Cr2 CAS(12,12), 93-96 % of visits below one walker, and
+        // stale weights counting as "occupied" for the initiator rule.
+        //
+        // Each determinant draws from rounding_root->derive_parent(det), a
+        // stateless function of (root, det), so the result does not depend on
+        // thread count or storage order. The caller must give a root that is
+        // independent of the spawn streams.
+        // Defined after RandomSource, below.
+        CompressResult compress_with_l1_norm(Weight threshold = 0.0,
+                                             Weight occupation = 0.0,
+                                             const RandomSource *rounding_root = nullptr) noexcept;
 
     private:
         std::vector<Entry> _entries;
@@ -423,6 +423,41 @@ namespace HartreeFock::Correlation::CI::QMC
         std::uint64_t _s[4]{};
         std::uint64_t _seed;
     };
+
+    inline CanonicalWalkerPopulation::CompressResult
+    CanonicalWalkerPopulation::compress_with_l1_norm(Weight threshold, Weight occupation,
+                                                     const RandomSource *rounding_root) noexcept
+    {
+        CompressResult result;
+        std::array<Weight, kFciqmcBins> bins{};
+        std::size_t out = 0;
+        const bool round = occupation > 0.0 && rounding_root != nullptr;
+        for (Entry entry : _entries)
+        {
+            Weight aw = std::abs(entry.second);
+            if (round && aw > threshold && aw < occupation)
+            {
+                if (rounding_root->derive_parent(entry.first).uniform() < aw / occupation)
+                {
+                    entry.second = std::copysign(occupation, entry.second);
+                    aw = occupation;
+                }
+                else
+                    aw = 0.0;
+            }
+            if (aw <= threshold)
+            {
+                ++result.removed;
+                continue;
+            }
+            _entries[out++] = entry;
+            bins[DetKeyHash{}(entry.first) % kFciqmcBins] += aw;
+        }
+        _entries.resize(out);
+        for (const Weight bin : bins)
+            result.l1_norm += bin;
+        return result;
+    }
 
     // Draw one excitation uniformly from the full connection set (scope step
     // F2.2).
@@ -1033,13 +1068,27 @@ namespace HartreeFock::Correlation::CI::QMC
     //
     // Takes the MAXIMUM over the curve rather than fitting the plateau: the curve
     // rises then goes noisy at large block size, so the max is simple and
-    // conservative. It can overestimate on a short series but never systematically
-    // underestimate -- and an overestimate fails a gate loudly, while an
-    // underestimate passes one silently.
+    // conservative ONCE THE CURVE HAS PLATEAUED.
+    //
+    // It does underestimate when the correlation time is comparable to the series
+    // length: the curve is still rising at the last level with >= 4 blocks, so its
+    // maximum is too small. That is the regime of the Cr2 R3 runs (code review
+    // finding 3, 2026-11-17): at dt = 0.0005 a correlation time ~1/gap spans
+    // thousands of steps, and the projected error understated the seed spread
+    // about 4x. `converged` reports whether a plateau was reached, by the
+    // Lee et al. (PRE 83, 066706, 2011) criterion used by pyblock: some level
+    // with block length B satisfies B^3 > 2 N (se_B / se_0)^4. A caller must
+    // flag an unconverged error bar rather than present it as reliable.
     //
     // This mirrors tests/blocking.py, which is validated against AR(1) series with
     // an analytic tau across a 39x range. The two are cross-checked so they cannot
     // drift apart.
+    struct BlockingResult
+    {
+        double error = 0.0;
+        bool converged = false;
+    };
+    BlockingResult blocking_analysis(const std::vector<double> &series);
     double blocked_standard_error(const std::vector<double> &series);
 
     // Naive sigma/sqrt(N), for comparison only. Correct exclusively for

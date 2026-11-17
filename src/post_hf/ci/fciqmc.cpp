@@ -1098,6 +1098,10 @@ namespace HartreeFock::Correlation::CI::QMC
         }
 
         out.numerator = numerator;
+        // The numerator is filled even at c_0 == 0 (reachable with a zero
+        // threshold): a ratio-of-sums caller needs it on every step.
+        if (out.reference_weight == 0.0)
+            return out;
         // E = H_00 + sum_j H_0j c_j / c_0. The diagonal term is separated because
         // it is exact -- it carries no sampling noise at all.
         out.energy = ham.diagonal(reference) + numerator / out.reference_weight;
@@ -1177,11 +1181,15 @@ namespace HartreeFock::Correlation::CI::QMC
         return std::sqrt(var / static_cast<double>(n));
     }
 
-    double blocked_standard_error(const std::vector<double> &series)
+    BlockingResult blocking_analysis(const std::vector<double> &series)
     {
         std::vector<double> data = series;
+        const double n = static_cast<double>(series.size());
         double worst = 0.0;
+        double se0 = std::numeric_limits<double>::quiet_NaN();
+        double block_length = 1.0;
         bool any = false;
+        bool converged = false;
 
         // Stop below 4 blocks: a standard error computed from 2 or 3 samples is
         // itself so noisy that the plateau cannot be read from it.
@@ -1190,16 +1198,31 @@ namespace HartreeFock::Correlation::CI::QMC
             const double se = naive_standard_error(data);
             if (std::isfinite(se))
             {
+                if (!any)
+                    se0 = se;
                 worst = std::max(worst, se);
                 any = true;
+                // A constant series (se0 == 0) has nothing to converge.
+                const double ratio = se0 > 0.0 ? se / se0 : 0.0;
+                if (block_length * block_length * block_length
+                    > 2.0 * n * ratio * ratio * ratio * ratio)
+                    converged = true;
             }
             std::vector<double> next;
             next.reserve(data.size() / 2);
             for (std::size_t i = 0; i + 1 < data.size(); i += 2)
                 next.push_back(0.5 * (data[i] + data[i + 1]));
             data.swap(next);
+            block_length *= 2.0;
         }
-        return any ? worst : std::numeric_limits<double>::quiet_NaN();
+        if (!any)
+            return {std::numeric_limits<double>::quiet_NaN(), false};
+        return {worst, converged};
+    }
+
+    double blocked_standard_error(const std::vector<double> &series)
+    {
+        return blocking_analysis(series).error;
     }
 
     Weight WalkerPopulation::total_population() const noexcept

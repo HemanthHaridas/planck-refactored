@@ -347,18 +347,36 @@ None of these blocks correctness. Take each up only with a current profile.
     on this M3. E4 stays test-only.
   - R3 admits Cr₂ CAS(12,18) at 1.68 Å with 18 frozen RHF orbitals.
     The three 25k projections at τ = 5–6 exceed the variational upper
-    bound of −2064.896580 Eh by 0.108–1.092 Eh. Extending the seed that
-    retained its reference to τ = 10 increased its minimum error to
-    0.263 Eh, with 5,483 usable projections in 10,000 steps. Compare a fixed
-    multideterminant projection with the single-reference estimator on
-    identical trajectories. Two SC-NEVPT2 estimates differ by 19 mEh.
-  - Low-weight parents account for 93–96% of visits across three Cr₂
-    profiles. Opt-in probabilistic spawning passed the November 16
-    current-build correctness and thread-identity checks. Five CAS(12,10)
-    pairs are complete: projected RMSE 2.48 → 1.40 mEh, shift RMSE
-    5.92 → 6.45 mEh, with 3.14% more mean wall time. Keep it experimental.
-    Next: matched CAS(12,18) cost pilot. Default adoption needs tighter
-    runtime matching and more exact-control seeds.
+    bound of −2064.896580 Eh by 0.108–1.092 Eh. A code review
+    (2026-11-17, "Code review findings" in the doc) found four defects
+    that confound this result. All four are fixed and pass the unit tests, the statistical gate and the 13 FCIQMC
+    regressions; thread identity holds at 1, 2, 4 and 8 threads.
+    `n2_fciqmc_s5_threads1` was re-pinned. The four defects:
+    1. Surviving parent weights were never stochastically rounded, so
+       sub-walker determinants piled up (93–96 % low-weight visits).
+    2. The projected error bar blocked per-step ratios, not the reported
+       ratio of sums; it understated the seed spread about 4×.
+    3. Blocking had no plateau check. It now flags
+       `[ERROR BAR UNCONVERGED]`.
+    4. The projected sums dropped steps with |c₀| < 3.
+
+    The re-anchored reference is now chosen from averaged weights.
+    The five-seed CAS(12,10) control after the fixes: projected SD across
+    seeds / RMS reported SE 4.15 / 3.87 mEh (was 9.82 / 2.48), RMSE
+    5.2 mEh (was ≈10.6). H₂ and LiH regressions were lengthened to
+    128k / 240k steps after a 20-seed study showed their projected errors
+    were 30 % too small at the old lengths.
+    Next: rerun the three 25k CAS(12,18) seeds on the fixed code, then
+    separate projection time, initiator bias and a multideterminant trial.
+    Open side questions: a −4 mEh mean offset of both estimators on
+    CAS(12,10) (five seeds, ~2 SEM), and a shift error bar 2–6× larger
+    than the spread across seeds. Two SC-NEVPT2 estimates differ by 19 mEh.
+  - Opt-in probabilistic spawning from low-weight parents passed the
+    November 16 correctness and thread-identity checks. Five CAS(12,10)
+    pairs: projected RMSE 2.48 → 1.40 mEh, shift RMSE 5.92 → 6.45 mEh,
+    3.14 % more mean wall time. It treated a symptom of defect 1 above;
+    after the rounding fix no parent is below one walker, so the option has
+    no effect and can be removed.
 - **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
   `docs/CCGEN_KERNEL_PERFORMANCE.md`):
   - Re-profile the generated production configuration, separating

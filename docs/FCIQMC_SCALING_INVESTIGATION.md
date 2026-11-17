@@ -1,6 +1,34 @@
 # FCIQMC scaling investigation
 
-**Cr₂ CAS(12,18) fits the M3 pilot budget, but its three 25,000-walker projected energies at τ = 5–6 exceed a verified variational upper bound by 0.108–1.092 Eh.** Two perturbative estimates place the fixed-orbital ground energy near −2064.92 to −2064.93 Eh. Low-weight parents account for over 93% of spawn attempts in both profiled CAS(12,18) runs. [Energy accuracy](#r3-energy-accuracy-in-cas1218) · [Spawn work by parent weight](#r3-spawn-work-by-parent-weight)
+**Cr₂ CAS(12,18) fits the M3 pilot budget. Its three 25,000-walker projected energies at τ = 5–6 exceed a verified variational upper bound by 0.108–1.092 Eh, but a November 17 code review found four defects that could produce or hide that result.** The propagator never rounds surviving parent weights, so sub-walker determinants accumulate. The projected error bar describes a different estimator from the one reported. Blocking can underestimate the error when the correlation time is comparable to the sampling window. The projected sum also drops steps where the reference is weakly occupied. All four are now fixed (with averaged re-anchoring). On the CAS(12,10) exact control, the projected error bar now matches the spread across seeds, where it understated it about 4×, and the projected RMSE halved. The CAS(12,18) energies in this document predate the fixes and have not been rerun. Two perturbative estimates place the fixed-orbital ground energy near −2064.92 to −2064.93 Eh. [Code review findings](#code-review-findings-november-17) · [Energy accuracy](#r3-energy-accuracy-in-cas1218) · [Spawn work by parent weight](#r3-spawn-work-by-parent-weight)
+
+## Code review findings (November 17)
+
+The review read the propagator, estimators and driver against the R3 measurements. Nothing was run. Items 1–4 are defects; items 5 and 6 explain why the CAS(12,18) result cannot yet be attributed to any single cause.
+
+**1. Surviving parent weights are never rounded.** The death step writes `weight * (1 - dt*(H_ii - S))` unrounded ([propagator](../src/post_hf/ci/fciqmc.cpp)). Stochastic rounding applies only to spawned children, and the driver removes only weights at or below 1e-12 (`compress_with_l1_norm(1e-12)`). Real-weight FCIQMC normally rounds every weight below the occupation threshold stochastically to 0 or the threshold after annihilation. Without that step, a determinant spawned once keeps a shrinking fractional weight for thousands of steps, because the survival factor is close to 1 at dt = 0.0005. The R3 profiles show the consequences:
+- CAS(12,12) held 94,048 occupied parents for a 25,000-walker target, which integer walkers cannot do.
+- 93–96% of parent visits and 51–80% of the absolute weight were below one walker.
+- 99.988% of CAS(12,12) spawn attempts rounded to zero, since `dt·|H_ij|·|w| / p_gen` is small when |w| ≈ 0.01.
+- The initiator rule treats any nonzero incoming weight as occupied, so stale sub-walker weights admit spawns that an integer population would reject.
+
+Probabilistic spawning from low-weight parents ([below](#r3-probabilistic-spawning-from-low-weight-parents)) reduces the cost of this symptom but leaves the weights in place. The fix is one stochastic rounding of surviving weights after the merge, at the spawn granularity. It changes every trajectory, so the archived result fingerprints must be re-pinned, and the low-weight option should be re-evaluated afterwards.
+
+**2. The projected error bar belongs to a different estimator.** The driver reports the ratio of sums, `H_00 + Σ_t num_t / Σ_t c0_t`, but computes its error by blocking the per-step ratios `num_t / c0_t`. The code comment says this overstates the uncertainty. The R3 seeds show the opposite: on the five fresh CAS(12,10) seeds at 10,000 steps, the projected spread across seeds was 9.82 mEh against an RMS reported SE of 2.48 mEh ([seed spread](#r3-sampling-length-and-seed-spread-in-cas1210)). The fix is to block the (numerator, c₀) pairs together and propagate the error through the ratio with their covariance.
+
+**3. Blocking takes the maximum without checking for a plateau.** `blocked_standard_error` returns the largest standard error over the blocking levels. The header claims this never systematically underestimates. That holds only when the correlation time is much shorter than the series; the G2 gate tested AR(1) series of that kind. At dt = 0.0005, a correlation time of order 1/gap can span thousands of steps, comparable to the 2,000–10,000-step windows. Then the blocking curve has not reached its plateau at the last level, and the maximum is still too small. The function needs a plateau test that marks such an error as unconverged.
+
+**4. The projected sums drop weakly occupied steps.** A step enters neither sum unless |c₀| ≥ 3 walkers. That threshold was introduced against the mean-of-ratios estimator, whose per-step division it protected. The ratio of sums divides once, so the threshold no longer prevents anything; it conditions the average on steps where the reference is well occupied, and the numerator correlates with c₀. In CAS(12,18), where the reference averages 5–13 walkers, many steps are removed: the extended seed 20250901 run kept 3,483 of its last 8,000 steps. That run's finding that a longer average worsened the estimate may come from this selection rather than from the dynamics. The fix is to accumulate every sampling step and require only a nonzero total denominator.
+
+**5. Re-anchoring uses one step's largest weight.** At the end of equilibration the driver picks the determinant with the largest |w| on that single step and switches whenever it beats the seeded reference by any margin; the factor of 2 governs only the warning. At 5–13 walkers per determinant the choice is mostly sampling noise. The replacement determinants differed between populations for the same seed ([25k long runs](#r3-long-runs-at-25000-walkers)), and the runs that switched kept fewer usable samples (1,292 and 1,393 of 2,000). A selection from weights averaged over the end of equilibration, with a switching margin, would remove the noise.
+
+**6. The CAS(12,18) bound violation has at least four candidate causes.** None has been isolated:
+- Imaginary time: exact propagation in CAS(12,10) is still 27.3 mEh above CASCI at τ = 5, and the CAS(12,18) estimates sample τ = 5–6.
+- Initiator bias: the threshold-3 runs rejected about 98% of spawn attempts.
+- A reference holding 0.02–0.05% of the walkers.
+- Items 1, 2 and 4 above.
+
+Smaller items: the comment on `reference_determinant` in the driver still says the shift never touches the reference, which the N₂ follow-up corrected (the reference is also the starting population). The re-anchoring tie-break comment describes the population as a hash map, but it is now sorted. The shift–projected gap warning uses the underestimated errors from items 2 and 3, so it fires later than it should.
 
 **R2 passed the adoption gate on the Apple M3.** On water, a serial cache lookup took 16.27 ns per parent and distributing a parent to its work bin took 1.85 ns. The driver now skips the serial lookup for determinants occupied on consecutive steps. R0 qualified the HF-to-FCIQMC Hamiltonian handoff. R1 established the timing, memory and correctness baselines on an Apple M3.
 
@@ -220,7 +248,7 @@ The profiler groups each occupied determinant by its absolute incoming weight re
 | CAS(12,18), seed 20250901, τ = 1–2 | 10,000 / 1 | 3 | 93.6% | 50.9% | 16.9% |
 | CAS(12,18), seed 20250903, τ = 5–6 | 25,000 / 4 | 3 | 93.4% | 62.0% | 46.6% |
 
-Permanently dropping these parents would discard a substantial fraction of the spawned contributions. One candidate is to attempt spawning with probability `q = min(1, |weight| / granularity)` at positive granularity. On selection, scale the spawn contribution by `1/q`, using the original weight for the initiator decision and diagonal propagation. Applied to the observed parents, this would avoid 74.7%, 76.2% and 76.3% of excitation draws in expectation, respectively. The resulting walker distribution, variance and wall time require a trial. [Phase counts and matched trajectory IDs](../tests/benchmarks/fciqmc/cr2_parent_weight_m3_r3.json)
+The sub-walker parents exist because surviving weights are never rounded ([finding 1](#code-review-findings-november-17)); integer-walker FCIQMC would not hold them. Permanently dropping these parents would discard a substantial fraction of the spawned contributions. One candidate is to attempt spawning with probability `q = min(1, |weight| / granularity)` at positive granularity. On selection, scale the spawn contribution by `1/q`, using the original weight for the initiator decision and diagonal propagation. Applied to the observed parents, this would avoid 74.7%, 76.2% and 76.3% of excitation draws in expectation, respectively. The resulting walker distribution, variance and wall time require a trial. [Phase counts and matched trajectory IDs](../tests/benchmarks/fciqmc/cr2_parent_weight_m3_r3.json)
 
 ## R3 energy accuracy in CAS(12,18)
 
@@ -240,7 +268,7 @@ Strongly contracted second-order perturbation theory (SC-NEVPT2) estimates the c
 | 20250902 | +0.108 | 0.086 | −0.756 | 5.88 |
 | 20250903 | +1.092 | 0.102 | −1.005 | 4.88 |
 
-The positive distances in the second column are minimum errors of the reported point estimates. Seed 20250902's distance is 1.26 of its blocked SEs. Seeds 20250901 and 20250903 exceed the bound by more than ten each. The shifts lie below both perturbative estimates, and the variational bound alone cannot quantify their errors. Even the three earlier four-draw projections with 10,000 walkers and a stable seeded reference at τ = 1–2 exceeded the bound by 0.341–0.381 Eh.
+These estimates predate the code review; findings 1, 2 and 4 affect all of them, and the blocked SEs may be too small ([findings](#code-review-findings-november-17)). The positive distances in the second column are minimum errors of the reported point estimates. Seed 20250902's distance is 1.26 of its blocked SEs. Seeds 20250901 and 20250903 exceed the bound by more than ten each. The shifts lie below both perturbative estimates, and the variational bound alone cannot quantify their errors. Even the three earlier four-draw projections with 10,000 walkers and a stable seeded reference at τ = 1–2 exceeded the bound by 0.341–0.381 Eh.
 
 **Longer sampling widened the error on the seed that retained its original reference.** For seed 20250901, changing only `fciqmc_steps` from 2,000 to 10,000 extended the window from τ = 5–6 to 5–10. The projected estimate moved from −2064.693174 to −2064.633191 ± 0.0313 Eh, increasing its minimum error from 0.203 to 0.263 Eh. The shift was −2065.646618 ± 0.0435 Eh. The first 2,000 steps all gave usable projections, but only 3,483 of the added 8,000 did. Subtracting the prefix using its signed reference-weight sum gives −2064.560102 Eh for the added window alone. The calculation took 338.4 s and 79.5 MiB. This single matched run shows that a longer average can worsen the estimate as the reference loses weight. [Per-seed comparisons, reference calculations and extended run](../tests/benchmarks/fciqmc/cr2_cas12_18_accuracy_m3_r3.json)
 
@@ -269,8 +297,60 @@ All runs retained the seeded reference and accepted every projected sample. Peak
 
 ## Next steps
 
-For scaling, run the matched CAS(12,18) cost pilot with low-weight sampling enabled and disabled. Use unprofiled alternating pairs for timing and separate profiled controls for excitation counts, memory and reference statistics. Keep the option experimental: the CAS(12,10) result supports a target-size pilot, but mixed estimator errors and the runtime mismatch leave default adoption unresolved. Any adoption claim needs tighter runtime matching and additional independent seeds on an exact-control problem.
+Findings 1–5 are implemented and pass the existing gates (validation below):
 
-For accuracy, compare the current single-determinant projection with a fixed multideterminant trial on the same CAS(12,18) walker trajectories. Build the trial in Planck's determinant basis and check its Rayleigh quotient on the shared Hamiltonian. Track the signed trial overlap and usable samples across seeds. This separates sensitivity to the projected estimator from changes to the walker dynamics.
+1. **Occupation rounding** (finding 1). `CanonicalWalkerPopulation::compress_with_l1_norm` takes an occupation threshold and a rounding root. The driver passes the spawn granularity and a root drawn from the run RNG once per step. Each determinant draws from `root.derive_parent(det)`, so the result does not depend on thread count. At zero granularity nothing changes.
+2. **Projected sums over every step** (finding 4). The driver calls `projected_energy` with threshold 0, and every sampling step enters both sums. The |c₀| ≥ 3 walker threshold now only decides whether the projected energy is reported: it is suppressed when fewer than a quarter of steps pass. The output line gives the number of weak steps.
+3. **Ratio-of-sums error bar** (finding 2). The projected error is the blocked standard error of `y_t = (num_t − R c0_t) / mean(c0)` with `R = Σnum / Σc0`. This is the delta-method error with the numerator–denominator covariance included.
+4. **Plateau test** (finding 3). `blocking_analysis` returns the error and a `converged` flag, using the Lee et al. (2011) criterion `B³ > 2N (se_B / se_0)⁴` at some level. `blocked_standard_error` returns the same value as before. When a curve has not converged, the driver appends `[ERROR BAR UNCONVERGED]` after the energy line and warns, so parsers that read `<energy> +/- <error>` are unaffected.
+5. **Averaged re-anchoring** (finding 5). The new reference is chosen from signed weights summed over the last min(1,000, equilibration/4) equilibration steps. It switches only when it beats the seeded reference by more than 2×.
+
+New unit tests in `tests/fciqmc_walkers.cpp`: `test_occupation_rounding` (unbiasedness, output levels, reproducibility, no-root behaviour) and `test_blocking_reports_unconverged_plateau` (AR(1) with τ ≪ N converges; τ ≈ N does not).
+
+**Validation (November 17).** `planck-fciqmc-walkers`, `planck-fciqmc-accumulator` and `planck-statistical-gate` pass, as do all 13 FCIQMC regression cases. The cases with paired thread counts must run in one invocation, because the `_threads4` cases compare against their `_threads1` partner. The short N₂ control printed identical estimators at 1, 2, 4 and 8 threads, and the raw-bit thread-identity case passed. Every trajectory with nonzero granularity changed, so the archived result fingerprints no longer apply. `n2_fciqmc_s5_threads1` pins a trajectory exactly and was re-pinned to −108.9703898222 (shift) and −107.5753149721 (projected).
+
+Projected energies against exact FCI. The error bars are the new ratio-of-sums errors; the earlier N₂ result is from the [driver validation](FCIQMC_DRIVER_AND_VALIDATION.md).
+
+| Case | Projected (Eh) | Deviation | Blocking |
+|---|---:|---:|---|
+| N₂/STO-3G | −107.6424563 ± 8.3e-3 | 1.28σ (was 0.41σ) | converged |
+| H₂/STO-3G | −1.1376377 ± 1.8e-4 | 1.99σ | unconverged |
+| LiH CAS(2,4) | −7.8636844 ± 3.2e-5 | 0.09σ | unconverged |
+
+The 200-step short control is flagged as unconverged for both estimators, as expected for its length.
+
+**The H₂ and LiH flags are correct.** These spaces have four and six determinants, so a smooth series could plausibly have tripped the plateau criterion without the error being wrong. A 20-seed study tested this (seeds 30000000–30000019, one thread, regression inputs otherwise unchanged). SD/RMS is the sample standard deviation of the 20 estimates divided by the root mean square of their reported errors. With 20 seeds it carries about ±16% uncertainty.
+
+| Case, sampling steps | Projected SD/RMS | Projected runs flagged | Within 2 SE of exact | Shift SD/RMS |
+|---|---:|---:|---:|---:|
+| H₂, 8,000 (regression) | 1.31 | 19/20 | 16/20 | 0.35 |
+| H₂, 32,000 | 1.20 | 10/20 | 19/20 | 0.25 |
+| LiH CAS(2,4), 30,000 (regression) | 1.34 | 19/20 | 18/20 | 0.19 |
+| LiH CAS(2,4), 120,000 | 1.12 | 1/20 | 19/20 | 0.16 |
+| H₂, 128,000 (new regression) | 0.88 | 0/20 | 18/20 | 0.19 |
+| LiH CAS(2,4), 240,000 (new regression) | 0.93 | 0/20 | 20/20 | 0.12 |
+
+The two regression inputs now sample 128,000 and 240,000 steps. Each run still takes under a second of solver time.
+
+At the original regression lengths (also those of the validation table above) the projected error understates the spread by about 30%, and the flag fires on nearly every run. At four times the length the ratio moves toward 1 and most flags clear. The mechanism: at dt = 0.001 the slowest mode relaxes by about `1 − gap·dt` per step, a correlation time of order a thousand steps. Unlike N₂, these spaces have almost no fast sampling noise to dominate the blocking curve. The criterion stays as it is.
+
+The study also found the opposite error on the shift. Its blocked error is 3–6× larger than the spread across seeds, and it was never flagged. This direction is conservative, but it weakens the shift `metric_within_sigma` gates. The maximum over blocking levels probably picks a noisy high value from the population-control oscillation; this has not been examined. To reproduce, run the regression input 20 times with `OMP_NUM_THREADS=1`, changing only `fciqmc_seed` and `fciqmc_steps`, and compare the standard deviation of the printed estimates with the RMS of their printed errors.
+
+**CAS(12,10) control after the fixes.** The five fresh seeds 20250904–20250908 were repeated with the earlier settings: 25,000 walkers, four spawn attempts, initiator threshold 0, timestep 0.0005, 110,000 equilibration and 10,000 sampling steps, four threads. The Hamiltonian ID matched the baseline (`339dffb09993d608`). The baseline columns are the pre-fix 10,000-step runs on the same seeds ([seed spread](#r3-sampling-length-and-seed-spread-in-cas1210)). Values are signed errors against CASCI in mEh.
+
+| Five seeds, 10,000 steps | Baseline projected | Fixed projected | Baseline shift | Fixed shift |
+|---|---:|---:|---:|---:|
+| Mean signed error | −6.02 | −3.64 | +0.40 | −4.01 |
+| SD across seeds / RMS reported SE | 9.82 / 2.48 | 4.15 / 3.87 | 7.75 / 7.51 | 4.20 / 7.56 |
+| Within two reported SEs | 1/5 | 4/5 | 5/5 | 5/5 |
+| RMSE | ≈10.6 | 5.20 | ≈6.9 | 5.49 |
+
+The projected error bar now matches the spread across seeds (ratio 1.07, against 4.0 before). Every projected error was flagged unconverged, which is expected for a window this short. The projected spread itself halved, and the RMSE fell from about 10.6 to 5.2 mEh. With five seeds, the SD ratio is uncertain by about ±35%. Both fixed means lie about two standard errors of the mean below CASCI (−3.64 ± 1.86 and −4.01 ± 1.88 mEh). Five seeds cannot tell whether that offset is a population-control bias or chance. As on H₂ and LiH, the shift error overstates the spread.
+
+No sampling parent visit was below one walker on any seed (0 of about 44 million per run), so `fciqmc_sample_low_weight_parents` now has no effect. Sampling parent visits fell from about 55.9 million per 10,000 steps to about 44 million. Mean reference weight was 961–1,147 walkers; no seed re-anchored. Wall times (78–95 s) are not comparable with the baseline because the host also ran the H₂/LiH seed studies. [Per-seed results](../tests/benchmarks/fciqmc/cr2_cas12_10_review_fixes_m3_r3.json)
+
+The five-seed CAS(12,10) control is done (above). Two smaller questions remain open. One is whether the −4 mEh mean offset of both estimators is real; more seeds at a longer window would settle it. The other is the overstated shift error. The low-weight sampling option no longer has any effect and can be removed.
+
+Next, separate the causes in finding 6 on CAS(12,18). Rerun the three 25,000-walker seeds on the fixed code first; the earlier energies are not comparable. Then vary projection time and initiator threshold independently, and compare the single-determinant projection with a fixed multideterminant trial on the same walker trajectories. Build the trial in Planck's determinant basis and check its Rayleigh quotient on the shared Hamiltonian.
 
 The E2 dispatch experiment is closed. E4 remains test-only pending evidence that bit selection merits a new paired trial. The detailed R0 handoff results, R1 reproduction commands and earlier optimization decisions are preserved in the version of this document at commit `7def132a` (`git show 7def132a:docs/FCIQMC_SCALING_INVESTIGATION.md`).
