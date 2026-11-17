@@ -1,0 +1,85 @@
+{
+ "fixture": "cr2_cas12_18_pilot.hfinp, CAS(12,18), seed 20250901",
+ "solver_commit": "ed9ea6a6",
+ "walkers": 25000,
+ "spawn_attempts": 4,
+ "initiator_threshold": 3.0,
+ "timestep": 0.0005,
+ "sampling_steps": 2000,
+ "variational_upper_bound_Eh": -2064.89658,
+ "exact_casci_Eh": {
+  "CAS(12,10)": -2064.494323848,
+  "CAS(12,12)": -2064.526570163,
+  "CAS(12,13)": -2064.746874644
+ },
+ "runs": [
+  {
+   "equilibration_steps": 10000,
+   "tau_window": [
+    5.0,
+    6.0
+   ],
+   "shift_Eh": -2065.0685706053,
+   "shift_se_Eh": 0.0231,
+   "projected_Eh": -2064.6659898097,
+   "projected_se_Eh": 0.0149,
+   "weak_reference_steps": 0,
+   "projected_minus_upper_bound_Eh": 0.23059,
+   "reference_weight_mean": 57.86,
+   "projection_anchor": "0x3f/0x3f (seeded)",
+   "result_id": "35d42518adb2aace",
+   "process_wall_s": 66.51
+  },
+  {
+   "equilibration_steps": 30000,
+   "tau_window": [
+    15.0,
+    16.0
+   ],
+   "shift_Eh": -2065.2406847673,
+   "shift_se_Eh": 0.0221,
+   "projected_Eh": -2064.259849474,
+   "projected_se_Eh": 0.0654,
+   "weak_reference_steps": 0,
+   "projected_minus_upper_bound_Eh": 0.636731,
+   "reference_weight_mean": 9.25,
+   "projection_anchor": "0x000000000000442d/0x000000000000043e",
+   "result_id": "84f1be4ad3f42fa0",
+   "process_wall_s": 231.84
+  },
+  {
+   "equilibration_steps": 60000,
+   "tau_window": [
+    30.0,
+    31.0
+   ],
+   "shift_Eh": -2065.3101315595,
+   "shift_se_Eh": 0.0176,
+   "projected_Eh": -2064.6466866243,
+   "projected_se_Eh": 0.0429,
+   "weak_reference_steps": 0,
+   "projected_minus_upper_bound_Eh": 0.249893,
+   "reference_weight_mean": 29.56,
+   "projection_anchor": "0x000000000000042f/0x000000000000042f",
+   "result_id": "0ebbc5ef07452435",
+   "process_wall_s": 310.25
+  },
+  {
+   "equilibration_steps": 110000,
+   "tau_window": [
+    55.0,
+    56.0
+   ],
+   "shift_Eh": -2065.3499867797,
+   "shift_se_Eh": 0.0214,
+   "projected_Eh": -2063.6962261156,
+   "projected_se_Eh": 0.119,
+   "weak_reference_steps": 746,
+   "projected_minus_upper_bound_Eh": 1.200354,
+   "reference_weight_mean": 6.43,
+   "projection_anchor": "0x0000000000000c1e/0x0000000000001127",
+   "result_id": "331a99c3cbca1b83",
+   "process_wall_s": 418.39
+  }
+ ]
+}

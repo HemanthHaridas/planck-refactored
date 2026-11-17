@@ -1,0 +1,46 @@
+# Cr2 CAS(12,13) walker scan, 25k walkers. Exact CASCI -2064.746875 Eh
+# (tests/pyscf/cr2_reference_weight.py --orbitals 13). See docs/FCIQMC_SCALING_INVESTIGATION.md.
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation fciqmc
+    nactele     12
+    nactorb     13
+    ci_max_dim  344622096
+    fciqmc_walkers         25000
+    fciqmc_timestep        0.0005
+    fciqmc_shift_damping   0.3
+    fciqmc_shift_restoring 0.05
+    fciqmc_shift_interval  5
+    fciqmc_granularity     1.0
+    fciqmc_initiator       3.0
+    fciqmc_equilibration   60000
+    fciqmc_steps           4000
+    fciqmc_spawn_attempts  4
+    fciqmc_seed            20250901
+    fciqmc_profile         true
+    use_diis    .true.
+    diis_dim    8
+    save_checkpoint .false.
+    engine      os
+    guess       sad
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+Cr    0.000000     0.000000     0.000000
+Cr    0.000000     0.000000     1.680000
+%end_coords

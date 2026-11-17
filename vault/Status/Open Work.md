@@ -366,8 +366,14 @@ None of these blocks correctness. Take each up only with a current profile.
     5.2 mEh (was ≈10.6). H₂ and LiH regressions were lengthened to
     128k / 240k steps after a 20-seed study showed their projected errors
     were 30 % too small at the old lengths.
-    Next: rerun the three 25k CAS(12,18) seeds on the fixed code, then
-    separate projection time, initiator bias and a multideterminant trial.
+    On the fixed code the CAS(12,18) projections still exceed the bound
+    (+0.165–0.231 Eh at τ = 5–6), and τ = 55 at 25k walkers does not
+    converge: the shift keeps falling and the anchor wanders. In exact
+    CASCI the RHF determinant holds 54 %, 0.55 % and 0.02 % of the
+    wavefunction in 10, 12 and 13 orbitals. Next: walker scan
+    (25k/100k/400k) on exact CAS(12,13), −2064.746875 Eh; the inputs are
+    `tests/inputs/exploratory/fciqmc/cr2_cas12_13_walkers_*.hfinp`. Too
+    slow for a laptop at 400k; run it elsewhere.
     Open side questions: a −4 mEh mean offset of both estimators on
     CAS(12,10) (five seeds, ~2 SEM), and a shift error bar 2–6× larger
     than the spread across seeds. Two SC-NEVPT2 estimates differ by 19 mEh.
