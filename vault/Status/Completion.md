@@ -451,6 +451,16 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **RI-K from a low-rank factor of the density (B2, 2026-11-17,
+  `docs/ERI_FOCK_BLAS_SCOPE.md`).** `build_ri_k(D)` factors
+  `D = X s Xᵀ` over its nonzero eigenvalues and contracts `B_Q X` instead
+  of `B_Q D`, so an SCF density costs rank n_occ, not nb. It stays exact for
+  any symmetric D (SAD guess, CASSCF, response trials), so no caller changed;
+  the planned `C_occ` overload would have needed a fallback at five SCF/KS
+  call sites. All 45 RI regression inputs equal a fresh HEAD build to every
+  printed digit; 16 H2O / 6-31G / JKFIT RHF 42.0 → 26.2 s at 4 threads;
+  nine `planck-ri-*` gates pass.
+
 - **libecpint repinned to upstream; one ECP engine per thread (2026-11-16,
   `docs/DEF2_ECP.md`).** PR #81 merged upstream as a squash on top of #78 and
   the fork branch Planck pinned was deleted, so a fresh clone could not

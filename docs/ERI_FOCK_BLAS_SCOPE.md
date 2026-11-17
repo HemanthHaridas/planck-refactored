@@ -1,7 +1,7 @@
 # ERI / Fock BLAS-LAPACK Migration — Scope
 
 Status: **scope; B0 landed** (2026-11-16, as `docs/RI_JK_ROUTINE.md`
-step 11, which has the measurements). In-flight work, so this file is allowed
+step 11, which has the measurements); **B2 landed** 2026-11-17 (below). In-flight work, so this file is allowed
 to be scope-shaped; rewrite it as an answer when the work lands.
 
 **Question:** Would routing the ERI and Fock builds through BLAS/LAPACK make
@@ -17,7 +17,7 @@ BLAS at all. In priority order:
 |---|---|---|---|
 | B0 | Cache the RI pair factors and the unpacked `B_Q` once per geometry | **61 % + 8 %** of RI-JK Fock time is rebuilding them twice per iteration | no — **done** for the pair factors (2026-11-16); `B_Q` still unpacked per call |
 | B1 | Optional `USE_BLAS` build: `EIGEN_USE_BLAS` + Accelerate / system BLAS | RI-K GEMMs **4.3–7.8×** | yes |
-| B2 | RI-K from `C_occ` instead of `D` on the SCF caller | **4.4–4.8×** serial on RI-K | no |
+| B2 | RI-K from a low-rank factor of `D` | **4.4–4.8×** serial on RI-K | no — **done** (2026-11-17) |
 | B3 | LAPACK `dsyevd` wrapper for SCF diagonalization | 2.5–7× at n ≥ 300, but diag is **0.08 %** of an iteration today | yes |
 
 The ERI kernels, direct-SCF digestion, the conventional `nb⁴` contraction and
@@ -129,16 +129,27 @@ before trusting the FCIQMC/FCI thread-pair gates in a Linux BLAS build.
   and `n2_fciqmc_s5_threads1/4` in the BLAS build; `planck-ri-jk-equivalence`.
   Re-pin nothing to a BLAS build. The Eigen build stays the reference.
 
-### B2 — RI-K from occupied orbitals (no BLAS)
+### B2 — RI-K from a low-rank factor of D (no BLAS) — landed 2026-11-17
 
-- `K = Σ_Q (B_Q C_occ)(B_Q C_occ)ᵀ` does `nocc/nb` of the work. It is exact
-  **only for idempotent densities** `D = C_occ C_occᵀ`.
-- Five non-SCF call sites pass non-idempotent densities: CASSCF `D`/`D_act`, the MP2-gradient
-  relaxed density, and the UHF response trial densities. Add an overload taking
-  `C_occ` and use it only at the two SCF call sites (`scf.cpp` RHF and UHF). Do
-  not change `build_ri_k(D)`.
-- Gate: RI-JK SCF energies within 1e-10 of the D form (the summation order
-  changes), plus the new B0 regression case.
+**Done differently from the plan.** The plan was a `C_occ` overload at the
+SCF call sites, exact only for `D = C_occ C_occᵀ`. That breaks on the SCF's
+own first iteration (`guess sad` passes the scaled raw SAD density, which is
+not idempotent) and on `guess density` restarts, and by then five callers
+(HF RHF/UHF/ROHF, KS RKS/UKS) would each have needed a fallback.
+
+Instead `build_ri_k(D)` factors D itself: `D = X s Xᵀ` over the eigenvalues
+above 1e-12 of the largest, then `K = Σ_Q (B_Q X) s (B_Q X)ᵀ`. An SCF density
+has rank n_occ, so the SCF gets the `C_occ` cost; every other density
+(SAD, CASSCF, response trials) stays exact and gets cheaper too. One
+`nb³` eigensolve per call against `naux·nb³` saved. A density that is not
+symmetric to 1e-12 keeps the dense form. No caller changed.
+
+Measured: all 45 RI regression inputs give the same Eh energies, gradients,
+geomopt steps, frequencies and stability eigenvalues as a fresh HEAD build to
+every printed digit (only the kcal/mol column's last digit and two signed
+zeros move). 16 H2O / 6-31G / def2-universal-JKFIT RHF, 4 threads: 42.0 →
+26.2 s for the whole SCF, same 13 iterations and energy. All nine
+`planck-ri-*` ctest gates pass.
 
 ### B3 — LAPACK eigensolver (low priority)
 

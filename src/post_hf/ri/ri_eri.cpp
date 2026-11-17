@@ -1781,6 +1781,48 @@ namespace HartreeFock::Correlation::RI
         const Eigen::Index nb = D.rows();
 
         Eigen::MatrixXd K = Eigen::MatrixXd::Zero(nb, nb);
+        const double scale = D.cwiseAbs().maxCoeff();
+        if (scale == 0.0)
+            return K;
+
+        // B2 (docs/ERI_FOCK_BLAS_SCOPE.md): factor D = X s Xᵀ over its
+        // nonzero eigenvalues, so K = Σ_Q (B_Q X) s (B_Q X)ᵀ costs rank/nb of
+        // the dense form. An SCF density has rank n_occ; any other density
+        // (SAD guess, CASSCF, response trials) stays exact. Eigenvalues below
+        // 1e-12 of the largest are roundoff (exact zeros for C_occ C_occᵀ).
+        // A density that is not symmetric takes the dense form.
+        const bool symmetric = (D - D.transpose()).cwiseAbs().maxCoeff() <= 1e-12 * scale;
+        Eigen::Index rank = nb;
+        Eigen::MatrixXd X;
+        Eigen::VectorXd s;
+        if (symmetric)
+        {
+            const Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(0.5 * (D + D.transpose()));
+            const Eigen::VectorXd &lam = eig.eigenvalues();
+            const double cut = 1e-12 * lam.cwiseAbs().maxCoeff();
+            std::vector<Eigen::Index> kept;
+            for (Eigen::Index k = 0; k < nb; ++k)
+                if (std::abs(lam(k)) > cut)
+                    kept.push_back(k);
+            rank = static_cast<Eigen::Index>(kept.size());
+            X.resize(nb, rank);
+            s.resize(rank);
+            for (Eigen::Index c = 0; c < rank; ++c)
+            {
+                X.col(c) = eig.eigenvectors().col(kept[c]);
+                s(c) = lam(kept[c]);
+            }
+        }
+
+        if (rank < nb)
+        {
+            for (const Eigen::MatrixXd &BQ : B)
+            {
+                const Eigen::MatrixXd Y = BQ * X;
+                K.noalias() += Y * s.asDiagonal() * Y.transpose();
+            }
+            return K;
+        }
         for (const Eigen::MatrixXd &BQ : B)
         {
             // H = B[Q] D ; K += H B[Q]ᵀ  ⇒  K_{μν} += Σ_{λσ} B_{μλ} D_{λσ} B_{νσ}.
