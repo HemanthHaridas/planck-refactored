@@ -289,11 +289,12 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
 
 None of these blocks correctness. Take each up only with a current profile.
 
-- **KS XC nuclear gradient is serial, per-point and stores ten npts × nb
-  arrays** (`docs/DFT_XC_GRADIENT_PERFORMANCE_SCOPE.md`, 2026-11-18).
-  Benzene B3LYP/6-31G* on the V4 grid: 117 s on one core of eight, 68 % in
-  `compute_xc_nuclear_gradient_rks`, 8.1 GB peak. Blocks the cost half of
-  the default-grid decision (`docs/DFT_DEFAULT_GRID_SCOPE.md`).
+- **KS XC nuclear gradient: X3 (threading) and X4 left**
+  (`docs/DFT_XC_GRADIENT_PERFORMANCE_SCOPE.md`). X1 (block GEMMs) and X2
+  (per-block AO Hessian) landed 2026-11-18: benzene B3LYP/6-31G* V4
+  gradient 117 s / 8.1 GB → 27.5 s / 3.6 GB. The XC phase still runs on one
+  thread. Blocks the cost half of the default-grid decision
+  (`docs/DFT_DEFAULT_GRID_SCOPE.md`).
 - **SCF and ERI kernels** (`docs/ERI_KERNEL_VS_LIBCINT.md`,
   `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`, `docs/SCF_VS_PYSCF.md`):
   - Rerun the Planck-vs-PySCF Fock table and the end-to-end

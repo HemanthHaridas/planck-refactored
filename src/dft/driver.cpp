@@ -4541,33 +4541,6 @@ namespace DFT::Driver
             if (!xc_grid)
                 return std::unexpected("DFT analytic gradient: XC evaluation failed: " + xc_grid.error());
 
-            const Eigen::Index npoints = prepared.molecular_grid.points.rows();
-            const Eigen::Index nbasis = prepared.ao_grid.nbasis();
-
-            DFT::AOGridHessian hess;
-            if (xc_grid->vsigma.cols() > 0)
-            {
-                auto hess_res = DFT::evaluate_ao_hessian_on_grid(calculator._shells, prepared.molecular_grid);
-                if (!hess_res)
-                    return std::unexpected("DFT analytic gradient: AO Hessian failed: " + hess_res.error());
-                hess = std::move(*hess_res);
-            }
-            else
-            {
-                hess.h_xx.resize(npoints, nbasis);
-                hess.h_xy.resize(npoints, nbasis);
-                hess.h_xz.resize(npoints, nbasis);
-                hess.h_yy.resize(npoints, nbasis);
-                hess.h_yz.resize(npoints, nbasis);
-                hess.h_zz.resize(npoints, nbasis);
-                hess.h_xx.setZero();
-                hess.h_xy.setZero();
-                hess.h_xz.setZero();
-                hess.h_yy.setZero();
-                hess.h_yz.setZero();
-                hess.h_zz.setZero();
-            }
-
             const HartreeFock::Gradient::ExchangeGradientKernel exchange_kernel{
                 .full_range_exchange_coefficient = xc_grid->full_range_exchange_coefficient,
                 .short_range_exchange_coefficient = xc_grid->short_range_exchange_coefficient,
@@ -4616,7 +4589,6 @@ namespace DFT::Driver
                           calculator._shells,
                           prepared.molecular_grid,
                           prepared.ao_grid,
-                          hess,
                           *xc_grid,
                           *P_alpha,
                           *P_beta)
@@ -4625,7 +4597,6 @@ namespace DFT::Driver
                           calculator._shells,
                           prepared.molecular_grid,
                           prepared.ao_grid,
-                          hess,
                           *xc_grid,
                           *P_alpha);
             if (!xc_grad)

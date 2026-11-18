@@ -353,7 +353,6 @@ namespace DFT::Gradient
             const HartreeFock::Basis &basis,
             const MolecularGrid &grid,
             const AOGridEvaluation &ao,
-            const AOGridHessian &hess,
             const XCGridEvaluation &xc,
             const std::vector<XCGradientChannel> &channels,
             bool gga)
@@ -372,6 +371,7 @@ namespace DFT::Gradient
             Eigen::MatrixXd phi, A, Aq, AP, phiP, owner_t;
             std::array<Eigen::MatrixXd, 3> g;
             std::array<Eigen::MatrixXd, 6> h; // xx xy xz yy yz zz
+            MolecularGrid block_grid;         // GGA: this block's points, for its AO Hessian
             constexpr int hidx[3][3] = {{0, 1, 2}, {1, 3, 4}, {2, 4, 5}};
 
             for (Eigen::Index p0 = 0; p0 < npts; p0 += kXCGradientBlock)
@@ -383,12 +383,12 @@ namespace DFT::Gradient
                 g[2] = ao.grad_z.middleRows(p0, n);
                 if (gga)
                 {
-                    h[0] = hess.h_xx.middleRows(p0, n);
-                    h[1] = hess.h_xy.middleRows(p0, n);
-                    h[2] = hess.h_xz.middleRows(p0, n);
-                    h[3] = hess.h_yy.middleRows(p0, n);
-                    h[4] = hess.h_yz.middleRows(p0, n);
-                    h[5] = hess.h_zz.middleRows(p0, n);
+                    block_grid.points = grid.points.middleRows(p0, n);
+                    auto hess = evaluate_ao_hessian_on_grid(basis, block_grid);
+                    if (!hess)
+                        return std::unexpected("DFT XC gradient: AO Hessian failed: " + hess.error());
+                    h = {std::move(hess->h_xx), std::move(hess->h_xy), std::move(hess->h_xz),
+                         std::move(hess->h_yy), std::move(hess->h_yz), std::move(hess->h_zz)};
                 }
                 owner_t.setZero(n, 3);
 
@@ -465,15 +465,11 @@ namespace DFT::Gradient
         const HartreeFock::Basis &basis,
         const MolecularGrid &grid,
         const AOGridEvaluation &ao,
-        const AOGridHessian &hess,
         const XCGridEvaluation &xc,
         const Eigen::Ref<const Eigen::MatrixXd> &density_restricted)
     {
         if (xc.density.polarized)
             return std::unexpected("compute_xc_nuclear_gradient_rks requires spin-unpolarized XC density");
-
-        if (hess.npoints() != ao.npoints() || hess.nbasis() != ao.nbasis())
-            return std::unexpected("AO Hessian dimensions do not match AO grid");
 
         if (grid.points.rows() != ao.npoints())
             return std::unexpected("molecular grid point count mismatch in XC gradient");
@@ -499,7 +495,7 @@ namespace DFT::Gradient
         }
         mask_zero_weight(w, ch.wv0, ch.wvg);
 
-        return xc_nuclear_gradient(mol, basis, grid, ao, hess, xc, {std::move(ch)}, gga);
+        return xc_nuclear_gradient(mol, basis, grid, ao, xc, {std::move(ch)}, gga);
     }
 
     std::expected<Eigen::MatrixXd, std::string>
@@ -508,7 +504,6 @@ namespace DFT::Gradient
         const HartreeFock::Basis &basis,
         const MolecularGrid &grid,
         const AOGridEvaluation &ao,
-        const AOGridHessian &hess,
         const XCGridEvaluation &xc,
         const Eigen::Ref<const Eigen::MatrixXd> &density_alpha,
         const Eigen::Ref<const Eigen::MatrixXd> &density_beta)
@@ -518,9 +513,6 @@ namespace DFT::Gradient
 
         if (xc.vrho.cols() != 2)
             return std::unexpected("polarized XC gradient expects vrho with two columns");
-
-        if (hess.npoints() != ao.npoints() || hess.nbasis() != ao.nbasis())
-            return std::unexpected("AO Hessian dimensions do not match AO grid");
 
         const Eigen::Index nb = ao.nbasis();
         if (density_alpha.rows() != nb || density_beta.rows() != nb)
@@ -555,7 +547,7 @@ namespace DFT::Gradient
         for (auto &ch : channels)
             mask_zero_weight(w, ch.wv0, ch.wvg);
 
-        return xc_nuclear_gradient(mol, basis, grid, ao, hess, xc, channels, gga);
+        return xc_nuclear_gradient(mol, basis, grid, ao, xc, channels, gga);
     }
 
 } // namespace DFT::Gradient

@@ -118,10 +118,11 @@ Not run: water4 at 1454 (needs the X2 memory fix).
 ### (3) Cost, provisional
 
 H2O2/6-31G* points: legacy normal 35,180; fine 78,148; ultrafine 147,396;
-V4 322,080 (9.2× normal). V4 wall time is today dominated by the serial,
+V4 322,080 (9.2× normal). V4 wall time was dominated by the serial,
 per-point KS XC gradient and its ten stored npts × nb arrays (benzene:
-117 s on one core, 8.1 GB). Fix scoped in
-`docs/DFT_XC_GRADIENT_PERFORMANCE_SCOPE.md`; the cost comparison waits on it.
+117 s on one core, 8.1 GB). X1–X2 of
+`docs/DFT_XC_GRADIENT_PERFORMANCE_SCOPE.md` brought that to 27.5 s and
+3.6 GB; the cost comparison waits on X3 (threading the XC phase).
 
 ### What this means for the candidates
 

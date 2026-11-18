@@ -451,6 +451,18 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **KS XC nuclear gradient: block GEMMs, AO Hessian per block (X1–X2,
+  2026-11-18, `docs/DFT_XC_GRADIENT_PERFORMANCE_SCOPE.md`).** The point
+  loop allocated three nb × nb matrices per grid point, and the gradient
+  stored ten npts × nb AO arrays (six zeroed ones even for LDA). One driver
+  now serves RKS and both UKS spins: per 128-point block, `G_qᵀA + A_qᵀΦ`
+  and row dots against `A·P`, `Φ·P`, with the GGA AO Hessian evaluated per
+  block. Benzene B3LYP/6-31G* V4 gradient 117 s / 8.1 GB → 27.5 s /
+  3.6 GB. Gradients equal the old code at all printed digits on RKS/UKS ×
+  LDA/GGA/global/range-separated inputs; two mutations fail by 0.2–0.35
+  Ha/Bohr; 28/28 DFT derivative regression cases pass. The XC phase still
+  runs on one thread (X3 open).
+
 - **RI work split across MPI ranks (M0–M1, 2026-11-17,
   `docs/RI_MPI_SCOPE.md`).** Before, every `planck-mpi` rank ran the whole
   RI calculation (2 ranks slower than 1). Now the 3c build, the fitted

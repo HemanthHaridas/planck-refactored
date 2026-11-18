@@ -74,6 +74,38 @@ With V4, a 12-water chain cannot run a gradient on this machine at all.
    (recompute per iteration against 3.2 GB here). This is a cost trade, so
    measure it after X1–X3.
 
+## Progress (2026-11-18)
+
+**X1 landed** (`77558b99`). One driver, `xc_nuclear_gradient`, serves RKS
+and both UKS spins: per 128-point block, `M_q += G_qᵀA + A_qᵀΦ` and the
+owner term as row dots against `A·P` and `Φ·P`. The Becke owner-weight
+derivative keeps one scratch buffer and updates only the owner/i/j rows.
+
+**X2 landed** (next commit after X1). The GGA AO Hessian is
+evaluated per block inside the driver; `compute_xc_nuclear_gradient_{rks,uks}`
+no longer take an `AOGridHessian`, and the KS gradient no longer builds one.
+It had built six zeroed npts × nb arrays even for LDA. The DH paths still
+build their own (out of scope).
+
+| | before | X1 | X2 |
+|---|---:|---:|---:|
+| benzene V4: wall | 117 s | 83.6 s (swapping) | **27.5 s** |
+| benzene V4: peak footprint | 8.1 GB | 8.2 GB | **3.6 GB** |
+| benzene legacy `fine`: wall | 14.96 s | 8.59 s | |
+| benzene legacy `fine`: XC phase | 8.4 s | 1.8 s | |
+
+Benzene B3LYP/6-31G*, nb = 102, one 8-thread M3, idle. X1 alone could not
+be timed honestly on V4: at 8.2 GB on 8 GiB it swapped. The XC phase is
+now GEMM-bound on one thread (21 % of the legacy-`fine` run); the next
+serial pieces are the Becke derivative (~15 % of the phase) and AO
+evaluation.
+
+Checks: gradients equal to the old code at all 12 printed decimals on
+RKS/UKS × LDA/GGA/global/range-separated inputs, legacy and V4 (benzene:
+two last-digit changes after X1, none from X2). Mutations dropping the GGA
+owner `A_q` term or halving the LDA weight fail by 0.2–0.35 Ha/Bohr. The
+28 DFT gradient/geomopt/frequency regression cases pass after X1.
+
 ## Gates
 
 - Summation order changes, so not bitwise against the old loop. Every DFT
@@ -81,9 +113,9 @@ With V4, a 12-water chain cannot run a gradient on this machine at all.
   digits (`--suite all`), and the existing FD gates
   (`water_dft_hse06_gradient_symm_ultrafine_fd`, the PCM and D3 gradient
   cases) must pass.
-- A unit test that compares the blocked contraction against the per-point
-  form on one small fixture (RKS + UKS, LDA + GGA) to 1e-12 relative, and
-  checks gradient identity across thread counts. Mutation-check it.
+- For X3: a unit test that checks gradient identity across thread counts
+  (RKS + UKS, LDA + GGA). Mutation-check it. (X1/X2 were gated by
+  full-precision before/after gradients instead, above.)
 - Re-time this benzene case and record wall, CPU and peak footprint.
 
 ## Out of scope
