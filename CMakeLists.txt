@@ -1579,6 +1579,30 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME planck-udh-xc-ii-lda COMMAND planck-udh-xc-ii-lda)
 
+    # X3: the KS XC nuclear gradient is bitwise identical at any thread count.
+    add_executable(planck-dft-xc-gradient-threads
+        ${CMAKE_SOURCE_DIR}/tests/dft_xc_gradient_threads.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-dft-xc-gradient-threads PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-dft-xc-gradient-threads ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-dft-xc-gradient-threads libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-dft-xc-gradient-threads OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dft-xc-gradient-threads PRIVATE USE_OPENMP)
+        add_test(NAME planck-dft-xc-gradient-threads COMMAND planck-dft-xc-gradient-threads)
+    endif()
+
     # U8b detached complete polarized GGA XC-II and Hessian-bearing oracles.
     add_executable(planck-udh-xc-ii-gga
         ${CMAKE_SOURCE_DIR}/tests/udh_xc_ii_gga.cpp

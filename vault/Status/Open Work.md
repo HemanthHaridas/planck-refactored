@@ -292,8 +292,12 @@ None of these blocks correctness. Take each up only with a current profile.
 - **KS XC nuclear gradient: X3 (threading) and X4 left**
   (`docs/DFT_XC_GRADIENT_PERFORMANCE_SCOPE.md`). X1 (block GEMMs) and X2
   (per-block AO Hessian) landed 2026-11-18: benzene B3LYP/6-31G* V4
-  gradient 117 s / 8.1 GB → 27.5 s / 3.6 GB. The XC phase still runs on one
-  thread. Blocks the cost half of the default-grid decision
+  gradient 117 s / 8.1 GB → 27.5 s / 3.6 GB. X2.5/X3/X3b followed (no
+  nb × nb accumulators, blocks threaded with fixed bins, O(natoms²) Becke
+  derivative): benzene V4 25.0 → 15.1 s at 8 threads, bitwise across thread
+  counts (`planck-dft-xc-gradient-threads`). Left: time a 12-water gradient,
+  profile V4, and X4 (stream the SCF AO arrays; touches 11 files; the only
+  memory lever, peak still 3.6 GB). Blocks the cost half of the default-grid decision
   (`docs/DFT_DEFAULT_GRID_SCOPE.md`).
 - **SCF and ERI kernels** (`docs/ERI_KERNEL_VS_LIBCINT.md`,
   `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`, `docs/SCF_VS_PYSCF.md`):

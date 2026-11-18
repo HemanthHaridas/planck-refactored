@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <string>
 #include <vector>
 
 #include "basis/basis.h"
@@ -233,11 +234,24 @@ namespace DFT::Gradient
         const Eigen::MatrixXd &coordinates = mol._standard;
         const Eigen::VectorXi &atomic_numbers = mol.atomic_numbers;
 
-        std::vector<double> products(static_cast<std::size_t>(natoms), 1.0);
-        // d(product_k)/dR (natoms x 3) for every k, side by side in one buffer.
-        Eigen::MatrixXd dproducts = Eigen::MatrixXd::Zero(natoms, 3 * natoms);
-        const auto dprod = [&dproducts](Eigen::Index k)
-        { return dproducts.middleCols(3 * k, 3); };
+        // O(natoms^2) per point. s(k,j) is the cell function of atom k against
+        // j (s(j,k) = 1 - s(k,j), s(k,k) = 1); ds(i,j) for i < j lives in three
+        // rows only (owner, i, j). P_k = prod_j s(k,j) and
+        // dP_k = sum_j (prod_{l != j} s(k,l)) ds(k,j), the excluded products
+        // from prefix/suffix products (no division, so s -> 0 is safe).
+        struct Scratch
+        {
+            Eigen::MatrixXd s;                  // natoms x natoms
+            std::vector<Eigen::Matrix3d> ds;    // per i<j pair: rows = d/dR of owner, i, j (cols x,y,z)
+            std::vector<double> pre;            // natoms + 1
+        };
+        thread_local Scratch scratch;
+        Eigen::MatrixXd &s = scratch.s;
+        s.setOnes(natoms, natoms);
+        scratch.ds.resize(static_cast<std::size_t>(natoms * natoms));
+        scratch.pre.resize(static_cast<std::size_t>(natoms + 1));
+        const auto ds_of = [&](Eigen::Index i, Eigen::Index j) -> Eigen::Matrix3d &
+        { return scratch.ds[static_cast<std::size_t>(i * natoms + j)]; };
 
         for (Eigen::Index i = 0; i < natoms; ++i)
         {
@@ -272,12 +286,10 @@ namespace DFT::Gradient
                         ? DFT::detail::becke_switch_derivative(mu_clamped)
                         : 0.0;
 
-                const double old_pi = products[static_cast<std::size_t>(i)];
-                const double old_pj = products[static_cast<std::size_t>(j)];
-                products[static_cast<std::size_t>(i)] = old_pi * sij;
-                products[static_cast<std::size_t>(j)] = old_pj * (1.0 - sij);
-                dprod(i) *= sij;
-                dprod(j) *= (1.0 - sij);
+                s(i, j) = sij;
+                s(j, i) = 1.0 - sij;
+                Eigen::Matrix3d &dsij = ds_of(i, j);
+                dsij.setZero();
 
                 // d s_ij / dR is nonzero only in the rows of the owner, i and j.
                 const Eigen::Index rows[3] = {owner, i, j};
@@ -297,37 +309,52 @@ namespace DFT::Gradient
                         ((ddi - ddj) * Rij - (di - dj) * dR) / (Rij * Rij);
                     const Eigen::Vector3d dmu_adjusted =
                         (1.0 - 2.0 * aij * mu_raw) * dmu_raw;
-                    const Eigen::RowVector3d ds = (ds_dmu * dmu_adjusted).transpose();
-                    dprod(i).row(atom) += old_pi * ds;
-                    dprod(j).row(atom) -= old_pj * ds;
+                    dsij.row(r) = (ds_dmu * dmu_adjusted).transpose();
                 }
             }
         }
 
-        double sum = 0.0;
+        // dP_owner and dsum = sum_k dP_k, both natoms x 3.
+        Eigen::MatrixXd downer = Eigen::MatrixXd::Zero(natoms, 3);
         Eigen::MatrixXd dsum = Eigen::MatrixXd::Zero(natoms, 3);
-        for (Eigen::Index atom = 0; atom < natoms; ++atom)
+        double sum = 0.0, owner_product = 0.0;
+        auto &pre = scratch.pre;
+        for (Eigen::Index k = 0; k < natoms; ++k)
         {
-            sum += products[static_cast<std::size_t>(atom)];
-            dsum += dprod(atom);
+            pre[0] = 1.0;
+            for (Eigen::Index j = 0; j < natoms; ++j)
+                pre[static_cast<std::size_t>(j + 1)] = pre[static_cast<std::size_t>(j)] * s(k, j);
+            const double Pk = pre[static_cast<std::size_t>(natoms)];
+            sum += Pk;
+            if (k == owner)
+                owner_product = Pk;
+
+            double suffix = 1.0; // prod_{l > j} s(k,l)
+            for (Eigen::Index j = natoms - 1; j >= 0; --j)
+            {
+                if (j != k)
+                {
+                    // ds(k,j) = +ds_{kj} for k < j, -ds_{jk} for k > j (s(j,k) = 1 - s(k,j)).
+                    const Eigen::Index lo = std::min(k, j), hi = std::max(k, j);
+                    const double coeff = (k < j ? 1.0 : -1.0) * pre[static_cast<std::size_t>(j)] * suffix;
+                    const Eigen::Matrix3d &d = ds_of(lo, hi);
+                    const Eigen::Index rows[3] = {owner, lo, hi};
+                    for (int r = 0; r < 3; ++r)
+                    {
+                        if (r > 0 && rows[r] == owner)
+                            continue;
+                        dsum.row(rows[r]) += coeff * d.row(r);
+                        if (k == owner)
+                            downer.row(rows[r]) += coeff * d.row(r);
+                    }
+                }
+                suffix *= s(k, j);
+            }
         }
         if (sum <= 0.0)
             return std::unexpected("Becke partition derivative: partition denominator underflowed");
 
-        const double owner_product = products[static_cast<std::size_t>(owner)];
-        Eigen::MatrixXd derivatives = Eigen::MatrixXd::Zero(natoms, 3);
-        for (Eigen::Index atom = 0; atom < natoms; ++atom)
-        {
-            for (int q = 0; q < 3; ++q)
-            {
-                derivatives(atom, q) =
-                    (dprod(owner)(atom, q) * sum -
-                     owner_product * dsum(atom, q)) /
-                    (sum * sum);
-            }
-        }
-
-        return derivatives;
+        return (downer * sum - owner_product * dsum) / (sum * sum);
     }
 
     namespace
@@ -343,11 +370,13 @@ namespace DFT::Gradient
         };
 
         constexpr Eigen::Index kXCGradientBlock = 128;
+        constexpr Eigen::Index kXCGradientBins = 64; // fixed: the sum order must not depend on threads
 
         // Shared RKS/UKS driver. Per point, vtmp_q = g_q aow^T (+ aow_q phi^T
-        // for GGA) is never formed: its sum over a block of points is one GEMM
-        // pair into M[q], and its contraction with P (the owner-atom term) is
-        // a row dot product against A P and Phi P.
+        // for GGA) is only ever contracted with P (symmetric). Per block that is
+        // E_q = g_q o (A P) + A_q o (Phi P) (elementwise, n x nb): its row sums
+        // are the owner-atom term, its column sums the basis-function-motion
+        // term of each AO. No nb x nb accumulator is needed.
         std::expected<Eigen::MatrixXd, std::string> xc_nuclear_gradient(
             const HartreeFock::Molecule &mol,
             const HartreeFock::Basis &basis,
@@ -363,84 +392,115 @@ namespace DFT::Gradient
 
             const Eigen::Index nb = ao.nbasis();
             const Eigen::Index npts = ao.npoints();
-            Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(mol.natoms), 3);
-            std::vector<std::array<Eigen::MatrixXd, 3>> M(
-                channels.size(),
-                {Eigen::MatrixXd::Zero(nb, nb), Eigen::MatrixXd::Zero(nb, nb), Eigen::MatrixXd::Zero(nb, nb)});
-
-            Eigen::MatrixXd phi, A, Aq, AP, phiP, owner_t;
-            std::array<Eigen::MatrixXd, 3> g;
-            std::array<Eigen::MatrixXd, 6> h; // xx xy xz yy yz zz
-            MolecularGrid block_grid;         // GGA: this block's points, for its AO Hessian
+            const Eigen::Index natoms = static_cast<Eigen::Index>(mol.natoms);
             constexpr int hidx[3][3] = {{0, 1, 2}, {1, 3, 4}, {2, 4, 5}};
 
-            for (Eigen::Index p0 = 0; p0 < npts; p0 += kXCGradientBlock)
+            // Determinism: blocks go into a fixed number of bins of contiguous
+            // blocks (independent of the thread count); each bin is summed
+            // serially in block order, and the bins in bin order.
+            const Eigen::Index nblocks = (npts + kXCGradientBlock - 1) / kXCGradientBlock;
+            const Eigen::Index nbins = std::min<Eigen::Index>(kXCGradientBins, std::max<Eigen::Index>(nblocks, 1));
+            const Eigen::Index blocks_per_bin = (nblocks + nbins - 1) / std::max<Eigen::Index>(nbins, 1);
+            std::vector<Eigen::MatrixXd> grad_bin(nbins), bf_bin(nbins); // natoms x 3, nb x 3 (per-AO basis motion)
+            std::vector<std::string> err_bin(nbins);
+
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(dynamic, 1)
+#endif
+            for (Eigen::Index bin = 0; bin < nbins; ++bin)
             {
-                const Eigen::Index n = std::min(kXCGradientBlock, npts - p0);
-                phi = ao.values.middleRows(p0, n);
-                g[0] = ao.grad_x.middleRows(p0, n);
-                g[1] = ao.grad_y.middleRows(p0, n);
-                g[2] = ao.grad_z.middleRows(p0, n);
-                if (gga)
-                {
-                    block_grid.points = grid.points.middleRows(p0, n);
-                    auto hess = evaluate_ao_hessian_on_grid(basis, block_grid);
-                    if (!hess)
-                        return std::unexpected("DFT XC gradient: AO Hessian failed: " + hess.error());
-                    h = {std::move(hess->h_xx), std::move(hess->h_xy), std::move(hess->h_xz),
-                         std::move(hess->h_yy), std::move(hess->h_yz), std::move(hess->h_zz)};
-                }
-                owner_t.setZero(n, 3);
+                Eigen::MatrixXd &grad = grad_bin[bin];
+                Eigen::MatrixXd &bf_t = bf_bin[bin];
+                grad.setZero(natoms, 3);
+                bf_t.setZero(nb, 3);
+                Eigen::MatrixXd phi, A, Aq, AP, phiP, E, owner_t;
+                std::array<Eigen::MatrixXd, 3> g;
+                std::array<Eigen::MatrixXd, 6> h; // xx xy xz yy yz zz
+                MolecularGrid block_grid;         // GGA: this block's points, for its AO Hessian
 
-                for (std::size_t c = 0; c < channels.size(); ++c)
+                const Eigen::Index b_end = std::min(nblocks, (bin + 1) * blocks_per_bin);
+                for (Eigen::Index b = bin * blocks_per_bin; b < b_end && err_bin[bin].empty(); ++b)
                 {
-                    const auto &ch = channels[c];
-                    const auto wv0 = ch.wv0.segment(p0, n).asDiagonal();
-                    A = wv0 * phi;
+                    const Eigen::Index p0 = b * kXCGradientBlock;
+                    const Eigen::Index n = std::min(kXCGradientBlock, npts - p0);
+                    phi = ao.values.middleRows(p0, n);
+                    g[0] = ao.grad_x.middleRows(p0, n);
+                    g[1] = ao.grad_y.middleRows(p0, n);
+                    g[2] = ao.grad_z.middleRows(p0, n);
                     if (gga)
-                        for (int k = 0; k < 3; ++k)
-                            A.noalias() += ch.wvg.col(k).segment(p0, n).asDiagonal() * g[k];
-                    AP.noalias() = A * ch.P;
-                    if (gga)
-                        phiP.noalias() = phi * ch.P;
-
-                    for (int q = 0; q < 3; ++q)
                     {
-                        M[c][q].noalias() += g[q].transpose() * A;
-                        owner_t.col(q) += g[q].cwiseProduct(AP).rowwise().sum();
-                        if (!gga)
-                            continue;
-                        Aq = wv0 * g[q];
-                        for (int k = 0; k < 3; ++k)
-                            Aq.noalias() += ch.wvg.col(k).segment(p0, n).asDiagonal() * h[hidx[q][k]];
-                        M[c][q].noalias() += Aq.transpose() * phi;
-                        owner_t.col(q) += Aq.cwiseProduct(phiP).rowwise().sum();
+                        block_grid.points = grid.points.middleRows(p0, n);
+                        auto hess = evaluate_ao_hessian_on_grid(basis, block_grid);
+                        if (!hess)
+                        {
+                            err_bin[bin] = "DFT XC gradient: AO Hessian failed: " + hess.error();
+                            break;
+                        }
+                        h = {std::move(hess->h_xx), std::move(hess->h_xy), std::move(hess->h_xz),
+                             std::move(hess->h_yy), std::move(hess->h_yz), std::move(hess->h_zz)};
                     }
-                }
+                    owner_t.setZero(n, 3);
 
-                for (Eigen::Index i = 0; i < n; ++i)
-                {
-                    const Eigen::Index ip = p0 + i;
-                    if (grid.points(ip, 3) == 0.0)
-                        continue;
-                    const Eigen::Index owner = grid.owner(ip);
-                    grad.row(owner) += 2.0 * owner_t.row(i);
+                    for (std::size_t c = 0; c < channels.size(); ++c)
+                    {
+                        const auto &ch = channels[c];
+                        const auto wv0 = ch.wv0.segment(p0, n).asDiagonal();
+                        A = wv0 * phi;
+                        if (gga)
+                            for (int k = 0; k < 3; ++k)
+                                A.noalias() += ch.wvg.col(k).segment(p0, n).asDiagonal() * g[k];
+                        AP.noalias() = A * ch.P;
+                        if (gga)
+                            phiP.noalias() = phi * ch.P;
 
-                    auto dpartition = becke_partition_owner_derivatives(grid, mol, ip);
-                    if (!dpartition)
-                        return std::unexpected(dpartition.error());
-                    grad += (grid.atomic_weights(ip) * xc.energy_density(ip)) * (*dpartition);
+                        for (int q = 0; q < 3; ++q)
+                        {
+                            E = g[q].cwiseProduct(AP);
+                            if (gga)
+                            {
+                                Aq = wv0 * g[q];
+                                for (int k = 0; k < 3; ++k)
+                                    Aq.noalias() += ch.wvg.col(k).segment(p0, n).asDiagonal() * h[hidx[q][k]];
+                                E += Aq.cwiseProduct(phiP);
+                            }
+                            owner_t.col(q) += E.rowwise().sum();
+                            bf_t.col(q) += E.colwise().sum().transpose();
+                        }
+                    }
+
+                    for (Eigen::Index i = 0; i < n; ++i)
+                    {
+                        const Eigen::Index ip = p0 + i;
+                        if (grid.points(ip, 3) == 0.0)
+                            continue;
+                        const Eigen::Index owner = grid.owner(ip);
+                        grad.row(owner) += 2.0 * owner_t.row(i);
+
+                        auto dpartition = becke_partition_owner_derivatives(grid, mol, ip);
+                        if (!dpartition)
+                        {
+                            err_bin[bin] = dpartition.error();
+                            break;
+                        }
+                        grad += (grid.atomic_weights(ip) * xc.energy_density(ip)) * (*dpartition);
+                    }
                 }
             }
 
-            // Basis-function-motion term: vxc1_q = -M_q, contracted over the
-            // rows of the atom that carries each basis function.
+            Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(natoms, 3);
+            Eigen::MatrixXd bf_t = Eigen::MatrixXd::Zero(nb, 3);
+            for (Eigen::Index bin = 0; bin < nbins; ++bin)
+            {
+                if (!err_bin[bin].empty())
+                    return std::unexpected(err_bin[bin]);
+                grad += grad_bin[bin];
+                bf_t += bf_bin[bin];
+            }
+
+            // Basis-function-motion term, gathered onto the atom carrying each AO.
             for (std::size_t atom_A = 0; atom_A < mol.natoms; ++atom_A)
                 for (int mu : (*atoms_bf)[atom_A])
-                    for (std::size_t c = 0; c < channels.size(); ++c)
-                        for (int q = 0; q < 3; ++q)
-                            grad(static_cast<Eigen::Index>(atom_A), q) -=
-                                2.0 * M[c][q].row(mu).dot(channels[c].P.row(mu));
+                    grad.row(static_cast<Eigen::Index>(atom_A)) -= 2.0 * bf_t.row(mu);
 
             return grad;
         }

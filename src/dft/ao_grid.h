@@ -11,6 +11,10 @@
 #include "base/grid.h"
 #include "base/types.h"
 
+#ifdef USE_OPENMP
+#include <omp.h>
+#endif
+
 namespace DFT
 {
 
@@ -304,12 +308,18 @@ namespace DFT
             return H;
         }
 
-        for (Eigen::Index basis_index = 0; basis_index < nbasis; ++basis_index)
-        {
-            const auto &basis_function = basis._basis_functions[static_cast<std::size_t>(basis_index)];
+        for (const auto &basis_function : basis._basis_functions)
             if (basis_function._shell == nullptr)
                 return std::unexpected("AO Hessian evaluation encountered a basis function with a null shell");
 
+        // Columns are disjoint, so this is bitwise at any thread count. Serial
+        // when called from inside a caller's parallel region.
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(dynamic, 1) if (!omp_in_parallel())
+#endif
+        for (Eigen::Index basis_index = 0; basis_index < nbasis; ++basis_index)
+        {
+            const auto &basis_function = basis._basis_functions[static_cast<std::size_t>(basis_index)];
             detail::evaluate_contracted_gaussian_hessian_on_grid(
                 basis_function,
                 molecular_grid.points,
@@ -353,12 +363,18 @@ namespace DFT
             return evaluation;
         }
 
-        for (Eigen::Index basis_index = 0; basis_index < nbasis; ++basis_index)
-        {
-            const auto &basis_function = basis._basis_functions[static_cast<std::size_t>(basis_index)];
+        for (const auto &basis_function : basis._basis_functions)
             if (basis_function._shell == nullptr)
                 return std::unexpected("AO grid evaluation encountered a basis function with a null shell");
 
+        // Columns are disjoint, so this is bitwise at any thread count. Serial
+        // when called from inside a caller's parallel region.
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(dynamic, 1) if (!omp_in_parallel())
+#endif
+        for (Eigen::Index basis_index = 0; basis_index < nbasis; ++basis_index)
+        {
+            const auto &basis_function = basis._basis_functions[static_cast<std::size_t>(basis_index)];
             detail::evaluate_contracted_gaussian_on_grid(
                 basis_function,
                 molecular_grid.points,

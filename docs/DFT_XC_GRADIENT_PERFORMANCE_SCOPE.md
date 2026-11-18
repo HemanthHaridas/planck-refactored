@@ -106,6 +106,91 @@ two last-digit changes after X1, none from X2). Mutations dropping the GGA
 owner `A_q` term or halving the LDA weight fail by 0.2–0.35 Ha/Bohr. The
 28 DFT gradient/geomopt/frequency regression cases pass after X1.
 
+**X2.5, X3 and X3b landed** (2026-11-18).
+
+- **X2.5: no nb × nb accumulators.** `M_q` was only ever read as
+  `M_q.row(mu)·P.row(mu)`. With P symmetric that is
+  `Σ_p g_q(p,mu)(AP)(p,mu) + Σ_p A_q(p,mu)(ΦP)(p,mu)`. So per block the loop
+  forms `E_q = g_q ∘ AP (+ A_q ∘ ΦP)`: row sums give the owner term, column
+  sums the per-AO basis-motion term. Only the `A·P` and `Φ·P` GEMMs remain,
+  2 n nb² per block and channel instead of 8 (GGA).
+- **X3: blocks threaded.** Contiguous blocks go into 64 fixed bins
+  (`kXCGradientBins`), and the bins run under
+  `parallel for schedule(dynamic, 1)`. Each bin sums its blocks serially;
+  the bins are added in bin order after the loop. Each bin keeps a
+  natoms × 3 partial plus an nb × 3 one. Errors are recorded per bin and
+  returned after the loop. Both AO evaluators in `src/dft/ao_grid.h` now check
+  for null shells first, then run `parallel for` over AO columns
+  (`if (!omp_in_parallel())`, so the per-block Hessian call inside X3 stays
+  serial).
+- **X3b: Becke owner derivative is O(natoms²) per point.** All `s_kj` and
+  their 3-row derivatives are computed once per pair, then
+  `dP_k = Σ_j (Π_{l≠j} s_kl) ds_kj` with prefix/suffix products (no
+  division). Scratch is `thread_local`, so the public signature is
+  unchanged and the DH callers get the speed-up without edits.
+
+| benzene B3LYP/6-31G*, 8 threads | X2 binary | X3b | peak |
+|---|---:|---:|---:|
+| V4 (135 shells): wall | 24.96 s | **15.11 s** | 3.60 GB (unchanged) |
+| legacy `fine`: wall | 8.15 s | **5.78 s** | 0.91 GB |
+
+The X2 V4 run took 25.0 s here against the 27.5 s recorded above (different
+run, same binary state). User CPU barely moved (100.7 → 101.2 s on V4): the
+XC gradient was ~10 s of serial wall and now runs on all cores. Where the
+remaining 15 s goes was not profiled.
+
+Checks:
+- **New unit test `planck-dft-xc-gradient-threads`** (ctest, 0.8 s):
+  - Thread identity: RKS/UKS × LDA/GGA on a C1 water cation, 6-31G*,
+    `Normal` grid, more blocks than bins. The gradient must be bitwise equal
+    at 1/2/3/4/8 threads.
+  - Becke oracle: the new derivative against the old O(natoms³) routine, kept
+    in the test, at all 17,952 points of a C1 7-atom fixture. Max |diff|
+    4.4e-16 (max |ref| 1.25).
+- **Mutations.** Tying the bin count to `omp_get_max_threads()` fails the
+  thread identity in all 16 checks (≤ 3.3e-15). Flipping the sign of the
+  `s(j,k) = 1 − s(k,j)` term fails the oracle (1.36). Dropping `A_q ∘ ΦP`
+  from the column sums moves a UKS PBE gradient by 0.14 Ha/Bohr.
+- **Printed digits.** Nine C1 H2O2 inputs (RKS LDA/PBE/B3LYP/HSE06, the same
+  four for UKS, RKS B3LYP on V4), compared with the X2 binary at 1, 4 and
+  8 threads: identical, or off by one unit in the 12th printed decimal
+  (1e-12). The SCF itself is not thread-invariant (the 8-thread HSE06 energy
+  differs at 1e-15 relative, and the X2 binary changes between 4 and 8
+  threads as well), so a one-unit flip is upstream of this code. Benzene
+  gradients are identical on both grids.
+- **Regression cases.** The 28 DFT gradient/geomopt/frequency cases:
+  28/28 pass (`--suite all`), including the FD gate
+  `water_dft_camb3lyp_gradient_symm_ultrafine_fd`, the PCM and D3 cases, and
+  the two UKS DH V4 cases that also go through the new Becke derivative.
+- **ctest `planck-(udh|dh|dft)`:** 42/42 pass. `planck-dh-workflow-runner`
+  had failed since `33944891` (2026-11-10), which moved the frequency
+  reference rebuild from the DFT wrapper into `compute_hessian`; it still
+  looked for the rebuild in `driver.cpp`. It now checks `hessian.cpp`
+  (restore frames → `gradient_runner(calc)` → vibrational analysis), and
+  removing that rebuild fails it.
+
+## Remaining work
+
+1. **Time a 12-water legacy gradient** (and V4, if it fits in memory) to
+   confirm X3b removed the predicted Becke wall (~10 min serial at 36 atoms
+   under the old form) and to see what dominates next.
+2. **Profile benzene V4** (15.1 s): SCF, grid build, and AO evaluation each
+   need a share before anything else is changed.
+3. **X4**, below. It is the only memory lever left; the peak is unchanged
+   at 3.6 GB.
+
+**X4 is not local to this file.** The gradient reuses the SCF's
+`prepared.ao_grid` (values + three gradients, 3.2 GB of benzene V4's 3.6
+GB), so streaming in the gradient alone lowers no peak. The stored arrays are
+read by `xc_grid.cpp`, `ks_matrix.cpp`, `analytic_hessian.cpp` (SOSCF,
+stability, TDDFT kernel), the DH paths and the driver (11 files, ~48 sites).
+Streaming means a per-block AO provider every one of them consumes, and AO
+re-evaluation every SCF iteration. Estimated peak for a 12-water chain
+(nb = 228, ~3M points) is ~22 GB, so V4 on that system needs X4; benzene
+does not. Keep it a separate scope, opened only if the default-grid decision
+needs V4 above ~30 atoms on 8 GiB machines.
+
+
 ## Gates
 
 - Summation order changes, so not bitwise against the old loop. Every DFT
