@@ -136,19 +136,20 @@ This plan also holds the open items of `DFT_XC_GRADIENT_PERFORMANCE.md`
 
 | Step | Needs | Produces |
 |---|---|---|
-| S1 audit driver | — | the measuring tool for S3–S5 |
-| S2 profile | — | where time and memory go now |
+| S1 audit driver | — | the measuring tool for S3–S5 (done) |
+| S2 profile | — | where time and memory go now (done) |
+| S2b XC matrix build | S2 | blocked, thread-invariant `assemble_xc_matrix` |
 | S3 candidate matrix | S1 | which policies meet the default tier |
 | S4 frequency noise | S3 | frequency noise of the survivors |
-| S5 cost at size | S3, S2 | cost and memory of the survivors |
+| S5 cost at size | S3, S2b | cost and memory of the survivors |
 | S6 choose | S3–S5 | default policy, tight preset |
 | S7 X4 go/no-go | S5, S6 | whether to stream the AO arrays |
 | S8 migration | S6 | the new default, re-pinned suite |
 | S9 DH auto-select | S6 | DH gradients pick the tight preset |
 | S10 V5 | S6 | only if tight-tier clusters are needed |
 
-S1 and S2 can run in parallel. After S3, the critical path is
-S4 → S5 → S6.
+S1 and S2 are done. S2b and S3 can run in parallel; then S4, S5 (which
+needs S2b), S6.
 
 **S1, extend `tests/dft_grid_orientation_audit.py`.** For every run, also
 record:
@@ -169,6 +170,68 @@ legacy `fine` gradient (73.6 s), 8 threads, with `sample`. Report:
 S2 does not block S3. It decides whether a cheap performance fix comes
 before S5: if a serial phase dominates, S5 would be measuring that phase,
 not the grid.
+
+**S1 and S2 results (2026-11-18).**
+
+S1 is done. The driver now records grid points, wall time and peak
+footprint per run, and has the dimer, a water12 case, `--settings
+policy@grid`, `--threads`, `--frequency` and `--json`. It reproduces the
+H2O2 PBE row (legacy 5.46e-4, V4 2.03e-7 Ha/Bohr; 35,180 vs 322,080
+points; 0.36 vs 1.21 s per run). A first frequency run gave legacy
+`normal` H2O2 frequencies moving by up to 37.7 cm⁻¹ with orientation, at
+the unoptimized fixture geometry, so S4 must use an optimized geometry with
+V4 as the control.
+
+S2 profiled two gradient runs at 8 threads under `sample`, which makes them
+slower than unprofiled (20.9 s and 93.0 s). The table gives main-thread
+shares; "wait" is time the main thread spends at the region's end barrier,
+waiting for the other threads:
+
+| Phase | benzene V4 | water12 legacy `fine` |
+|---|---:|---:|
+| XC matrix assembly (`assemble_xc_matrix`), per SCF iteration | 41.7 % (16.3 % wait) | 55.4 % (21.3 % wait) |
+| density on the grid (`evaluate_density_on_grid`) | 18.1 % (5.4 % wait) | 21.4 % (6.2 % wait) |
+| J/K (`fused_fock_build`) | 13.3 % | 6.5 % |
+| grid build (`MakeMolecularGrid`, built twice, serial) | 5.3 % | 6.2 % |
+| AO values | 3.0 % | < 2.5 % |
+| XC nuclear gradient | 7.0 % | 4.7 % |
+| HF-like gradient | 4.2 % | < 2.5 % |
+
+| Memory | points | nb | four stored AO arrays | peak |
+|---|---:|---:|---:|---:|
+| benzene V4 | 962,640 | 102 | 3.14 GB | 3.6 GB |
+| water12 legacy `fine` | 610,680 | 228 | 4.46 GB | 4.8 GB |
+
+What this says:
+
+- **The cost is now the SCF's XC work, not the gradient.**
+  `assemble_xc_matrix` (`src/dft/ks_matrix.cpp`) is the pattern the
+  gradient had before X1: a rank-1 update of nb × nb matrices at every grid
+  point. Its partials are keyed by `omp_get_thread_num()`, so the KS SCF is
+  bitwise reproducible only at a fixed thread count. That explains the
+  last-digit SCF differences between 1 and 8 threads found during X3.
+- **The barrier waits are a hypothesis to check.** A static contiguous
+  split over points, of which the zero-weight ones are skipped, would leave
+  some threads idle. The density evaluation has the same static split over
+  2048-row slabs.
+- **Memory is the stored AO arrays**, 87–93 % of the peak. On a 33 Å chain
+  most AOs are negligible at most points, so screening AOs per block of
+  points (dropping the negligible columns) is a cheaper candidate for the
+  memory fix than streaming. It also cuts the XC flops.
+
+The plan gains a step between S2 and S5:
+
+**S2b, XC matrix build: blocked and thread-invariant.** Needs S2. Rewrite
+`assemble_xc_matrix` like X1/X3 of the gradient: per 128-point block,
+V += Φᵀ diag(w v_ρ) Φ plus the GGA term as GEMMs; 64 fixed bins of
+contiguous blocks under `schedule(dynamic, 1)`, summed in bin order.
+Check bitwise identity across thread counts (extend
+`planck-dft-xc-gradient-threads` to the KS matrix) and printed-digit
+equality on the DFT regression suite; then re-profile water12. Give the
+density evaluation the same dynamic schedule if the S2b profile still
+shows its wait. S5 then measures grids, not a slow loop. AO screening
+stays with X4 (S7) as its likely form, since it changes how every consumer
+reads the AO arrays.
 
 **S3, candidate matrix.** Settings: `legacy` at normal, fine and ultrafine;
 `legacy-unpruned-max` at normal and fine; `pyscf-nwchem-2.13` at its
