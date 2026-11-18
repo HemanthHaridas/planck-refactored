@@ -209,7 +209,85 @@ kept as an explicit preset.
   regression energies on the new default and classify every move, as in
   the migration section.
 
-Order: G1 → G2 → G3 → choose → migration. G1 alone may settle tier 1.
+## Plan: both DFT scopes, in order
+
+This merges the open items of this scope and of
+`docs/DFT_XC_GRADIENT_PERFORMANCE_SCOPE.md` (X1–X3b done). Each step names
+what it needs first and what it produces.
+
+| Step | Needs | Produces |
+|---|---|---|
+| S1 audit driver | — | the measuring tool for S3–S5 |
+| S2 profile | — | where time and memory go now |
+| S3 G1 matrix | S1 | which policies meet tier 1 |
+| S4 G2 frequencies | S3 | frequency noise of the survivors |
+| S5 G3 cost at size | S3, S2 | cost and memory of the survivors |
+| S6 choose | S3–S5 | default policy, tight preset |
+| S7 X4 go/no-go | S5, S6 | whether to stream the AO arrays |
+| S8 migration | S6 | the new default, re-pinned suite |
+| S9 DH auto-select | S6 | DH gradients pick the tight preset |
+| S10 V5 | S6 | only if tight-tier clusters are needed |
+
+**S1, extend `tests/dft_grid_orientation_audit.py`.** Small code change.
+Per run, also record grid points (turn on `print_grid_summary` and parse it),
+wall time, and peak footprint (`/usr/bin/time -l` on macOS). Add the
+H-bonded water dimer (O–O ≈ 2.9 Å) to `CASES`. Add a `--threads` option,
+default 8, so cost columns are comparable. Check it on one cell against the
+2026-11-18 H2O2 PBE numbers above (legacy 5.5e-4, V4 2.0e-7).
+
+**S2, profile today's cost.** Benzene B3LYP/6-31G\* V4 gradient (15.1 s)
+and water12 legacy `fine` gradient (73.6 s), 8 threads, with `sample`.
+Report the phase shares (grid build, AO evaluation, SCF XC build, J/K, XC
+gradient, HF-like gradient) and the memory owners (the four stored AO
+arrays, at about npts × nb × 32 B, against the 4.8 GB water12 peak). This
+does not block S3. It does decide whether a cheap performance fix belongs
+before S5. For example, if a serial phase dominates, S5 would be measuring
+that phase, not the grid.
+
+**S3, G1 candidate matrix.** As in "Remaining work" item 2. Policies:
+`legacy` at normal/fine/ultrafine, `legacy-unpruned-max` at normal/fine,
+`pyscf-nwchem-2.13`, and V4. Fixtures: the six above plus the dimer. Pass
+mark: tier 1 (≤ 3e-5 Ha/Bohr) on every fixture. Record tier 2 as a column.
+Output: the survivor list, with points/atom and the small-molecule cost.
+
+**S4, G2 frequency noise.** H2O2 B3LYP/6-31G\* frequencies at four
+orientations, for the S3 survivors and legacy `normal`. Pass mark: ≤ 1 cm⁻¹,
+watching the torsion. Needs a `--frequency` mode in the S1 driver (the
+modes compare directly; no rotation back).
+
+**S5, G3 cost at size.** S3 survivors that also pass S4, on water4 and
+water12 (6-31G\*) and water4 cc-pVTZ: SCF and gradient wall time, and peak
+footprint. Read the numbers against S2's phase shares. Record a run that
+would not fit in 8 GiB as "does not run" rather than letting it swap.
+
+**S6, choose.** Make the cheapest policy that passes S3–S4 the default if
+it costs ≤ ~2× legacy `normal` at water12. Otherwise record the trade-off
+and pick explicitly. Give the tight tier a user-facing preset name that
+maps to V4 at 135 shells. Write the outcome here and in
+`DFT_GRID_CONVERGENCE.md` ("Not done").
+
+**S7, X4 go/no-go** (the perf scope's item 4). Go only if S5 shows the
+chosen default, or the tight preset at a size a user needs, does not fit
+in 8 GiB. Then X4 becomes its own scope. It is cross-cutting: a per-block
+AO provider for `xc_grid.cpp`, `ks_matrix.cpp`, `analytic_hessian.cpp`, the
+DH paths and the driver (11 files, ~48 sites), plus AO re-evaluation every
+SCF iteration. Its design starts from S2's memory owners.
+
+**S8, migration.** Do the "Migration if V4 wins" section, with the S6
+policy in place of V4: one default change, the 77 DFT regression energies
+classified, references re-pinned, `--suite all`.
+
+**S9, DH auto-select.** `validate_qualified_uks_dh_grid` selects the tight
+preset instead of refusing an unqualified grid, and says so in the output.
+It needs S6 only for the preset name, so it can follow S6 directly,
+before S8.
+
+**S10, V5.** Only if S6 finds a user who needs the tight tier on clusters
+(V4's water4 is 1.0e-6, at the limit). Its own scope, under the
+`DFT_GRID_CONVERGENCE.md` protocol: cluster fixtures in a new selection
+atlas and a new blind suite.
+
+S1 and S2 can run in parallel. After S3, the critical path is S4 → S5 → S6.
 
 ## Decision rule (superseded by "Remaining work" above)
 

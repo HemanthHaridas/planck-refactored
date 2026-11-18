@@ -177,10 +177,11 @@ Checks:
    both. The ~10 min serial Becke prediction was for V4 (~9× the points);
    at `fine` the saving is 37 s. V4 water12 needs ~22 GB and was not run
    (X4). Where the remaining 74 s goes is not yet profiled.
-2. **Profile benzene V4** (15.1 s): SCF, grid build, and AO evaluation each
-   need a share before anything else is changed.
-3. **X4**, below. It is the only memory lever left; the peak is unchanged
-   at 3.6 GB.
+2. **Profiling** (benzene V4 and water12) and **X4** are now steps S2 and
+   S7 of the joint plan in `docs/DFT_DEFAULT_GRID_SCOPE.md` ("Plan: both
+   DFT scopes, in order"), which orders them against the default-grid
+   measurements. X4 runs only if that plan's cost step (S5) shows a needed
+   size does not fit in memory. The X4 analysis below stays as its input.
 
 **X4 is not local to this file.** The gradient reuses the SCF's
 `prepared.ao_grid` (values + three gradients, 3.2 GB of benzene V4's 3.6
