@@ -3,7 +3,11 @@
 // GGA, on a C1 water cation with more grid blocks than accumulation bins.
 // Also (X3b): the O(natoms^2) Becke owner-weight derivative against the
 // O(natoms^3) form it replaced, kept below as the oracle.
+// Also (S2b, docs/DFT_DEFAULT_GRID_SCOPE.md): the KS XC matrix
+// (assemble_xc_matrix) is bitwise identical at any thread count, and equals
+// a per-point oracle (the pre-S2b algorithm, written out below).
 #include "dft/dft_gradient.h"
+#include "dft/ks_matrix.h"
 #include "base/basis.h"
 #include "basis/basis.h"
 #include "integrals/base.h"
@@ -46,6 +50,55 @@ namespace
         const M p = pa + pb;
         const auto xc = require(evaluate_xc_on_grid(grid, ao, p, x, c));
         return require(Gradient::compute_xc_nuclear_gradient_rks(calc._molecule, calc._shells, grid, ao, xc, p));
+    }
+
+    XCGridEvaluation xc_eval(const MolecularGrid &grid, const AOGridEvaluation &ao, const M &pa, const M &pb,
+                             bool uks, const char *xname, const char *cname)
+    {
+        const auto spin = uks ? XC::Spin::Polarized : XC::Spin::Unpolarized;
+        const auto x = functional(xname, spin), c = functional(cname, spin);
+        return uks ? require(evaluate_xc_on_grid(grid, ao, pa, pb, x, c))
+                   : require(evaluate_xc_on_grid(grid, ao, M(pa + pb), x, c));
+    }
+
+    // Pre-S2b assemble_xc_matrix, written out: per point,
+    // V += w vrho phi phi^T + w (phi g^T + g phi^T), g = sum_k c_k dphi/dk.
+    std::pair<M, M> xc_matrix_oracle(const MolecularGrid &grid, const AOGridEvaluation &ao, const XCGridEvaluation &xc)
+    {
+        const Eigen::Index nb = ao.nbasis();
+        const bool pol = xc.density.polarized, gga = xc.vsigma.cols() > 0;
+        M va = M::Zero(nb, nb), vb = M::Zero(nb, nb);
+        for (Eigen::Index p = 0; p < grid.points.rows(); ++p)
+        {
+            const double w = grid.points(p, 3);
+            if (w == 0.0)
+                continue;
+            const Eigen::VectorXd phi = ao.values.row(p).transpose();
+            const auto add = [&](M &v, double vrho, const Eigen::Vector3d &c)
+            {
+                const Eigen::VectorXd g = c.x() * ao.grad_x.row(p).transpose() + c.y() * ao.grad_y.row(p).transpose() +
+                                          c.z() * ao.grad_z.row(p).transpose();
+                v += w * vrho * phi * phi.transpose() + w * (phi * g.transpose() + g * phi.transpose());
+            };
+            const auto grad = [&](const DensityChannelOnGrid &d)
+            { return Eigen::Vector3d(d.grad_x(p), d.grad_y(p), d.grad_z(p)); };
+            if (!pol)
+            {
+                add(va, xc.vrho(p, 0), gga ? Eigen::Vector3d(2.0 * xc.vsigma(p, 0) * grad(xc.density.total))
+                                           : Eigen::Vector3d::Zero());
+                continue;
+            }
+            Eigen::Vector3d ca = Eigen::Vector3d::Zero(), cb = Eigen::Vector3d::Zero();
+            if (gga)
+            {
+                const Eigen::Vector3d ga = grad(xc.density.alpha), gb = grad(xc.density.beta);
+                ca = 2.0 * xc.vsigma(p, 0) * ga + xc.vsigma(p, 1) * gb;
+                cb = xc.vsigma(p, 1) * ga + 2.0 * xc.vsigma(p, 2) * gb;
+            }
+            add(va, xc.vrho(p, 0), ca);
+            add(vb, xc.vrho(p, 1), cb);
+        }
+        return {va, pol ? vb : va};
     }
 
     // The pre-X3b becke_partition_owner_derivatives, verbatim: oracle only.
@@ -279,8 +332,34 @@ int main()
                           << (g - ref).cwiseAbs().maxCoeff() << '\n';
             }
         }
+
+        // KS XC matrix: thread identity and the per-point oracle.
+        omp_set_num_threads(1);
+        const auto xc = xc_eval(grid, ao, pa, pb, k.uks, k.x, k.c);
+        const auto v1 = require(assemble_xc_matrix(grid, ao, xc));
+        const auto [oa, ob] = xc_matrix_oracle(grid, ao, xc);
+        const double scale = std::max(oa.cwiseAbs().maxCoeff(), ob.cwiseAbs().maxCoeff());
+        const double dev = std::max((v1.alpha - oa).cwiseAbs().maxCoeff(), (v1.beta - ob).cwiseAbs().maxCoeff());
+        std::cout << k.label << " XC matrix vs per-point oracle: max |diff| " << dev << ", max |V| " << scale << '\n';
+        if (!(scale > 1e-3 && dev <= 1e-12 * scale) || v1.alpha != v1.alpha.transpose())
+        {
+            ok = false;
+            std::cerr << "FAIL " << k.label << ": XC matrix differs from the oracle or is not symmetric\n";
+        }
+        for (int threads : {2, 3, 4, 8})
+        {
+            omp_set_num_threads(threads);
+            const auto v = require(assemble_xc_matrix(grid, ao, xc));
+            if (v.alpha != v1.alpha || v.beta != v1.beta)
+            {
+                ok = false;
+                std::cerr << "FAIL " << k.label << " XC matrix at " << threads << " threads: max |diff| "
+                          << std::max((v.alpha - v1.alpha).cwiseAbs().maxCoeff(),
+                                      (v.beta - v1.beta).cwiseAbs().maxCoeff()) << '\n';
+            }
+        }
     }
     omp_set_num_threads(saved);
-    std::cout << (ok ? "XC gradient thread identity: PASS\n" : "XC gradient thread identity: FAIL\n");
+    std::cout << (ok ? "XC gradient and matrix thread identity: PASS\n" : "XC gradient and matrix thread identity: FAIL\n");
     return ok ? 0 : 1;
 }

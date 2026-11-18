@@ -91,7 +91,7 @@ namespace DFT
 #ifdef USE_OPENMP
             // Degrade to serial if a caller ever wraps this in its own region,
             // rather than oversubscribing the cores.
-#pragma omp parallel for schedule(static) if (!omp_in_parallel())
+#pragma omp parallel for schedule(dynamic, 1) if (!omp_in_parallel())
 #endif
             for (Eigen::Index start = lo; start < hi; start += block_rows)
             {

@@ -138,7 +138,7 @@ This plan also holds the open items of `DFT_XC_GRADIENT_PERFORMANCE.md`
 |---|---|---|
 | S1 audit driver | — | the measuring tool for S3–S5 (done) |
 | S2 profile | — | where time and memory go now (done) |
-| S2b XC matrix build | S2 | blocked, thread-invariant `assemble_xc_matrix` |
+| S2b XC matrix build | S2 | blocked, thread-invariant `assemble_xc_matrix` (done) |
 | S3 candidate matrix | S1 | which policies meet the default tier |
 | S4 frequency noise | S3 | frequency noise of the survivors |
 | S5 cost at size | S3, S2b | cost and memory of the survivors |
@@ -148,8 +148,7 @@ This plan also holds the open items of `DFT_XC_GRADIENT_PERFORMANCE.md`
 | S9 DH auto-select | S6 | DH gradients pick the tight preset |
 | S10 V5 | S6 | only if tight-tier clusters are needed |
 
-S1 and S2 are done. S2b and S3 can run in parallel; then S4, S5 (which
-needs S2b), S6.
+S1, S2 and S2b are done. Next is S3, then S4, S5 and S6.
 
 **S1, extend `tests/dft_grid_orientation_audit.py`.** For every run, also
 record:
@@ -221,17 +220,56 @@ What this says:
 
 The plan gains a step between S2 and S5:
 
-**S2b, XC matrix build: blocked and thread-invariant.** Needs S2. Rewrite
-`assemble_xc_matrix` like X1/X3 of the gradient: per 128-point block,
-V += Φᵀ diag(w v_ρ) Φ plus the GGA term as GEMMs; 64 fixed bins of
-contiguous blocks under `schedule(dynamic, 1)`, summed in bin order.
-Check bitwise identity across thread counts (extend
-`planck-dft-xc-gradient-threads` to the KS matrix) and printed-digit
-equality on the DFT regression suite; then re-profile water12. Give the
-density evaluation the same dynamic schedule if the S2b profile still
-shows its wait. S5 then measures grids, not a slow loop. AO screening
-stays with X4 (S7) as its likely form, since it changes how every consumer
-reads the AO arrays.
+**S2b, XC matrix build: blocked and thread-invariant. Done 2026-11-18.**
+
+- **`assemble_xc_matrix` (`src/dft/ks_matrix.cpp`).** Per 128-point block,
+  A = diag(w v_ρ/2) Φ + diag(w) G, where G = Σ_k c_k ∂Φ/∂k (GGA), so
+  Σ_p [w v_ρ φφᵀ + w(φgᵀ + gφᵀ)] = ΦᵀA + AᵀΦ. One GEMM M += ΦᵀA per
+  block and spin, and V = M + Mᵀ after the reduction. Zero-weight points get
+  a zero row.
+- **Bins.** Contiguous blocks go into fixed bins under
+  `schedule(dynamic, 1)`, summed in bin order. The bin count is at most 64;
+  it depends on nb and the spin count (a 256 MB cap on the nb × nb partials,
+  at least 8 bins) and on the block count, never on the thread count.
+- **Density evaluation.** Its 2048-row slabs now use
+  `schedule(dynamic, 1)`. The writes are disjoint, so this changes no bits.
+
+Checks:
+
+- **`planck-dft-xc-gradient-threads`, extended** to the KS matrix,
+  RKS/UKS × LDA/GGA:
+  - against a per-point oracle (the old algorithm, written out in the
+    test): ≤ 3.5e-14 with |V| ≈ 3;
+  - bitwise identical at 1/2/3/4/8 threads.
+- **Mutations.** Tying the bin count to the thread count fails the identity
+  check; dropping the ½ on v_ρ fails the oracle by ~3.
+- **Gate inputs.** On the nine H2O2 inputs, energies move ≤ 3e-13 Eh, and
+  gradients are unchanged except one 1e-12 last-digit flip.
+- **The KS SCF is now thread-invariant.** Energies and gradients are
+  identical at 1 and 8 threads to all printed digits (17 for the energy).
+  Before S2b they were not.
+- **Regression cases.** All 114 DFT cases pass (`--suite all`):
+  energies, gradients, geomopt, frequencies, TDDFT, stability, SOSCF, PCM,
+  D3 and DH.
+
+| 8 threads | X3b binary | S2b | peak |
+|---|---:|---:|---:|
+| benzene V4 gradient | 16.4 s | **11.1 s** | 3.6 GB |
+| water12 legacy `fine` gradient | 72.2 s | **48.5 s** | 4.8 GB |
+
+Gradients are identical between the two binaries. Re-profiled water12,
+main-thread shares:
+
+| Phase | before S2b | after S2b |
+|---|---:|---:|
+| XC matrix assembly | 55.4 % (21.3 % wait) | 30.7 % (no wait) |
+| density on the grid | 21.4 % (6.2 % wait) | 29.3 % (no wait) |
+| J/K | 6.5 % | ~10 % |
+| grid build (serial) | 6.2 % | ~5 % per build |
+
+Both XC phases are now dense GEMMs over every AO at every point. The next
+lever for both time and memory is AO screening per block (S7). S5 can now
+measure grids rather than a slow loop.
 
 **S3, candidate matrix.** Settings: `legacy` at normal, fine and ultrafine;
 `legacy-unpruned-max` at normal and fine; `pyscf-nwchem-2.13` at its

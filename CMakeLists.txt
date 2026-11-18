@@ -1584,6 +1584,7 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/dft_xc_gradient_threads.cpp
         ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/ks_matrix.cpp
         ${SRC_DIR}/dft/xc_grid.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
