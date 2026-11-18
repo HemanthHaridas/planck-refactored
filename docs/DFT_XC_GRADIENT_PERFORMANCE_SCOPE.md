@@ -171,9 +171,12 @@ Checks:
 
 ## Remaining work
 
-1. **Time a 12-water legacy gradient** (and V4, if it fits in memory) to
-   confirm X3b removed the predicted Becke wall (~10 min serial at 36 atoms
-   under the old form) and to see what dominates next.
+1. **12-water chain (3 Å), B3LYP/6-31G\*, legacy `fine`, 8 threads**, done
+   2026-11-18: X2 binary 110.7 s → X3b 73.6 s wall (user CPU 377 → 362 s),
+   gradients identical to every printed digit (36 rows), peak 4.8 GB in
+   both. The ~10 min serial Becke prediction was for V4 (~9× the points);
+   at `fine` the saving is 37 s. V4 water12 needs ~22 GB and was not run
+   (X4). Where the remaining 74 s goes is not yet profiled.
 2. **Profile benzene V4** (15.1 s): SCF, grid build, and AO evaluation each
    need a share before anything else is changed.
 3. **X4**, below. It is the only memory lever left; the peak is unchanged
