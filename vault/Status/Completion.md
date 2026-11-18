@@ -452,7 +452,7 @@ historical design context, but they are no longer the source of truth for
 ### Recent fixes now considered landed
 
 - **KS XC nuclear gradient: block GEMMs, AO Hessian per block (X1–X2,
-  2026-11-18, `docs/DFT_XC_GRADIENT_PERFORMANCE_SCOPE.md`).** The point
+  2026-11-18, `docs/DFT_XC_GRADIENT_PERFORMANCE.md`).** The point
   loop allocated three nb × nb matrices per grid point, and the gradient
   stored ten npts × nb AO arrays (six zeroed ones even for LDA). One driver
   now serves RKS and both UKS spins: per 128-point block, `G_qᵀA + A_qᵀΦ`

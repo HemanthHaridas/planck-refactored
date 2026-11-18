@@ -1,5 +1,5 @@
 // The KS XC nuclear gradient must be bitwise identical at any OpenMP thread
-// count (docs/DFT_XC_GRADIENT_PERFORMANCE_SCOPE.md, X3): RKS and UKS, LDA and
+// count (docs/DFT_XC_GRADIENT_PERFORMANCE.md, X3): RKS and UKS, LDA and
 // GGA, on a C1 water cation with more grid blocks than accumulation bins.
 // Also (X3b): the O(natoms^2) Becke owner-weight derivative against the
 // O(natoms^3) form it replaced, kept below as the oracle.

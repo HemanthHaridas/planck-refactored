@@ -291,15 +291,12 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
 
 None of these blocks correctness. Take each up only with a current profile.
 
-- **KS XC nuclear gradient: X4 left, only if needed**
-  (`docs/DFT_XC_GRADIENT_PERFORMANCE_SCOPE.md`). X1 (block GEMMs) and X2
-  (per-block AO Hessian) landed 2026-11-18: benzene B3LYP/6-31G* V4
-  gradient 117 s / 8.1 GB → 27.5 s / 3.6 GB. X2.5/X3/X3b followed (no
-  nb × nb accumulators, blocks threaded with fixed bins, O(natoms²) Becke
-  derivative): benzene V4 25.0 → 15.1 s at 8 threads, bitwise across thread
-  counts (`planck-dft-xc-gradient-threads`); water12 legacy `fine` 110.7 →
-  73.6 s, peak 4.8 GB. Profiling and X4 (stream the SCF AO arrays; touches
-  11 files; the only memory lever) are steps S2 and S7 of the plan in
+- **KS XC nuclear gradient: profile and X4 left, only if needed.** The
+  gradient work is answered (`docs/DFT_XC_GRADIENT_PERFORMANCE.md`):
+  benzene B3LYP/6-31G* V4 117 s / 8.1 GB → 15.1 s / 3.6 GB at 8 threads,
+  bitwise across thread counts. What remains is a profile of the rest of
+  the run and X4 (stream the SCF AO arrays; 11 files; the only memory
+  lever). They are steps S2 and S7 of the plan in
   `docs/DFT_DEFAULT_GRID_SCOPE.md`; X4 runs only if its cost step shows a
   needed size does not fit.
 - **SCF and ERI kernels** (`docs/ERI_KERNEL_VS_LIBCINT.md`,
