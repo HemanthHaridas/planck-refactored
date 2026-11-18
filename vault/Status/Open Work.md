@@ -45,7 +45,12 @@ teaching code) reorders it.
    today. Scope: `docs/META_GGA_SCOPE.md`.
 4. **Default DFT grid qualified for gradients** (§2, DFT). `legacy` fails the
    rotational-covariance check, so default-settings geometries and
-   frequencies carry grid noise. A decision and a migration, not new code. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
+   frequencies carry grid noise. Measured 2026-11-18: at the default grid
+   the gradient depends on orientation at 4–13e-4 Ha/Bohr for ordinary
+   functionals; V4 fixes isolated molecules but degrades with neighbouring
+   molecules (water tetramer 1.2e-6 Eh) and costs 9× the points, so this is
+   now a V5 re-selection with cluster fixtures plus the XC-gradient cost fix
+   (`docs/DFT_XC_GRADIENT_PERFORMANCE_SCOPE.md`), not a one-line migration. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
 5. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
 RI-JK for routine HF and DFT is no longer on this list: it is answered
 (`docs/RI_JK_ROUTINE.md`).
@@ -284,6 +289,11 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
 
 None of these blocks correctness. Take each up only with a current profile.
 
+- **KS XC nuclear gradient is serial, per-point and stores ten npts × nb
+  arrays** (`docs/DFT_XC_GRADIENT_PERFORMANCE_SCOPE.md`, 2026-11-18).
+  Benzene B3LYP/6-31G* on the V4 grid: 117 s on one core of eight, 68 % in
+  `compute_xc_nuclear_gradient_rks`, 8.1 GB peak. Blocks the cost half of
+  the default-grid decision (`docs/DFT_DEFAULT_GRID_SCOPE.md`).
 - **SCF and ERI kernels** (`docs/ERI_KERNEL_VS_LIBCINT.md`,
   `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`, `docs/SCF_VS_PYSCF.md`):
   - Rerun the Planck-vs-PySCF Fock table and the end-to-end
