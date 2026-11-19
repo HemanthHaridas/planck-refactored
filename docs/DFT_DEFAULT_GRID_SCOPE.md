@@ -40,7 +40,8 @@ limit on benzene will fail on larger systems.
 | S2b XC matrix build | S2 | blocked, thread-invariant `assemble_xc_matrix` | done |
 | S3 candidate matrix | S1 | which policies meet the default tier | done |
 | S3b naphthalene | S3 | whether the marginal passes hold on a larger aromatic | done: they do not |
-| S3c V4 on naphthalene | S3b | whether V4 holds the tight tier | next |
+| S3c V4 on naphthalene | S3b | whether V4 holds the tight tier | done: it does not |
+| S3d `pyscf-nwchem@ultrafine` | S3c | whether an existing level meets the tight tier | next |
 | S4 frequency noise | S3 | frequency noise of the survivors | next |
 | S5 cost at size | S3, S2b | cost and memory of the survivors | next |
 | S6 choose | S3–S5 | default policy, tight preset | |
@@ -48,7 +49,7 @@ limit on benzene will fail on larger systems.
 | S7b AO screening, stage 2 | S7 | the remaining consumers on blocks; dense arrays deleted | |
 | S8 migration | S6 | the new default, re-pinned suite | |
 | S9 DH auto-select | S6 | DH gradients pick the tight preset | |
-| S10 V5 | S6 | only if nothing meets the tight tier on clusters | |
+| S10 V5 | S3d | only if no existing setting meets the tight tier | |
 
 This plan also holds the open items of `DFT_XC_GRADIENT_PERFORMANCE.md`
 (S2, S7).
@@ -133,12 +134,37 @@ Raw rows: `tests/benchmarks/dft/grid_orientation/s3b_naphthalene.{json,log}`.
   wall time here (most of the run is not grid work).
 - **It does not meet the tight tier on naphthalene** (3.1e-6, 2× over),
   and its noise grew faster than `@normal`'s from benzene (1.53e-6 → 3.13e-6
-  against 2.99e-5 → 3.74e-5). Whether V4 holds the tight tier here is not
-  measured.
+  against 2.99e-5 → 3.74e-5). V4 does not either (S3c).
 
 Into S4–S5: `pyscf-nwchem-2.13@fine` as the default candidate,
 `legacy-unpruned-max@fine` as its fallback (benzene 8.7e-6, naphthalene not
 run), V4 as the tight control.
+
+## S3c: V4 on naphthalene
+
+V4 in 6-31G\* needs ~6.5 GB of AO blocks after S7 and thrashed in swap on
+this 8 GiB machine (footprint 6.49 GB, 160 MB resident), so it was stopped.
+S3c runs in 6-31G instead (nb 106, not 166), with the S3b rows repeated
+there. Raw rows:
+`tests/benchmarks/dft/grid_orientation/s3c_naphthalene_631g.{json,log}`.
+
+| naphthalene B3LYP/6-31G | max\|Δg\| | max\|ΔE\| | points | wall (8 thr) | peak |
+|---|---:|---:|---:|---:|---:|
+| `legacy@normal` | 6.7e-4 ✗ | 9.1e-5 | 166,004 | 7.7 s | 0.58 GB |
+| `pyscf-nwchem-2.13@fine` | 3.3e-6 | 1.2e-7 | 618,100 | 11.5 s | 2.11 GB |
+| `g4-3-v4` | 3.0e-6 | 5.2e-7 | 1,444,380 | 24.9 s | 4.92 GB |
+
+- **The basis barely matters here.** Against the 6-31G\* rows of S3b,
+  legacy moves 6.56e-4 → 6.75e-4 and `pyscf-nwchem@fine` 3.13e-6 →
+  3.28e-6: within 5 %. The noise is the grid's.
+- **V4 fails the tight tier on naphthalene** (3.0e-6, 2× over), like
+  `pyscf-nwchem@fine`. With 2.3× the points it is only 8 % quieter in the
+  gradient and 4× noisier in the energy.
+- **So no measured setting meets the tight tier beyond benzene.** Both
+  candidates double from benzene to naphthalene, so the tier is not met on
+  extended aromatics by adding points to these schedules.
+
+Before designing a V5 (S10), one existing setting is unmeasured: S3d.
 
 ## Background measurements
 
@@ -324,13 +350,12 @@ D3, counterpoise, MPI smoke and the DH/UDH gradients, which exercise the
 
 ## Next steps
 
-**S3c, V4 on naphthalene.** One row: `g4-3-v4@normal` on
-`naphthalene_b3lyp`. It decides the tight preset: if V4 is ≤ 1.5e-6 there,
-V4 stays the tight preset; if it also fails, neither candidate meets the
-tight tier beyond benzene, and S10 becomes live. Expect ~1.45 M points;
-with S7's screening (naphthalene keeps ~83 %) the AO blocks are ~6.4 GB, so
-the peak is near 7 GB: run it alone on the 8 GiB machine. If it does not
-fit, spatial point sorting (S7b) is the next memory lever.
+**S3d, `pyscf-nwchem-2.13@ultrafine`.** PySCF level 7 with the same
+pruning: naphthalene 6-31G and benzene 6-31G\*, with `@fine` as the
+control. If it is ≤ 1.5e-6 on both, it is the tight preset and V4 is
+retired from that role. If it is not, the open question becomes whether
+the tight tier (1/10 of `gau_tight`) is the right requirement for
+aromatics, or whether S10 is needed; decide that before designing V5.
 
 **S4, frequency noise.** H2O2 B3LYP/6-31G\* frequencies at four
 orientations; frequencies are compared directly, without rotating back.
@@ -358,8 +383,8 @@ starting point.
   `normal` at water12 (naphthalene: 3.7× points, 1.6× wall). Otherwise
   record the trade-off and pick explicitly; no cheaper setting passes
   (S3b).
-- Tight preset: a user-facing name for V4 if S3c holds; `pyscf-nwchem@fine`
-  is not a tight preset (naphthalene 3.1e-6).
+- Tight preset: a user-facing name for whichever setting S3d finds; neither
+  V4 nor `pyscf-nwchem@fine` meets the tier on naphthalene (S3b, S3c).
 - Write the outcome here (this scope becomes the answer) and in
   `DFT_GRID_CONVERGENCE.md` ("Not done").
 
@@ -385,9 +410,9 @@ It needs S6 only for the preset name, so it can follow S6 directly. If the
 tight preset becomes `pyscf-nwchem@fine`, the UKS DH gradient must first be
 re-qualified on it (the V4 qualification does not transfer).
 
-**S10, V5.** Only if S6 finds no setting that meets the tight tier on the
-systems users need. S3 makes this less likely: `pyscf-nwchem@fine` already
-beats V4 on clusters. It would be its own scope under the
+**S10, V5.** Only if S3d finds no existing setting that meets the tight
+tier and the tier itself stands. V4 does not meet it on naphthalene (S3c),
+and `pyscf-nwchem@fine` already beats V4 on clusters. It would be its own scope under the
 `DFT_GRID_CONVERGENCE.md` protocol, with cluster fixtures in the selection
 atlas and blind suite.
 
@@ -401,6 +426,8 @@ atlas and blind suite.
   naphthalene (3.7e-5, 3.2e-5; S3b).
 - **`pyscf-nwchem-2.13@fine` as the tight preset.** 1.5e-6 on benzene,
   3.1e-6 on naphthalene (S3b).
+- **V4 as the tight preset.** 3.0e-6 on naphthalene (S3c), with 2.3× the
+  points of `pyscf-nwchem@fine` for 8 % less gradient noise.
 - **`legacy@fine` and `legacy@ultrafine` as the default.** `fine` fails
   (water4 8.3e-5); `ultrafine` passes but is dominated by
   `legacy-unpruned-max@normal` (S3).

@@ -55,7 +55,9 @@ teaching code) reorders it.
    scope. 2026-11-19: S3/S3b done. No `normal`-level setting passes (they
    fail naphthalene); `pyscf-nwchem-2.13@fine` passes the default tier with
    ~10× margin but not the tight tier. S7 stage 1 (AO screening) landed so
-   the larger runs fit. Next: S3c (V4 on naphthalene), S4, S5. Scope:
+   the larger runs fit. S3c: V4 also fails the tight tier on naphthalene
+   (3.0e-6), so no measured setting meets it beyond benzene. Next: S3d
+   (`pyscf-nwchem@ultrafine`), S4, S5. Scope:
    `docs/DFT_DEFAULT_GRID_SCOPE.md`.
 5. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
 RI-JK for routine HF and DFT is no longer on this list: it is answered
