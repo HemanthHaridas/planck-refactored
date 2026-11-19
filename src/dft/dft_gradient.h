@@ -77,11 +77,30 @@ namespace DFT::Gradient
         const Eigen::Ref<const Eigen::MatrixXd> &density_restricted);
 
     [[nodiscard]] std::expected<Eigen::MatrixXd, std::string>
+    compute_xc_nuclear_gradient_rks(
+        const HartreeFock::Molecule &mol,
+        const HartreeFock::Basis &basis,
+        const MolecularGrid &grid,
+        const ScreenedAOGrid &ao,
+        const XCGridEvaluation &xc,
+        const Eigen::Ref<const Eigen::MatrixXd> &density_restricted);
+
+    [[nodiscard]] std::expected<Eigen::MatrixXd, std::string>
     compute_xc_nuclear_gradient_uks(
         const HartreeFock::Molecule &mol,
         const HartreeFock::Basis &basis,
         const MolecularGrid &grid,
         const AOGridEvaluation &ao,
+        const XCGridEvaluation &xc,
+        const Eigen::Ref<const Eigen::MatrixXd> &density_alpha,
+        const Eigen::Ref<const Eigen::MatrixXd> &density_beta);
+
+    [[nodiscard]] std::expected<Eigen::MatrixXd, std::string>
+    compute_xc_nuclear_gradient_uks(
+        const HartreeFock::Molecule &mol,
+        const HartreeFock::Basis &basis,
+        const MolecularGrid &grid,
+        const ScreenedAOGrid &ao,
         const XCGridEvaluation &xc,
         const Eigen::Ref<const Eigen::MatrixXd> &density_alpha,
         const Eigen::Ref<const Eigen::MatrixXd> &density_beta);

@@ -1,0 +1,5 @@
+case                   policy@grid                   max|dg| Ha/Bohr  max|dE| Eh    points pts/atom   wall s  peak GB
+naphthalene_b3lyp      legacy@normal                       6.563e-04   9.551e-05    166004     9222    24.04     1.03
+naphthalene_b3lyp      pyscf-nwchem-2.13@normal            3.735e-05   1.404e-05    219644    12202    27.28     1.35
+naphthalene_b3lyp      legacy-unpruned-max@normal          3.165e-05   1.540e-05    304100    16894    28.20     1.81
+naphthalene_b3lyp      pyscf-nwchem-2.13@fine              3.133e-06   1.225e-07    618100    34338    38.35     3.62

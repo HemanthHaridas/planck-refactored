@@ -92,7 +92,7 @@ namespace DFT::Driver
         const UDHPT2Amplitudes t{r.nocca,r.noccb,r.nvira,r.nvirb,r.t2_aa,r.t2_ab,r.t2_bb};
         const double ax=exchange.fock_exchange_coefficient();
         auto response=make_udh_direct_ks_response_operator({&prepared.shell_pairs,&prepared.molecular_grid,
-            &prepared.ao_grid,ground,&exchange,&correlation,ax,calc._integral._engine,calc._integral._tol_eri});
+            &prepared.dense_ao(),ground,&exchange,&correlation,ax,calc._integral._engine,calc._integral._tol_eri});
         if(!response) return error(response.error());
         auto rhs=build_udh_orbital_rhs(t,blocks,c,coeff,calc._overlap,f,*response);
         if(!rhs) return error(rhs.error());
@@ -120,7 +120,7 @@ namespace DFT::Driver
             make_udh_two_particle_source(*gamma,t,coeff),*dx);
         if(!nonxc) return error(nonxc.error());
         out.non_xc=std::move(*nonxc);
-        const UDHXCIIInputs xci{&calc._molecule,&calc._shells,&prepared.molecular_grid,&prepared.ao_grid,
+        const UDHXCIIInputs xci{&calc._molecule,&calc._shells,&prepared.molecular_grid,&prepared.dense_ao(),
             ground,gamma->relaxed_ao.spin,&exchange,&correlation};
         if(exchange.is_lda_like() && (combined || correlation.is_lda_like()))
         {

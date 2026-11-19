@@ -1,0 +1,50 @@
+[
+ {
+  "case": "naphthalene_b3lyp",
+  "policy": "legacy",
+  "grid": "normal",
+  "mode": "gradient",
+  "natoms": 18,
+  "points": 166004,
+  "wall_mean_s": 24.038741875250025,
+  "peak_max_bytes": 1028113608,
+  "max_dE": 9.551373454996792e-05,
+  "max_dg": 0.0006562794896272078
+ },
+ {
+  "case": "naphthalene_b3lyp",
+  "policy": "pyscf-nwchem-2.13",
+  "grid": "normal",
+  "mode": "gradient",
+  "natoms": 18,
+  "points": 219644,
+  "wall_mean_s": 27.28132196900009,
+  "peak_max_bytes": 1349977528,
+  "max_dE": 1.4042487805454584e-05,
+  "max_dg": 3.7350327089460714e-05
+ },
+ {
+  "case": "naphthalene_b3lyp",
+  "policy": "legacy-unpruned-max",
+  "grid": "normal",
+  "mode": "gradient",
+  "natoms": 18,
+  "points": 304100,
+  "wall_mean_s": 28.20363890625015,
+  "peak_max_bytes": 1806681888,
+  "max_dE": 1.54025732399532e-05,
+  "max_dg": 3.164947538083921e-05
+ },
+ {
+  "case": "naphthalene_b3lyp",
+  "policy": "pyscf-nwchem-2.13",
+  "grid": "fine",
+  "mode": "gradient",
+  "natoms": 18,
+  "points": 618100,
+  "wall_mean_s": 38.34908552099989,
+  "peak_max_bytes": 3616230496,
+  "max_dE": 1.2252257874934003e-07,
+  "max_dg": 3.1334687762723558e-06
+ }
+]

@@ -52,7 +52,11 @@ teaching code) reorders it.
    the same day: two tiers (default ≤ 3e-5, tight ≤ 1.5e-6 Ha/Bohr), the
    existing policies measured first, and V5 only if tight-tier clusters
    are needed. The ordered plan S1–S10 covers this and the XC-gradient
-   scope. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
+   scope. 2026-11-19: S3/S3b done. No `normal`-level setting passes (they
+   fail naphthalene); `pyscf-nwchem-2.13@fine` passes the default tier with
+   ~10× margin but not the tight tier. S7 stage 1 (AO screening) landed so
+   the larger runs fit. Next: S3c (V4 on naphthalene), S4, S5. Scope:
+   `docs/DFT_DEFAULT_GRID_SCOPE.md`.
 5. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
 RI-JK for routine HF and DFT is no longer on this list: it is answered
 (`docs/RI_JK_ROUTINE.md`).
@@ -291,14 +295,16 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
 
 None of these blocks correctness. Take each up only with a current profile.
 
-- **KS XC nuclear gradient: profile and X4 left, only if needed.** The
-  gradient work is answered (`docs/DFT_XC_GRADIENT_PERFORMANCE.md`):
-  benzene B3LYP/6-31G* V4 117 s / 8.1 GB → 15.1 s / 3.6 GB at 8 threads,
-  bitwise across thread counts. What remains is a profile of the rest of
-  the run and X4 (stream the SCF AO arrays; 11 files; the only memory
-  lever). They are steps S2 and S7 of the plan in
-  `docs/DFT_DEFAULT_GRID_SCOPE.md`; X4 runs only if its cost step shows a
-  needed size does not fit.
+- **DFT AO arrays: S7b, only if needed.** AO screening per point block
+  (S7 stage 1, 2026-11-19) replaced the planned X4 streaming. What remains
+  (`docs/DFT_DEFAULT_GRID_SCOPE.md`, S7):
+  - port the dense consumers (SOSCF, stability, TDDFT, DH) to blocks and
+    delete the dense arrays; until then those runs allocate them on top;
+  - spatial sorting of grid points (water12 27 % → 21 % kept);
+  - shell-extent prescreening of the AO evaluation.
+- **DFT J/K.** After S7, the J and K direct builds are ~41 % of a
+  naphthalene B3LYP gradient run, and are built separately each iteration.
+  A joint J+K pass is the next DFT time lever; not scoped.
 - **SCF and ERI kernels** (`docs/ERI_KERNEL_VS_LIBCINT.md`,
   `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`, `docs/SCF_VS_PYSCF.md`):
   - Rerun the Planck-vs-PySCF Fock table and the end-to-end

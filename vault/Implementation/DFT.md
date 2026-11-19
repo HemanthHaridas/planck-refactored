@@ -50,7 +50,16 @@ double-hybrid gradients. See `docs/DFT_GRID_CONVERGENCE.md`.
 
 ## AO Evaluation
 
-`src/dft/ao_grid.h` — evaluates all AOs (and optionally their gradients) on all grid points. Used for density and XC potential assembly.
+`src/dft/ao_grid.h` — AO values and gradients on the grid, stored per
+128-point block (`ScreenedAOGrid`, `kAOBlock`) with only the AOs whose value
+or gradient exceeds `kAOScreenTolerance` (1e-12) somewhere in the block, in
+one contiguous buffer. Density, XC matrix and XC nuclear gradient read these
+blocks through `AOBlockView`; a screened block gathers P(s, s) and scatters
+its result back to its kept AOs. On a 3 Å water chain 27 % of the entries
+are kept, on naphthalene 83 %. The consumers not yet ported (SOSCF and
+stability Hessian products, TDDFT, the DH paths) get dense
+`AOGridEvaluation` arrays from `PreparedSystem::dense_ao()`, built from the
+blocks on first use (`docs/DFT_DEFAULT_GRID_SCOPE.md`, S7).
 
 ## Density and XC
 
@@ -91,8 +100,9 @@ in fixed order, and MPI reductions sum in fixed rank order.
 The grid layer is threaded too (`0453c80d`): the density contraction in
 `xc_grid.cpp` and the libxc `exc_vxc` evaluation split grid points into
 disjoint slabs with no cross-thread reduction, bitwise-identical across
-1/2/3/4/6/8 threads. AO-on-grid evaluation (`src/dft/ao_grid.h`) and grid
-construction remain serial; any future reduction there must use fixed order.
+1/2/3/4/6/8 threads. AO-on-grid evaluation (`src/dft/ao_grid.h`) is threaded
+over disjoint blocks; grid construction remains serial. Any future
+reduction there must use fixed order.
 
 ## PCM Solvation
 

@@ -369,7 +369,6 @@ namespace DFT::Gradient
             Eigen::MatrixXd wvg; // npts x 3 (GGA only)
         };
 
-        constexpr Eigen::Index kXCGradientBlock = 128;
         constexpr Eigen::Index kXCGradientBins = 64; // fixed: the sum order must not depend on threads
 
         // Shared RKS/UKS driver. Per point, vtmp_q = g_q aow^T (+ aow_q phi^T
@@ -377,11 +376,12 @@ namespace DFT::Gradient
         // E_q = g_q o (A P) + A_q o (Phi P) (elementwise, n x nb): its row sums
         // are the owner-atom term, its column sums the basis-function-motion
         // term of each AO. No nb x nb accumulator is needed.
+        template <class AOGrid>
         std::expected<Eigen::MatrixXd, std::string> xc_nuclear_gradient(
             const HartreeFock::Molecule &mol,
             const HartreeFock::Basis &basis,
             const MolecularGrid &grid,
-            const AOGridEvaluation &ao,
+            const AOGrid &ao,
             const XCGridEvaluation &xc,
             const std::vector<XCGradientChannel> &channels,
             bool gga)
@@ -398,7 +398,7 @@ namespace DFT::Gradient
             // Determinism: blocks go into a fixed number of bins of contiguous
             // blocks (independent of the thread count); each bin is summed
             // serially in block order, and the bins in bin order.
-            const Eigen::Index nblocks = (npts + kXCGradientBlock - 1) / kXCGradientBlock;
+            const Eigen::Index nblocks = ao_block_count(npts);
             const Eigen::Index nbins = std::min<Eigen::Index>(kXCGradientBins, std::max<Eigen::Index>(nblocks, 1));
             const Eigen::Index blocks_per_bin = (nblocks + nbins - 1) / std::max<Eigen::Index>(nbins, 1);
             std::vector<Eigen::MatrixXd> grad_bin(nbins), bf_bin(nbins); // natoms x 3, nb x 3 (per-AO basis motion)
@@ -413,7 +413,7 @@ namespace DFT::Gradient
                 Eigen::MatrixXd &bf_t = bf_bin[bin];
                 grad.setZero(natoms, 3);
                 bf_t.setZero(nb, 3);
-                Eigen::MatrixXd phi, A, Aq, AP, phiP, E, owner_t;
+                Eigen::MatrixXd phi, A, Aq, AP, phiP, E, owner_t, P_sub;
                 std::array<Eigen::MatrixXd, 3> g;
                 std::array<Eigen::MatrixXd, 6> h; // xx xy xz yy yz zz
                 MolecularGrid block_grid;         // GGA: this block's points, for its AO Hessian
@@ -421,16 +421,18 @@ namespace DFT::Gradient
                 const Eigen::Index b_end = std::min(nblocks, (bin + 1) * blocks_per_bin);
                 for (Eigen::Index b = bin * blocks_per_bin; b < b_end && err_bin[bin].empty(); ++b)
                 {
-                    const Eigen::Index p0 = b * kXCGradientBlock;
-                    const Eigen::Index n = std::min(kXCGradientBlock, npts - p0);
-                    phi = ao.values.middleRows(p0, n);
-                    g[0] = ao.grad_x.middleRows(p0, n);
-                    g[1] = ao.grad_y.middleRows(p0, n);
-                    g[2] = ao.grad_z.middleRows(p0, n);
+                    // A screened block works on its kept AOs only: every
+                    // product below is zero on the others.
+                    const AOBlockView blk = ao.block(b);
+                    const Eigen::Index p0 = blk.p0;
+                    const Eigen::Index n = blk.n;
+                    phi = blk.phi;
+                    for (int k = 0; k < 3; ++k)
+                        g[k] = blk.grad[k];
                     if (gga)
                     {
                         block_grid.points = grid.points.middleRows(p0, n);
-                        auto hess = evaluate_ao_hessian_on_grid(basis, block_grid);
+                        auto hess = evaluate_ao_hessian_on_grid(basis, block_grid, blk.cols);
                         if (!hess)
                         {
                             err_bin[bin] = "DFT XC gradient: AO Hessian failed: " + hess.error();
@@ -444,14 +446,17 @@ namespace DFT::Gradient
                     for (std::size_t c = 0; c < channels.size(); ++c)
                     {
                         const auto &ch = channels[c];
+                        if (blk.cols)
+                            P_sub = ch.P(*blk.cols, *blk.cols);
+                        const Eigen::MatrixXd &P = blk.cols ? P_sub : ch.P;
                         const auto wv0 = ch.wv0.segment(p0, n).asDiagonal();
                         A = wv0 * phi;
                         if (gga)
                             for (int k = 0; k < 3; ++k)
                                 A.noalias() += ch.wvg.col(k).segment(p0, n).asDiagonal() * g[k];
-                        AP.noalias() = A * ch.P;
+                        AP.noalias() = A * P;
                         if (gga)
-                            phiP.noalias() = phi * ch.P;
+                            phiP.noalias() = phi * P;
 
                         for (int q = 0; q < 3; ++q)
                         {
@@ -464,7 +469,10 @@ namespace DFT::Gradient
                                 E += Aq.cwiseProduct(phiP);
                             }
                             owner_t.col(q) += E.rowwise().sum();
-                            bf_t.col(q) += E.colwise().sum().transpose();
+                            if (blk.cols)
+                                bf_t(*blk.cols, q) += E.colwise().sum().transpose();
+                            else
+                                bf_t.col(q) += E.colwise().sum().transpose();
                         }
                     }
 
@@ -519,12 +527,15 @@ namespace DFT::Gradient
         }
     } // namespace
 
+    namespace
+    {
+    template <class AOGrid>
     std::expected<Eigen::MatrixXd, std::string>
-    compute_xc_nuclear_gradient_rks(
+    xc_gradient_rks(
         const HartreeFock::Molecule &mol,
         const HartreeFock::Basis &basis,
         const MolecularGrid &grid,
-        const AOGridEvaluation &ao,
+        const AOGrid &ao,
         const XCGridEvaluation &xc,
         const Eigen::Ref<const Eigen::MatrixXd> &density_restricted)
     {
@@ -558,12 +569,13 @@ namespace DFT::Gradient
         return xc_nuclear_gradient(mol, basis, grid, ao, xc, {std::move(ch)}, gga);
     }
 
+    template <class AOGrid>
     std::expected<Eigen::MatrixXd, std::string>
-    compute_xc_nuclear_gradient_uks(
+    xc_gradient_uks(
         const HartreeFock::Molecule &mol,
         const HartreeFock::Basis &basis,
         const MolecularGrid &grid,
-        const AOGridEvaluation &ao,
+        const AOGrid &ao,
         const XCGridEvaluation &xc,
         const Eigen::Ref<const Eigen::MatrixXd> &density_alpha,
         const Eigen::Ref<const Eigen::MatrixXd> &density_beta)
@@ -608,6 +620,41 @@ namespace DFT::Gradient
             mask_zero_weight(w, ch.wv0, ch.wvg);
 
         return xc_nuclear_gradient(mol, basis, grid, ao, xc, channels, gga);
+    }
+    } // namespace
+
+    std::expected<Eigen::MatrixXd, std::string>
+    compute_xc_nuclear_gradient_rks(const HartreeFock::Molecule &mol, const HartreeFock::Basis &basis,
+                                    const MolecularGrid &grid, const AOGridEvaluation &ao,
+                                    const XCGridEvaluation &xc, const Eigen::Ref<const Eigen::MatrixXd> &density_restricted)
+    {
+        return xc_gradient_rks(mol, basis, grid, ao, xc, density_restricted);
+    }
+
+    std::expected<Eigen::MatrixXd, std::string>
+    compute_xc_nuclear_gradient_rks(const HartreeFock::Molecule &mol, const HartreeFock::Basis &basis,
+                                    const MolecularGrid &grid, const ScreenedAOGrid &ao,
+                                    const XCGridEvaluation &xc, const Eigen::Ref<const Eigen::MatrixXd> &density_restricted)
+    {
+        return xc_gradient_rks(mol, basis, grid, ao, xc, density_restricted);
+    }
+
+    std::expected<Eigen::MatrixXd, std::string>
+    compute_xc_nuclear_gradient_uks(const HartreeFock::Molecule &mol, const HartreeFock::Basis &basis,
+                                    const MolecularGrid &grid, const AOGridEvaluation &ao,
+                                    const XCGridEvaluation &xc, const Eigen::Ref<const Eigen::MatrixXd> &density_alpha,
+                                    const Eigen::Ref<const Eigen::MatrixXd> &density_beta)
+    {
+        return xc_gradient_uks(mol, basis, grid, ao, xc, density_alpha, density_beta);
+    }
+
+    std::expected<Eigen::MatrixXd, std::string>
+    compute_xc_nuclear_gradient_uks(const HartreeFock::Molecule &mol, const HartreeFock::Basis &basis,
+                                    const MolecularGrid &grid, const ScreenedAOGrid &ao,
+                                    const XCGridEvaluation &xc, const Eigen::Ref<const Eigen::MatrixXd> &density_alpha,
+                                    const Eigen::Ref<const Eigen::MatrixXd> &density_beta)
+    {
+        return xc_gradient_uks(mol, basis, grid, ao, xc, density_alpha, density_beta);
     }
 
 } // namespace DFT::Gradient

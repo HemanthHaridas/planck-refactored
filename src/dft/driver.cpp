@@ -1330,10 +1330,10 @@ namespace DFT::Driver
                 return std::unexpected("TDDFT molecular grid construction failed: " + molecular_grid.error());
             prepared.molecular_grid = std::move(*molecular_grid);
 
-            auto ao_grid = evaluate_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
+            auto ao_grid = evaluate_screened_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
             if (!ao_grid)
                 return std::unexpected("TDDFT AO grid evaluation failed: " + ao_grid.error());
-            prepared.ao_grid = std::move(*ao_grid);
+            prepared.set_ao_blocks(std::move(*ao_grid));
 
             const bool unrestricted = calculator._scf._scf == HartreeFock::SCFType::UHF;
             if (!unrestricted && calculator._scf._scf != HartreeFock::SCFType::RHF)
@@ -1837,10 +1837,10 @@ namespace DFT::Driver
             // This routine is the shared KS-SCF engine used for the initial
             // single-point, displaced geometries in numerical derivatives, and
             // repeated geometry-optimization/frequency evaluations.
-            if (prepared.ao_grid.npoints() != prepared.molecular_grid.points.rows())
+            if (prepared.ao_blocks.npoints() != prepared.molecular_grid.points.rows())
                 return std::unexpected("DFT KS-SCF scaffold reached with inconsistent AO/grid dimensions");
 
-            if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
+            if (prepared.ao_blocks.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
                 return std::unexpected("DFT KS-SCF scaffold reached with inconsistent AO/basis dimensions");
 
             const std::size_t nbasis = calculator.working_nbasis();
@@ -2099,7 +2099,7 @@ namespace DFT::Driver
                         h_in.ri = calculator._scf._ri_jk ? &calculator : nullptr;
                         h_in.shell_pairs = &prepared.shell_pairs;
                         h_in.molecular_grid = &prepared.molecular_grid;
-                        h_in.ao_grid = &prepared.ao_grid;
+                        h_in.ao_grid = &prepared.dense_ao();
                         h_in.density = density;
                         h_in.C_occ = C_occ_prev;
                         h_in.C_virt = C_virt_prev;
@@ -2654,7 +2654,7 @@ namespace DFT::Driver
                     h_in.ri = calculator._scf._ri_jk ? &calculator : nullptr;
                     h_in.shell_pairs = &prepared.shell_pairs;
                     h_in.molecular_grid = &prepared.molecular_grid;
-                    h_in.ao_grid = &prepared.ao_grid;
+                    h_in.ao_grid = &prepared.dense_ao();
                     h_in.alpha_density = alpha_density;
                     h_in.beta_density = beta_density;
                     h_in.Ca_occ = Ca_occ;
@@ -3419,10 +3419,10 @@ namespace DFT::Driver
                 return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
             prepared.molecular_grid = std::move(*molecular_grid);
 
-            auto ao_grid = evaluate_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
+            auto ao_grid = evaluate_screened_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
             if (!ao_grid)
                 return std::unexpected("DFT AO grid evaluation failed: " + ao_grid.error());
-            prepared.ao_grid = std::move(*ao_grid);
+            prepared.set_ao_blocks(std::move(*ao_grid));
 
             if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             {
@@ -3475,10 +3475,10 @@ namespace DFT::Driver
                 return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
             prepared.molecular_grid = std::move(*molecular_grid);
 
-            auto ao_grid = evaluate_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
+            auto ao_grid = evaluate_screened_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
             if (!ao_grid)
                 return std::unexpected("DFT AO grid evaluation failed: " + ao_grid.error());
-            prepared.ao_grid = std::move(*ao_grid);
+            prepared.set_ao_blocks(std::move(*ao_grid));
 
             if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             {
@@ -3550,7 +3550,7 @@ namespace DFT::Driver
                 return std::unexpected("DFT double-hybrid XC-II AO Hessian construction failed: " + ao_hessian.error());
             const Gradient::DHEq33XCFixedDensityInputs xc_inputs{
                 &calculator._molecule, &calculator._shells, &prepared.molecular_grid,
-                &prepared.ao_grid, &*ao_hessian, calculator._info._scf.alpha.density,
+                &prepared.dense_ao(), &*ao_hessian, calculator._info._scf.alpha.density,
                 &functionals.exchange, &functionals.correlation};
             const auto workspace = std::make_shared<const Gradient::DHGradientGeometryWorkspace>(
                 Gradient::DHGradientGeometryWorkspace{{}, std::move(*derivatives)});
@@ -3721,7 +3721,7 @@ namespace DFT::Driver
             h_in.ri = calculator._scf._ri_jk ? &calculator : nullptr;
             h_in.shell_pairs = &prepared.shell_pairs;
             h_in.molecular_grid = &prepared.molecular_grid;
-            h_in.ao_grid = &prepared.ao_grid;
+            h_in.ao_grid = &prepared.dense_ao();
             h_in.alpha_density = scf.alpha.density;
             h_in.beta_density = scf.beta.density;
             h_in.Ca_occ = scf.alpha.mo_coefficients.leftCols(n_alpha);
@@ -3802,7 +3802,7 @@ namespace DFT::Driver
             h_in.ri = calculator._scf._ri_jk ? &calculator : nullptr;
             h_in.shell_pairs = &prepared.shell_pairs;
             h_in.molecular_grid = &prepared.molecular_grid;
-            h_in.ao_grid = &prepared.ao_grid;
+            h_in.ao_grid = &prepared.dense_ao();
             h_in.alpha_density = 0.5 * scf.alpha.density; // RKS stores the total density
             h_in.beta_density = h_in.alpha_density;
             h_in.Ca_occ = h_in.Cb_occ = scf.alpha.mo_coefficients.leftCols(nocc);
@@ -4403,7 +4403,7 @@ namespace DFT::Driver
         // straddling it put a spurious jump/(2 step) into the kernel, shifting
         // spherical water/6-31G* HSE06 roots by up to 4.4e-4 eV
         // (docs/WPBEH_S_SCALING_SCOPE.md).
-        auto kernel = prepare_uks_xc_kernel(prepared.molecular_grid, prepared.ao_grid, ground_alpha_density,
+        auto kernel = prepare_uks_xc_kernel(prepared.molecular_grid, prepared.dense_ao(), ground_alpha_density,
                                             ground_beta_density, exchange_functional, correlation_functional);
         if (!kernel)
             return std::unexpected("TDDFT XC kernel: " + kernel.error());
@@ -4480,14 +4480,14 @@ namespace DFT::Driver
         Eigen::Index slice_begin,
         Eigen::Index slice_end)
     {
-        if (prepared.ao_grid.npoints() != prepared.molecular_grid.points.rows())
+        if (prepared.ao_blocks.npoints() != prepared.molecular_grid.points.rows())
             return std::unexpected("AO grid and molecular grid point counts do not match");
 
-        if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
+        if (prepared.ao_blocks.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
             return std::unexpected("AO grid basis dimension does not match the calculator basis");
 
         // The grid is Cartesian; the stored densities are in the working basis.
-        const Eigen::Index nbasis = prepared.ao_grid.nbasis();
+        const Eigen::Index nbasis = prepared.ao_blocks.nbasis();
         auto alpha_lifted = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, calculator._info._scf.alpha.density);
         if (!alpha_lifted)
             return std::unexpected("alpha density: " + alpha_lifted.error());
@@ -4506,7 +4506,7 @@ namespace DFT::Driver
 
             return evaluate_xc_on_grid(
                 prepared.molecular_grid,
-                prepared.ao_grid,
+                prepared.ao_blocks,
                 alpha_density,
                 beta_density,
                 exchange_functional,
@@ -4517,7 +4517,7 @@ namespace DFT::Driver
 
         return evaluate_xc_on_grid(
             prepared.molecular_grid,
-            prepared.ao_grid,
+            prepared.ao_blocks,
             alpha_density,
             exchange_functional,
             correlation_functional,
@@ -4588,7 +4588,7 @@ namespace DFT::Driver
                           calculator._molecule,
                           calculator._shells,
                           prepared.molecular_grid,
-                          prepared.ao_grid,
+                          prepared.ao_blocks,
                           *xc_grid,
                           *P_alpha,
                           *P_beta)
@@ -4596,7 +4596,7 @@ namespace DFT::Driver
                           calculator._molecule,
                           calculator._shells,
                           prepared.molecular_grid,
-                          prepared.ao_grid,
+                          prepared.ao_blocks,
                           *xc_grid,
                           *P_alpha);
             if (!xc_grad)
@@ -4639,7 +4639,7 @@ namespace DFT::Driver
         Eigen::Index xc_point_begin,
         Eigen::Index xc_point_end)
     {
-        if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
+        if (prepared.ao_blocks.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
             return std::unexpected("AO grid basis dimension does not match the calculator basis");
 
         // No ERI tensor is built here any more: the J and K builds below are
@@ -4656,7 +4656,7 @@ namespace DFT::Driver
         // that pass no slice are byte-identical.
         auto xc_matrix = assemble_xc_matrix(
             prepared.molecular_grid,
-            prepared.ao_grid,
+            prepared.ao_blocks,
             xc_grid,
             xc_point_begin,
             xc_point_end);
@@ -4677,7 +4677,7 @@ namespace DFT::Driver
 
         // J, K and V_xc are built in Cartesian from lifted densities and the
         // result is projected to the working basis on return.
-        const Eigen::Index nbasis = prepared.ao_grid.nbasis();
+        const Eigen::Index nbasis = prepared.ao_blocks.nbasis();
         auto alpha_lifted = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, calculator._info._scf.alpha.density);
         if (!alpha_lifted)
             return std::unexpected("alpha density: " + alpha_lifted.error());
@@ -5082,7 +5082,7 @@ namespace DFT::Driver
             return std::unexpected("DH Eq. 41/Z-vector: inconsistent KS density or PT2 orbital dimensions.");
 
         const Gradient::DHEq41XCInputs xc_inputs{
-            &prepared.molecular_grid, &prepared.ao_grid, density,
+            &prepared.molecular_grid, &prepared.dense_ao(), density,
             &exchange_functional, &correlation_functional};
         const auto xc_response = Gradient::make_dh_eq41_xc_response_callback(xc_inputs);
         if (!xc_response)
@@ -5190,10 +5190,10 @@ namespace DFT::Driver
             return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
         prepared.molecular_grid = std::move(*molecular_grid);
 
-        auto ao_grid = evaluate_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
+        auto ao_grid = evaluate_screened_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
         if (!ao_grid)
             return std::unexpected("DFT AO grid evaluation failed: " + ao_grid.error());
-        prepared.ao_grid = std::move(*ao_grid);
+        prepared.set_ao_blocks(std::move(*ao_grid));
 
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
         {
@@ -5256,8 +5256,15 @@ namespace DFT::Driver
                 std::format(
                     "{} points, {} basis functions, {} shell pairs",
                     prepared.molecular_grid.points.rows(),
-                    prepared.ao_grid.nbasis(),
+                    prepared.ao_blocks.nbasis(),
                     prepared.shell_pairs.size()));
+            const double dense = static_cast<double>(prepared.ao_blocks.npoints()) * prepared.ao_blocks.nbasis();
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "DFT AO screening :",
+                std::format("{:.1f} % of point x AO entries kept (tolerance {:.0e}, {}-point blocks)",
+                            dense > 0 ? 100.0 * prepared.ao_blocks.stored_entries() / dense : 100.0,
+                            kAOScreenTolerance, kAOBlock));
         }
 
         return prepared;

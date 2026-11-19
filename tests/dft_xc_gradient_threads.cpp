@@ -6,6 +6,10 @@
 // Also (S2b, docs/DFT_DEFAULT_GRID_SCOPE.md): the KS XC matrix
 // (assemble_xc_matrix) is bitwise identical at any thread count, and equals
 // a per-point oracle (the pre-S2b algorithm, written out below).
+// Also (S7): the screened AO blocks give the same density, XC matrix and XC
+// gradient as dense arrays holding the same AOs, are bitwise at any thread
+// count, and the default screening tolerance moves nothing that matters
+// (separated water-cation dimer, so most blocks drop columns).
 #include "dft/dft_gradient.h"
 #include "dft/ks_matrix.h"
 #include "base/basis.h"
@@ -18,6 +22,7 @@
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <omp.h>
 
 namespace
@@ -37,7 +42,8 @@ namespace
         return require(XC::Functional::create(require(XC::functional_id(name)), spin));
     }
 
-    M xc_gradient(const HartreeFock::Calculator &calc, const MolecularGrid &grid, const AOGridEvaluation &ao,
+    template <class AO>
+    M xc_gradient(const HartreeFock::Calculator &calc, const MolecularGrid &grid, const AO &ao,
                   const M &pa, const M &pb, bool uks, const char *xname, const char *cname)
     {
         const auto spin = uks ? XC::Spin::Polarized : XC::Spin::Unpolarized;
@@ -52,7 +58,8 @@ namespace
         return require(Gradient::compute_xc_nuclear_gradient_rks(calc._molecule, calc._shells, grid, ao, xc, p));
     }
 
-    XCGridEvaluation xc_eval(const MolecularGrid &grid, const AOGridEvaluation &ao, const M &pa, const M &pb,
+    template <class AO>
+    XCGridEvaluation xc_eval(const MolecularGrid &grid, const AO &ao, const M &pa, const M &pb,
                              bool uks, const char *xname, const char *cname)
     {
         const auto spin = uks ? XC::Spin::Polarized : XC::Spin::Unpolarized;
@@ -252,48 +259,65 @@ namespace
                   << ", max |ref| " << max_ref << '\n';
         return max_ref > 1e-3 && max_diff <= 1e-13 * max_ref;
     }
+    // A C1 doublet in 6-31G* on a `normal` grid, with core-Hamiltonian
+    // densities (n_alpha = n_beta + 1 occupied orbitals).
+    struct Fixture
+    {
+        HartreeFock::Calculator calc;
+        MolecularGrid grid;
+        M pa, pb;
+    };
+    Fixture make_fixture(const std::vector<int> &z, const M &xyz, int charge, int n_beta)
+    {
+        Fixture f;
+        auto &m = f.calc._molecule;
+        m.natoms = z.size();
+        m.charge = charge;
+        m.multiplicity = 2;
+        m.atomic_numbers = Eigen::Map<const Eigen::VectorXi>(z.data(), z.size());
+        m.atomic_masses.resize(z.size());
+        for (std::size_t i = 0; i < z.size(); ++i)
+            m.atomic_masses(i) = z[i] == 8 ? 16. : 1.;
+        m.coordinates = xyz;
+        f.calc._basis._basis = HartreeFock::BasisType::Cartesian;
+        f.calc.prepare_coordinates();
+        m.set_standard_from_bohr(m._coordinates);
+        f.calc._shells = require(HartreeFock::BasisFunctions::read_gbs_basis(
+            (std::filesystem::path(get_basis_path()) / "6-31g*").string(), m, f.calc._basis._basis));
+        f.grid = require(MakeMolecularGrid(m, GridLevel::Normal));
+
+        const auto pairs = build_shellpairs(f.calc._shells);
+        const int n = f.calc._shells.nbasis();
+        const auto engine = HartreeFock::IntegralMethod::ObaraSaika;
+        const auto [s, t] = _compute_1e(pairs, n, engine);
+        Eigen::SelfAdjointEigenSolver<M> se(s);
+        const M orth = se.operatorInverseSqrt();
+        Eigen::SelfAdjointEigenSolver<M> he(orth * (t + _compute_nuclear_attraction(pairs, n, m, engine)) * orth);
+        const M c = orth * he.eigenvectors();
+        f.pa = c.leftCols(n_beta + 1) * c.leftCols(n_beta + 1).transpose();
+        f.pb = c.leftCols(n_beta) * c.leftCols(n_beta).transpose();
+        return f;
+    }
 } // namespace
 
 int main()
 {
     if (!require_boys_library())
         return 1;
-    HartreeFock::Calculator calc;
-    auto &m = calc._molecule;
-    m.natoms = 3;
-    m.charge = 1;
-    m.multiplicity = 2;
-    m.atomic_numbers.resize(3);
-    m.atomic_numbers << 8, 1, 1;
-    m.atomic_masses.resize(3);
-    m.atomic_masses << 16., 1., 1.;
-    m.coordinates.resize(3, 3);
-    m.coordinates << .12, -.07, .11, .91, .23, -.43, -.34, .86, .27;
-    calc._basis._basis = HartreeFock::BasisType::Cartesian;
-    calc.prepare_coordinates();
-    m.set_standard_from_bohr(m._coordinates);
-    calc._shells = require(HartreeFock::BasisFunctions::read_gbs_basis(
-        (std::filesystem::path(get_basis_path()) / "6-31g*").string(), m, calc._basis._basis));
-
-    const auto grid = require(MakeMolecularGrid(m, GridLevel::Normal));
+    // C1 water cation, 5 alpha / 4 beta.
+    M xyz(3, 3);
+    xyz << .12, -.07, .11, .91, .23, -.43, -.34, .86, .27;
+    const Fixture fx = make_fixture({8, 1, 1}, xyz, 1, 4);
+    const auto &calc = fx.calc;
+    const auto &grid = fx.grid;
+    const auto &pa = fx.pa;
+    const auto &pb = fx.pb;
     const auto ao = require(evaluate_ao_basis_on_grid(calc._shells, grid));
     if (grid.points.rows() / 128 <= 64)
     {
         std::cerr << "FAIL fixture has too few blocks to fill the bins\n";
         return 1;
     }
-
-    // Core-Hamiltonian orbitals, 5 alpha / 4 beta.
-    const auto pairs = build_shellpairs(calc._shells);
-    const int n = ao.nbasis();
-    const auto engine = HartreeFock::IntegralMethod::ObaraSaika;
-    const auto [s, t] = _compute_1e(pairs, n, engine);
-    Eigen::SelfAdjointEigenSolver<M> se(s);
-    const M orth = se.operatorInverseSqrt();
-    Eigen::SelfAdjointEigenSolver<M> he(orth * (t + _compute_nuclear_attraction(pairs, n, m, engine)) * orth);
-    const M c = orth * he.eigenvectors();
-    const M pa = c.leftCols(5) * c.leftCols(5).transpose();
-    const M pb = c.leftCols(4) * c.leftCols(4).transpose();
 
     struct Case
     {
@@ -359,6 +383,74 @@ int main()
             }
         }
     }
+
+    // S7. A loose tolerance (physically meaningless) drops columns from most
+    // blocks, so the gather and scatter paths run; the dense arrays rebuilt
+    // from the same blocks hold the same AOs, so only summation order may
+    // differ. Not for the GGA gradient: the dense path evaluates the AO
+    // Hessian of every AO, including those a block dropped, so it keeps a
+    // term the screened path drops; the default-tolerance check covers it.
+    // Fixture: the cation next to a neutral water 6 A away (10 alpha / 9
+    // beta), so most blocks lie on one monomer and drop the other's AOs.
+    M xyz2(6, 3);
+    xyz2 << xyz, xyz.rowwise() + Eigen::RowVector3d(6.0, 0.4, -0.3);
+    const Fixture f2 = make_fixture({8, 1, 1, 8, 1, 1}, xyz2, 1, 9);
+    const auto S = require(evaluate_screened_ao_basis_on_grid(f2.calc._shells, f2.grid, 1e-4));
+    const auto D = to_dense(S);
+    const auto S0 = require(evaluate_screened_ao_basis_on_grid(f2.calc._shells, f2.grid));
+    const auto ao2 = require(evaluate_ao_basis_on_grid(f2.calc._shells, f2.grid));
+    const double kept = static_cast<double>(S.stored_entries()) / (static_cast<double>(S.npoints()) * S.nbasis());
+    std::cout << "screened fixture keeps " << kept << " of the AO entries at 1e-4\n";
+    if (!(kept < 0.8))
+    {
+        ok = false;
+        std::cerr << "FAIL screened fixture drops too few columns to test anything\n";
+    }
+    const auto rel = [](const M &a, const M &b) { return (a - b).cwiseAbs().maxCoeff() / std::max(1.0, b.cwiseAbs().maxCoeff()); };
+    for (const auto &k : cases)
+    {
+        omp_set_num_threads(1);
+        const M gs = xc_gradient(f2.calc, f2.grid, S, f2.pa, f2.pb, k.uks, k.x, k.c);
+        const M gd = xc_gradient(f2.calc, f2.grid, D, f2.pa, f2.pb, k.uks, k.x, k.c);
+        const auto xs = xc_eval(f2.grid, S, f2.pa, f2.pb, k.uks, k.x, k.c);
+        const auto xd = xc_eval(f2.grid, D, f2.pa, f2.pb, k.uks, k.x, k.c);
+        const auto vs = require(assemble_xc_matrix(f2.grid, S, xs));
+        const auto vd = require(assemble_xc_matrix(f2.grid, D, xd));
+        const double dg = rel(gs, gd), dv = std::max(rel(vs.alpha, vd.alpha), rel(vs.beta, vd.beta));
+        const double de = std::abs(xs.total_energy - xd.total_energy);
+        std::cout << k.label << " screened vs dense, same AOs: gradient " << dg << ", XC matrix " << dv
+                  << ", E_xc " << de << '\n';
+        const bool gga = std::string(k.x).starts_with("gga");
+        if (!((gga || dg <= 1e-12) && dv <= 1e-12 && de <= 1e-12))
+        {
+            ok = false;
+            std::cerr << "FAIL " << k.label << ": screened blocks differ from the dense arrays they hold\n";
+        }
+        for (int threads : {2, 3, 4, 8})
+        {
+            omp_set_num_threads(threads);
+            const M g = xc_gradient(f2.calc, f2.grid, S, f2.pa, f2.pb, k.uks, k.x, k.c);
+            const auto v = require(assemble_xc_matrix(f2.grid, S, xs));
+            if (g != gs || v.alpha != vs.alpha || v.beta != vs.beta)
+            {
+                ok = false;
+                std::cerr << "FAIL " << k.label << " screened at " << threads << " threads\n";
+            }
+        }
+
+        // Default tolerance against the unscreened dense arrays (also the
+        // GGA term the same-AO check above cannot see).
+        omp_set_num_threads(1);
+        const double d0 = rel(xc_gradient(f2.calc, f2.grid, S0, f2.pa, f2.pb, k.uks, k.x, k.c),
+                              xc_gradient(f2.calc, f2.grid, ao2, f2.pa, f2.pb, k.uks, k.x, k.c));
+        std::cout << k.label << " default screening vs unscreened: gradient " << d0 << '\n';
+        if (!(d0 <= 1e-10))
+        {
+            ok = false;
+            std::cerr << "FAIL " << k.label << ": default screening moves the gradient by " << d0 << '\n';
+        }
+    }
+
     omp_set_num_threads(saved);
     std::cout << (ok ? "XC gradient and matrix thread identity: PASS\n" : "XC gradient and matrix thread identity: FAIL\n");
     return ok ? 0 : 1;

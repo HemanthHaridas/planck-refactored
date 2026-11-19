@@ -1,0 +1,86 @@
+[
+ {
+  "case": "h2o2_pbe",
+  "policy": "pyscf-nwchem-2.13",
+  "grid": "fine",
+  "mode": "gradient",
+  "natoms": 4,
+  "points": 133036,
+  "wall_mean_s": 0.452832218750018,
+  "peak_max_bytes": 230261384,
+  "max_dE": 2.9536352030845592e-08,
+  "max_dg": 5.038152054576139e-07
+ },
+ {
+  "case": "h2o2_b3lyp",
+  "policy": "pyscf-nwchem-2.13",
+  "grid": "fine",
+  "mode": "gradient",
+  "natoms": 4,
+  "points": 133036,
+  "wall_mean_s": 0.4684957397500398,
+  "peak_max_bytes": 231948936,
+  "max_dE": 5.350159426598111e-09,
+  "max_dg": 3.4239026405757933e-07
+ },
+ {
+  "case": "h2o2_hse06",
+  "policy": "pyscf-nwchem-2.13",
+  "grid": "fine",
+  "mode": "gradient",
+  "natoms": 4,
+  "points": 133036,
+  "wall_mean_s": 1.8292196250000075,
+  "peak_max_bytes": 232129160,
+  "max_dE": 2.6790459628500685e-07,
+  "max_dg": 9.380611427061564e-07
+ },
+ {
+  "case": "h2o2_cation_uks_pbe",
+  "policy": "pyscf-nwchem-2.13",
+  "grid": "fine",
+  "mode": "gradient",
+  "natoms": 4,
+  "points": 133036,
+  "wall_mean_s": 0.7793059897499575,
+  "peak_max_bytes": 246694536,
+  "max_dE": 3.2060114563137176e-08,
+  "max_dg": 5.180437429898321e-07
+ },
+ {
+  "case": "benzene_b3lyp",
+  "policy": "pyscf-nwchem-2.13",
+  "grid": "fine",
+  "mode": "gradient",
+  "natoms": 12,
+  "points": 399108,
+  "wall_mean_s": 6.074742291749999,
+  "peak_max_bytes": 1510835760,
+  "max_dE": 4.0365478071180405e-08,
+  "max_dg": 1.5278278315139244e-06
+ },
+ {
+  "case": "water4_b3lyp",
+  "policy": "pyscf-nwchem-2.13",
+  "grid": "fine",
+  "mode": "gradient",
+  "natoms": 12,
+  "points": 360232,
+  "wall_mean_s": 2.7636446354999293,
+  "peak_max_bytes": 1062192352,
+  "max_dE": 1.7574757293914445e-07,
+  "max_dg": 2.253657497928302e-07
+ },
+ {
+  "case": "water_dimer_b3lyp",
+  "policy": "pyscf-nwchem-2.13",
+  "grid": "fine",
+  "mode": "gradient",
+  "natoms": 6,
+  "points": 180116,
+  "wall_mean_s": 0.6485452812500512,
+  "peak_max_bytes": 331563752,
+  "max_dE": 1.512790959168342e-08,
+  "max_dg": 4.78703993358337e-07
+ }
+]

@@ -1,10 +1,13 @@
 #ifndef DFT_AO_GRID_H
 #define DFT_AO_GRID_H
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <expected>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include <Eigen/Dense>
 
@@ -226,6 +229,34 @@ namespace DFT
 
     } // namespace detail
 
+    // Grid points are processed in fixed blocks of kAOBlock consecutive
+    // points, aligned at point 0. The block is the unit of AO screening and of
+    // every blocked XC contraction (density, XC matrix, XC gradient).
+    constexpr Eigen::Index kAOBlock = 128;
+
+    // An AO column is kept in a block when its value or any first derivative
+    // exceeds this anywhere in the block (docs/DFT_DEFAULT_GRID_SCOPE.md, S7).
+    constexpr double kAOScreenTolerance = 1e-12;
+
+    // One block's AO values and gradients. cols == nullptr means every AO, in
+    // order; otherwise column j of phi/g* is AO (*cols)[j] (sorted), and all
+    // other AOs are negligible on this block.
+    struct AOBlockView
+    {
+        Eigen::Index p0;
+        Eigen::Index n;
+        const std::vector<int> *cols;
+        Eigen::Ref<const Eigen::MatrixXd> phi;
+        std::array<Eigen::Ref<const Eigen::MatrixXd>, 3> grad;
+
+        [[nodiscard]] Eigen::Index ncols() const noexcept { return phi.cols(); }
+    };
+
+    inline Eigen::Index ao_block_count(Eigen::Index npoints) noexcept
+    {
+        return (npoints + kAOBlock - 1) / kAOBlock;
+    }
+
     struct AOGridEvaluation
     {
         Eigen::MatrixXd values; // [npoints x nbasis] AO values phi_mu(r_p)
@@ -243,6 +274,16 @@ namespace DFT
             return values.cols();
         }
 
+        [[nodiscard]] Eigen::Index nblocks() const noexcept { return ao_block_count(npoints()); }
+
+        [[nodiscard]] AOBlockView block(Eigen::Index b) const
+        {
+            const Eigen::Index p0 = b * kAOBlock;
+            const Eigen::Index n = std::min(kAOBlock, npoints() - p0);
+            return {p0, n, nullptr, values.middleRows(p0, n),
+                    {grad_x.middleRows(p0, n), grad_y.middleRows(p0, n), grad_z.middleRows(p0, n)}};
+        }
+
         [[nodiscard]] std::expected<std::reference_wrapper<const Eigen::MatrixXd>, std::string> gradient(int axis) const
         {
             switch (axis)
@@ -256,6 +297,45 @@ namespace DFT
             default:
                 return std::unexpected("AOGridEvaluation::gradient axis must be 0, 1, or 2");
             }
+        }
+    };
+
+    // AO values and gradients stored per kAOBlock-point block, keeping only
+    // the AO columns that are significant on that block. On extended systems
+    // most AOs vanish on most blocks (water12: ~27 % kept), which cuts the
+    // stored arrays and the blocked XC GEMMs.
+    struct ScreenedAOGrid
+    {
+        Eigen::Index npts = 0;
+        Eigen::Index nb = 0;
+        std::vector<std::vector<int>> cols; // per block, sorted AO indices
+        // One allocation: block b holds phi, d/dx, d/dy, d/dz (each n x k,
+        // column-major) back to back from offset[b].
+        std::vector<double> buffer;
+        std::vector<std::size_t> offset;
+
+        [[nodiscard]] Eigen::Index npoints() const noexcept { return npts; }
+        [[nodiscard]] Eigen::Index nbasis() const noexcept { return nb; }
+        [[nodiscard]] Eigen::Index nblocks() const noexcept { return static_cast<Eigen::Index>(cols.size()); }
+        [[nodiscard]] Eigen::Index block_rows(Eigen::Index b) const noexcept
+        {
+            return std::min(kAOBlock, npts - b * kAOBlock);
+        }
+
+        [[nodiscard]] AOBlockView block(Eigen::Index b) const
+        {
+            const auto &c = cols[static_cast<std::size_t>(b)];
+            const Eigen::Index n = block_rows(b);
+            const Eigen::Index k = static_cast<Eigen::Index>(c.size());
+            const double *d = buffer.data() + offset[static_cast<std::size_t>(b)];
+            using CMap = Eigen::Map<const Eigen::MatrixXd>;
+            return {b * kAOBlock, n, &c, CMap(d, n, k), {CMap(d + n * k, n, k), CMap(d + 2 * n * k, n, k), CMap(d + 3 * n * k, n, k)}};
+        }
+
+        // Number of stored (point, AO) entries, for reporting.
+        [[nodiscard]] Eigen::Index stored_entries() const noexcept
+        {
+            return static_cast<Eigen::Index>(buffer.size() / 4);
         }
     };
 
@@ -278,16 +358,19 @@ namespace DFT
         }
     };
 
+    // cols != nullptr: only those AOs, column j = AO (*cols)[j].
     inline std::expected<AOGridHessian, std::string>
     evaluate_ao_hessian_on_grid(
         const HartreeFock::Basis &basis,
-        const MolecularGrid &molecular_grid)
+        const MolecularGrid &molecular_grid,
+        const std::vector<int> *cols = nullptr)
     {
         if (molecular_grid.points.cols() != 4)
             return std::unexpected("AO Hessian evaluation requires molecular grid points with 4 columns");
 
         const Eigen::Index npoints = molecular_grid.points.rows();
-        const Eigen::Index nbasis = static_cast<Eigen::Index>(basis.nbasis());
+        const Eigen::Index nbasis = cols ? static_cast<Eigen::Index>(cols->size())
+                                         : static_cast<Eigen::Index>(basis.nbasis());
 
         AOGridHessian H;
         H.h_xx.resize(npoints, nbasis);
@@ -319,7 +402,8 @@ namespace DFT
 #endif
         for (Eigen::Index basis_index = 0; basis_index < nbasis; ++basis_index)
         {
-            const auto &basis_function = basis._basis_functions[static_cast<std::size_t>(basis_index)];
+            const auto &basis_function = basis._basis_functions[static_cast<std::size_t>(
+                cols ? (*cols)[static_cast<std::size_t>(basis_index)] : basis_index)];
             detail::evaluate_contracted_gaussian_hessian_on_grid(
                 basis_function,
                 molecular_grid.points,
@@ -385,6 +469,102 @@ namespace DFT
         }
 
         return evaluation;
+    }
+
+    // Pass 1 evaluates every AO per block and keeps the columns whose value
+    // or gradient exceeds `tolerance` anywhere in the block; pass 2 evaluates
+    // the kept columns straight into one contiguous buffer (per-block
+    // allocations fragmented the heap by ~15 % of the stored size). Blocks are
+    // disjoint, so both passes are bitwise at any thread count.
+    // ponytail: pass 1 evaluates every AO only to decide what to keep; prescreen
+    // shells by their extent against the block's bounding sphere if AO
+    // evaluation ever matters (it is ~1 % of a gradient run today).
+    inline std::expected<ScreenedAOGrid, std::string>
+    evaluate_screened_ao_basis_on_grid(
+        const HartreeFock::Basis &basis,
+        const MolecularGrid &molecular_grid,
+        double tolerance = kAOScreenTolerance)
+    {
+        if (molecular_grid.points.cols() != 4)
+            return std::unexpected("AO grid evaluation requires molecular grid points with 4 columns");
+        for (const auto &basis_function : basis._basis_functions)
+            if (basis_function._shell == nullptr)
+                return std::unexpected("AO grid evaluation encountered a basis function with a null shell");
+
+        ScreenedAOGrid S;
+        S.npts = molecular_grid.points.rows();
+        S.nb = static_cast<Eigen::Index>(basis.nbasis());
+        const Eigen::Index nblocks = ao_block_count(S.npts);
+        S.cols.resize(static_cast<std::size_t>(nblocks));
+        const auto bf = [&](Eigen::Index mu) -> const auto & {
+            return basis._basis_functions[static_cast<std::size_t>(mu)];
+        };
+
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(dynamic, 1) if (!omp_in_parallel())
+#endif
+        for (Eigen::Index b = 0; b < nblocks; ++b)
+        {
+            const Eigen::Index n = S.block_rows(b);
+            const Eigen::MatrixXd points = molecular_grid.points.middleRows(b * kAOBlock, n);
+            Eigen::VectorXd v(n), gx(n), gy(n), gz(n);
+            auto &keep = S.cols[static_cast<std::size_t>(b)];
+            for (Eigen::Index mu = 0; mu < S.nb; ++mu)
+            {
+                detail::evaluate_contracted_gaussian_on_grid(bf(mu), points, v, gx, gy, gz);
+                const double m = std::max({v.cwiseAbs().maxCoeff(), gx.cwiseAbs().maxCoeff(),
+                                           gy.cwiseAbs().maxCoeff(), gz.cwiseAbs().maxCoeff()});
+                if (m > tolerance)
+                    keep.push_back(static_cast<int>(mu));
+            }
+        }
+
+        S.offset.resize(static_cast<std::size_t>(nblocks));
+        std::size_t total = 0;
+        for (Eigen::Index b = 0; b < nblocks; ++b)
+        {
+            S.offset[static_cast<std::size_t>(b)] = total;
+            total += 4 * static_cast<std::size_t>(S.block_rows(b)) * S.cols[static_cast<std::size_t>(b)].size();
+        }
+        S.buffer.resize(total);
+
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(dynamic, 1) if (!omp_in_parallel())
+#endif
+        for (Eigen::Index b = 0; b < nblocks; ++b)
+        {
+            const Eigen::Index n = S.block_rows(b);
+            const auto &c = S.cols[static_cast<std::size_t>(b)];
+            const Eigen::Index k = static_cast<Eigen::Index>(c.size());
+            const Eigen::MatrixXd points = molecular_grid.points.middleRows(b * kAOBlock, n);
+            double *d = S.buffer.data() + S.offset[static_cast<std::size_t>(b)];
+            Eigen::Map<Eigen::MatrixXd> phi(d, n, k), gx(d + n * k, n, k), gy(d + 2 * n * k, n, k),
+                gz(d + 3 * n * k, n, k);
+            for (Eigen::Index j = 0; j < k; ++j)
+                detail::evaluate_contracted_gaussian_on_grid(bf(c[static_cast<std::size_t>(j)]), points,
+                                                             phi.col(j), gx.col(j), gy.col(j), gz.col(j));
+        }
+        return S;
+    }
+
+    // Dense arrays for the consumers not yet ported to blocks. Screened-out
+    // entries are zero, so they see the same AOs as the blocked SCF.
+    inline AOGridEvaluation to_dense(const ScreenedAOGrid &S)
+    {
+        AOGridEvaluation E;
+        E.values = Eigen::MatrixXd::Zero(S.npts, S.nb);
+        E.grad_x = Eigen::MatrixXd::Zero(S.npts, S.nb);
+        E.grad_y = Eigen::MatrixXd::Zero(S.npts, S.nb);
+        E.grad_z = Eigen::MatrixXd::Zero(S.npts, S.nb);
+        Eigen::MatrixXd *out[4] = {&E.values, &E.grad_x, &E.grad_y, &E.grad_z};
+        for (Eigen::Index b = 0; b < S.nblocks(); ++b)
+        {
+            const AOBlockView blk = S.block(b);
+            out[0]->middleRows(blk.p0, blk.n)(Eigen::all, *blk.cols) = blk.phi;
+            for (int k = 0; k < 3; ++k)
+                out[k + 1]->middleRows(blk.p0, blk.n)(Eigen::all, *blk.cols) = blk.grad[k];
+        }
+        return E;
     }
 
 } // namespace DFT

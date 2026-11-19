@@ -39,6 +39,25 @@ H 2.152073 -1.242500 0.000000
 H 0.000000 -2.485000 0.000000
 H -2.152073 -1.242500 0.000000
 H -2.152073 1.242500 0.000000"""
+# Same geometry as tests/eri_class_share_benchmark.cpp (D2h, planar in xy).
+NAPHTHALENE = """C 0.000 0.716 0.0
+C 0.000 -0.716 0.0
+C 1.240 1.403 0.0
+C -1.240 1.403 0.0
+C 1.240 -1.403 0.0
+C -1.240 -1.403 0.0
+C 2.432 0.703 0.0
+C -2.432 0.703 0.0
+C 2.432 -0.703 0.0
+C -2.432 -0.703 0.0
+H 1.240 2.490 0.0
+H -1.240 2.490 0.0
+H 1.240 -2.490 0.0
+H -1.240 -2.490 0.0
+H 3.380 1.243 0.0
+H -3.380 1.243 0.0
+H 3.380 -1.243 0.0
+H -3.380 -1.243 0.0"""
 # S22 water dimer: H-bonded, O-O 2.91 A.
 WATER_DIMER = """O -1.551007 -0.114520 0.000000
 H -1.934259 0.762503 0.000000
@@ -62,6 +81,7 @@ CASES = {
     'h2o2_hse06': (H2O2, 0, 1, 'rhf', 'hse06', 'pbe'),
     'h2o2_cation_uks_pbe': (H2O2, 1, 2, 'uhf', 'pbe', 'pbe'),
     'benzene_b3lyp': (BENZENE, 0, 1, 'rhf', 'b3lyp', 'lyp'),
+    'naphthalene_b3lyp': (NAPHTHALENE, 0, 1, 'rhf', 'b3lyp', 'lyp'),
     'water4_b3lyp': (WATER4, 0, 1, 'rhf', 'b3lyp', 'lyp'),
     'water_dimer_b3lyp': (WATER_DIMER, 0, 1, 'rhf', 'b3lyp', 'lyp'),
     # Atom-count vs neighbour-overlap probes for the error growth.

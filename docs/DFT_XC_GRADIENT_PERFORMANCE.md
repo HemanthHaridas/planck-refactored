@@ -176,18 +176,16 @@ is `thread_local`; the signature is unchanged, so the DH callers
 
 ## Not done
 
-- **Profile of what remains** (benzene V4 15.1 s, water12 73.6 s): step S2
-  of the joint plan.
-- **X4, stream the SCF's AO arrays:** step S7, taken only if the plan's cost
-  step shows that a needed size does not fit. The analysis it starts from:
-  - The gradient reuses the SCF's `prepared.ao_grid`: values plus three
-    gradients, 3.2 GB of benzene V4's 3.6 GB. Streaming them in the gradient
-    alone therefore lowers no peak.
-  - The stored arrays are read by `xc_grid.cpp`, `ks_matrix.cpp`,
-    `analytic_hessian.cpp` (SOSCF, stability, TDDFT kernel), the DH paths
-    and the driver: 11 files, ~48 sites. Streaming means a per-block AO
-    provider for all of them, and AO re-evaluation every SCF iteration.
-  - Estimated peak for water12 on V4 (nb = 228, ~3M points): ~22 GB.
+- **The profile of what remains** was done as S2 of the joint plan
+  (`DFT_DEFAULT_GRID_SCOPE.md`), and led to S2b (blocked XC matrix).
+- **X4, stream the SCF's AO arrays: superseded by AO screening** (S7 of
+  the joint plan, 2026-11-19). The stored arrays are now kept per 128-point
+  block with only the significant AO columns (`ScreenedAOGrid`), which the
+  density, XC matrix and this gradient read directly. Water12
+  `legacy@fine` went from 48.5 s / 4.8 GB to 15.5 s / 1.37 GB with
+  unchanged printed results. The dense consumers (SOSCF, stability, TDDFT
+  kernel, DH paths) still read dense arrays, built from the blocks on first
+  use; porting them is S7b.
 - **The DH paths' own per-point loops** (`dh_pt2_gradient.cpp`,
   `udh_xc_ii*.cpp`). They gain from X3b but are not restructured.
 - **Grid construction** stays serial. The SCF XC build was already threaded

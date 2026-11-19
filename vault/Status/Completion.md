@@ -451,6 +451,23 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **DFT AO arrays screened per point block (S7 stage 1, 2026-11-19,
+  `docs/DFT_DEFAULT_GRID_SCOPE.md`).** The SCF kept four npts × nb AO
+  arrays (91 % of a naphthalene gradient's peak). `ScreenedAOGrid` keeps,
+  per 128-point block, only the AOs whose value or gradient exceeds 1e-12
+  there, in one contiguous buffer. Density, XC matrix and XC nuclear
+  gradient are each one template over a block view that both the screened
+  and the dense storage provide; the S2b fixed-bin summation is unchanged.
+  The SOSCF/stability/TDDFT/DH consumers get dense arrays built from the
+  blocks on first use (porting them is S7b). Water12 B3LYP/6-31G\*
+  `legacy@fine` gradient 48.5 s / 4.8 GB → 15.5 s / 1.37 GB with the same
+  printed energy and gradient as a no-screening build;
+  `pyscf-nwchem@fine` on water12, which did not fit before, runs in
+  28.9 s / 2.67 GB. `planck-dft-xc-gradient-threads` gained a separated
+  water-cation dimer (49 % kept at 1e-4): screened vs dense with the same
+  AOs ≤ 5e-16, bitwise at 1–8 threads, three index-map mutations caught.
+  All 114 DFT regression cases pass.
+
 - **KS XC nuclear gradient: block GEMMs, AO Hessian per block (X1–X2,
   2026-11-18, `docs/DFT_XC_GRADIENT_PERFORMANCE.md`).** The point
   loop allocated three nb × nb matrices per grid point, and the gradient
