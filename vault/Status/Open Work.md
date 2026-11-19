@@ -57,7 +57,8 @@ teaching code) reorders it.
    ~10× margin but not the tight tier. S7 stage 1 (AO screening) landed so
    the larger runs fit. Tight tier: V4 misses it on naphthalene (3.0e-6);
    `pyscf-nwchem-2.13@ultrafine` meets it (8.2e-7) with fewer points.
-   Next: S3e (anthracene), S4, S5. Scope:
+   Its noise does not grow from naphthalene to anthracene (STO-3G).
+   Next: S4 (frequency noise), S5 (cost at size). Scope:
    `docs/DFT_DEFAULT_GRID_SCOPE.md`.
 5. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
 RI-JK for routine HF and DFT is no longer on this list: it is answered

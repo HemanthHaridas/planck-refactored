@@ -36,10 +36,10 @@ with system size (benzene → naphthalene doubles it).
   noise (S4) and cost at size (S5).
 - **Tight preset: `pyscf-nwchem-2.13@ultrafine`.** It meets 1.5e-6 on
   benzene (4.9e-7) and naphthalene (8.2e-7) with fewer points than V4,
-  which misses naphthalene (3.0e-6). Its margin on naphthalene is only
-  1.8×, and noise grows with aromatic size, so a larger aromatic should be
-  checked before it is named (S3e). Open also: re-qualifying the UKS DH
-  gradient on it (S9).
+  which misses naphthalene (3.0e-6). Its noise does not grow from
+  naphthalene to anthracene (STO-3G, Evidence below), so the 1.8× naphthalene
+  margin is not expected to shrink with more rings. Open: re-qualifying the
+  UKS DH gradient on it (S9).
 - **Memory no longer limits the measurements** at the sizes in this scope,
   since AO screening (S7, below). V4 on naphthalene in 6-31G\* (~6.5 GB) is
   the exception on an 8 GiB machine.
@@ -97,6 +97,13 @@ What the table says:
   `legacy-unpruned-max@fine` (same points) it has 3–17× less noise. Against
   V4 it has ~2.5× fewer points, is better on both water clusters, and equal
   on naphthalene.
+- **`@ultrafine` does not grow with aromatic size past naphthalene.** In
+  STO-3G (the only basis anthracene fits in at this level on 8 GiB):
+  naphthalene 3.5e-7, anthracene 3.1e-7 (1.71 M points, 24.5 s, 4.38 GB).
+  STO-3G understates the noise at this level (naphthalene 6-31G is 8.2e-7,
+  2.3× higher), so this shows the trend, not a 6-31G pass; with the same
+  ratio anthracene 6-31G would be ~7.3e-7, a 2× margin. Raw rows:
+  `s3e_sto3g.{json,log}`.
 - **The tight tier needs `pyscf-nwchem@ultrafine`.** V4 and
   `pyscf-nwchem@fine` both double from benzene to naphthalene and miss it
   there; `@ultrafine` grows 1.7× (4.9e-7 → 8.2e-7) and passes. At about
@@ -209,12 +216,6 @@ question; it is tracked in the vault's performance list.
 
 ## Open work, in order
 
-**S3e, `pyscf-nwchem@ultrafine` on anthracene.** Its naphthalene margin
-is 1.8× and its noise grew 1.7× from benzene; one more ring tells whether
-it holds. Anthracene 6-31G (nb ~ 140): ~1.7 M points, ~4.5 GB with the
-naphthalene keep fraction. If it fails, the tight preset is valid only up
-to naphthalene-sized aromatics, and S10 decides whether that is enough.
-
 **S4, frequency noise.** H2O2 B3LYP/6-31G\* frequencies at four
 orientations, compared directly (no rotating back). Pass mark ≤ 1 cm⁻¹.
 - **An optimized fixture first.** At the unoptimized audit geometry, legacy
@@ -237,8 +238,10 @@ left to swap.
 - Default: `pyscf-nwchem-2.13@fine` if it passes S4 and costs ≤ ~2× legacy
   `normal` at water12. Otherwise record the trade-off and pick explicitly;
   no cheaper setting passes.
-- Tight preset: a user-facing name for `pyscf-nwchem-2.13@ultrafine`
-  (if S3e holds), replacing V4 in that role.
+- Tight preset: a user-facing name for `pyscf-nwchem-2.13@ultrafine`,
+  replacing V4 in that role. If a 6-31G anthracene pass is wanted before
+  naming it, run it on a machine with ≥ 12 GB (146 basis functions,
+  ~1.7 M points, ~6 GB of AO blocks).
 - Rewrite this scope as the answer; update `DFT_GRID_CONVERGENCE.md`.
 
 **S8, migration.**
@@ -257,8 +260,9 @@ the preset name, so it can follow S6 directly. The preset is no longer V4,
 so the UKS DH gradient must first be re-qualified on
 `pyscf-nwchem@ultrafine` (V4's qualification does not transfer).
 
-**S10, V5.** Only if S3e fails and the tight tier must hold for larger
-aromatics. Its own scope under the `DFT_GRID_CONVERGENCE.md` protocol, with
+**S10, V5.** Not needed on current evidence: `pyscf-nwchem@ultrafine`
+meets the tight tier and does not grow past naphthalene. Reopen only if a
+larger system fails it. Its own scope under the `DFT_GRID_CONVERGENCE.md` protocol, with
 aromatic and cluster fixtures in the selection atlas and the blind suite.
 
 **S7b, AO screening stage 2.** Only if a needed size does not fit, or a

@@ -1,0 +1,26 @@
+[
+ {
+  "case": "naphthalene_b3lyp",
+  "policy": "pyscf-nwchem-2.13",
+  "grid": "ultrafine",
+  "mode": "gradient",
+  "natoms": 18,
+  "points": 1266276,
+  "wall_mean_s": 9.408867729250005,
+  "peak_max_bytes": 2620361080,
+  "max_dE": 8.553297448088415e-08,
+  "max_dg": 3.517843813000349e-07
+ },
+ {
+  "case": "anthracene_b3lyp",
+  "policy": "pyscf-nwchem-2.13",
+  "grid": "ultrafine",
+  "mode": "gradient",
+  "natoms": 24,
+  "points": 1712580,
+  "wall_mean_s": 24.533529520999764,
+  "peak_max_bytes": 4375613064,
+  "max_dE": 1.6932585822360124e-07,
+  "max_dg": 3.140104670520949e-07
+ }
+]

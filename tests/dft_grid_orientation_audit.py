@@ -58,6 +58,31 @@ H 3.380 1.243 0.0
 H -3.380 1.243 0.0
 H 3.380 -1.243 0.0
 H -3.380 -1.243 0.0"""
+# Idealized D2h anthracene, planar in xy: C-C 1.40 A, C-H 1.08 A.
+ANTHRACENE = """C 0.000 1.400 0.0
+C 0.000 -1.400 0.0
+C 1.212 0.700 0.0
+C 1.212 -0.700 0.0
+C -1.212 0.700 0.0
+C -1.212 -0.700 0.0
+C 2.424 1.400 0.0
+C 2.424 -1.400 0.0
+C -2.424 1.400 0.0
+C -2.424 -1.400 0.0
+C 3.636 0.700 0.0
+C 3.636 -0.700 0.0
+C -3.636 0.700 0.0
+C -3.636 -0.700 0.0
+H 0.000 2.480 0.0
+H 0.000 -2.480 0.0
+H 2.424 2.480 0.0
+H 2.424 -2.480 0.0
+H -2.424 2.480 0.0
+H -2.424 -2.480 0.0
+H 4.571 1.240 0.0
+H 4.571 -1.240 0.0
+H -4.571 1.240 0.0
+H -4.571 -1.240 0.0"""
 # S22 water dimer: H-bonded, O-O 2.91 A.
 WATER_DIMER = """O -1.551007 -0.114520 0.000000
 H -1.934259 0.762503 0.000000
@@ -82,6 +107,7 @@ CASES = {
     'h2o2_cation_uks_pbe': (H2O2, 1, 2, 'uhf', 'pbe', 'pbe'),
     'benzene_b3lyp': (BENZENE, 0, 1, 'rhf', 'b3lyp', 'lyp'),
     'naphthalene_b3lyp': (NAPHTHALENE, 0, 1, 'rhf', 'b3lyp', 'lyp'),
+    'anthracene_b3lyp': (ANTHRACENE, 0, 1, 'rhf', 'b3lyp', 'lyp'),
     'water4_b3lyp': (WATER4, 0, 1, 'rhf', 'b3lyp', 'lyp'),
     'water_dimer_b3lyp': (WATER_DIMER, 0, 1, 'rhf', 'b3lyp', 'lyp'),
     # Atom-count vs neighbour-overlap probes for the error growth.
