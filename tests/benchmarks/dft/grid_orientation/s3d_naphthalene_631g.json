@@ -1,0 +1,14 @@
+[
+ {
+  "case": "naphthalene_b3lyp",
+  "policy": "pyscf-nwchem-2.13",
+  "grid": "ultrafine",
+  "mode": "gradient",
+  "natoms": 18,
+  "points": 1266276,
+  "wall_mean_s": 22.8994455832501,
+  "peak_max_bytes": 4282420776,
+  "max_dE": 7.245887445606058e-08,
+  "max_dg": 8.223677914272372e-07
+ }
+]

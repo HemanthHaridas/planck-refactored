@@ -1,0 +1,14 @@
+[
+ {
+  "case": "benzene_b3lyp",
+  "policy": "pyscf-nwchem-2.13",
+  "grid": "ultrafine",
+  "mode": "gradient",
+  "natoms": 12,
+  "points": 819972,
+  "wall_mean_s": 8.466999697999881,
+  "peak_max_bytes": 2795555312,
+  "max_dE": 1.2944497029820923e-08,
+  "max_dg": 4.928483262696317e-07
+ }
+]
