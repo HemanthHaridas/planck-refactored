@@ -2,6 +2,7 @@
 %begin_control
     basis       6-31g
     calculation energy
+    verbosity   verbose
     basis_type  cartesian
 %end_control
 

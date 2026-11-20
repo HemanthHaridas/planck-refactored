@@ -6134,6 +6134,11 @@
      "atol": 1e-09
     },
     {
+     "type": "metric_le",
+     "metric": "ccsd_t_oracle_diff",
+     "value": 1e-14
+    },
+    {
      "type": "metric_lt_metric",
      "left": "rccsd_t_total_energy",
      "right": "rhf_total_energy"

@@ -39,9 +39,9 @@ teaching code) reorders it.
 **Necessary.** Without these the product is broken or misleading.
 
 1. **CCSD(T).** It is the benchmark method users ask for first. Restricted
-   (T) landed 2026-11-20 and equals PySCF, but only as a full-tensor
-   reference for small systems. Remaining: the batched production kernel and
-   UHF-(T). Scope: `docs/CCSD_T_SCOPE.md`.
+   (T) landed 2026-11-20, batched and threaded, and equals PySCF.
+   Remaining: UHF-(T), and a larger-system RCCSD (the spin-orbital solver
+   limits size). Scope: `docs/CCSD_T_SCOPE.md`.
 2. **SCF robustness on medium systems.** 32-water RKS hits `max_cycles`
    (§2, DFT). Scope: `docs/SCF_CONVERGENCE_MEDIUM_SYSTEMS_SCOPE.md`.
 3. **Meta-GGA**, at least SCF energies with a by-name refusal everywhere else,
@@ -199,11 +199,10 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
 
 ### HF and post-HF
 
-- **CCSD(T): restricted works on small systems only** (`docs/CCSD_T_SCOPE.md`).
-  `correlation ccsd(t)` equals PySCF in Cartesian bases, but it stores W and
-  V as two full o³v³ tensors and runs serially. Open, in order:
-  - the batched, threaded (a,b,c) kernel, checked against the full-tensor
-    one;
+- **CCSD(T): restricted is done** (`docs/CCSD_T_SCOPE.md`).
+  `correlation ccsd(t)` equals PySCF in Cartesian bases, with a batched,
+  threaded (T). System size is now limited by the hand-written spin-orbital
+  RCCSD, not by (T). Open, in order:
   - the spherical water/cc-pVDZ gate;
   - UHF-(T), which needs four spin blocks;
   - ROHF-(T), after semicanonical ROHF-CC.

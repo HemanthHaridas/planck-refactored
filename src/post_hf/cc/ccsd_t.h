@@ -22,7 +22,10 @@ namespace HartreeFock::Correlation::CC
     //   E(T) = S_aaa / 18 + S_aab / 2,   S = sum (W + V) W / D,
     //   X_aaa(abc, ijk) = 1/2 sum_P sign(P) X_aab(P(abc), ijk).
     //
-    // Full o^3 v^3 tensors: the oracle for the batched kernel, small systems only.
+    // Batched over virtual triples a >= b >= c (o^3 scratch per thread, no
+    // o^3 v^3 tensor), threaded, independent of the thread count. At verbose
+    // output on small systems it also recomputes E(T) with the full-tensor
+    // kernels and logs the difference.
     std::expected<double, std::string> compute_rccsd_t_energy(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,

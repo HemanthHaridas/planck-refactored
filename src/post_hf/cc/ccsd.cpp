@@ -668,12 +668,16 @@ namespace HartreeFock::Correlation::CC
                     auto spatial_t = project_rccsd_amplitudes_to_spatial(so_amps);
                     if (!spatial_t)
                         return std::unexpected("RCCSD(T): " + spatial_t.error());
+                    const auto t_start = std::chrono::steady_clock::now();
                     auto e_t = compute_rccsd_t_energy(calculator, shell_pairs, *spatial_t);
                     if (!e_t)
                         return std::unexpected(e_t.error());
+                    const double t_sec = std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - t_start).count();
                     HartreeFock::Logger::logging(
                         HartreeFock::LogLevel::Info, "RCCSD(T) :",
-                        std::format("E_corr(CCSD) = {:.10f}  E(T) = {:.10f}", energy, *e_t));
+                        std::format("E_corr(CCSD) = {:.10f}  E(T) = {:.10f}  t={:.3f}s",
+                                    energy, *e_t, t_sec));
                     calculator._correlation_energy = energy + *e_t;
                 }
 

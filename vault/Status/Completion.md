@@ -465,8 +465,14 @@ historical design context, but they are no longer the source of truth for
   - **ccgen fix.** The projector ignored `connected_only` (Wick was always
     asked for connected contractions). It is honoured now, and the CCSD and
     CCSDT equations are byte-identical.
-  - **Limits.** Full o³v³ storage and serial. The batched kernel, the
-    spherical gate and UHF-(T) are open.
+  - **Batched kernel (same day).** W and V are generated per virtual triple
+    (o³ blocks) and threaded over a ≥ b ≥ c. Each triple writes its own slot,
+    so E(T) is bitwise identical at 1/2/4/8 threads. At verbose output the
+    full-tensor kernel is kept as a reference check; it agrees to ≤ 1.4e-16,
+    gated at 1e-14 on `water_rccsd_t_631g`. A wrong S_aaa factor fails that
+    gate by 7.6e-6. (T) on C1 H2O2 6-31G takes 0.27 s; the run's 31 s is
+    the spin-orbital CCSD.
+  - **Open.** The spherical gate and UHF-(T).
 
 - **RKS double-hybrid gradients refuse frozen-core and RI PT2 (2026-11-20).**
   The UKS gate already did; the RKS gate checked only solvent. With
