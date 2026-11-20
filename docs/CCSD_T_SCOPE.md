@@ -78,8 +78,31 @@ empty. The projector now takes `require_connected`, which
 pre-filter assumes BCH commutators, so `ccsd_t.py` bypasses it. Two bare
 products need no pre-pruning.
 
-Spatial (restricted) lowering of W and V is not done yet. It is needed
-before the restricted C++ kernel (step 2).
+**Restricted lowering, done 2026-11-20.** `build_ccsd_t_restricted()`
+lowers W and V through `spin_adapt_equations` onto the aab|aab block
+(a, b, i, j alpha; c, k beta). That gives 24 W terms and 6 V terms, in
+spatial t1, t2 (abab) and the non-antisymmetrized ⟨pq|rs⟩. That one block
+carries the whole closed-shell energy. aaa = bbb and aab = abb, and the
+all-alpha block is half the virtual antisymmetrizer of the aab block, for W
+and V alike (fitted exactly, relative residual 4e-14):
+
+```
+X_aaa(abc, ijk) = ½ Σ_P sign(P) X_aab(P(abc), ijk)
+E(T) = S_aaa/18 + S_aab/2,    S = Σ (W + V) W / D
+```
+
+Evaluated at PySCF's converged RCCSD amplitudes, E(T) matches RHF
+`ccsd_t.kernel` to ≤ 5.6e-12 on water 6-31G and C1 H2O2 6-31G. It does so
+both by integrating the aaa block directly and through the identity. A
+factor of 1 instead of ½ misses by 2.3e-4, and dropping aaa misses by
+7.8e-5.
+
+D must come from diag(Fock), as PySCF's does. On C1 H2O2, using
+`mf.mo_energy` instead cost 1.9e-11 in E(T). The C++ kernel should take its
+denominators from the same orbital energies its CCSD used.
+
+So the restricted kernel evaluates the 30 aab terms once per (a,b,c) batch
+and forms aaa by permuting the virtuals. It needs no second integration.
 
 ### 2. Emit the kernel
 

@@ -67,6 +67,80 @@ def ccgen_and_pyscf_t(atom, basis, spin=0, charge=0):
     return e_t, float(gccsd_t.kernel(cc, eris, cc.t1, cc.t2, verbose=0))
 
 
+def _denominator(eo, ev):
+    return (eo[None, None, None, :, None, None] + eo[None, None, None, None, :, None]
+            + eo[None, None, None, None, None, :] - ev[:, None, None, None, None, None]
+            - ev[None, :, None, None, None, None] - ev[None, None, :, None, None, None])
+
+
+def _half_antisymmetrize_virtuals(x):
+    """1/2 sum_P sign(P) x[P(abc), ijk]: the closed-shell aaa block from aab."""
+    out = np.zeros_like(x)
+    for perm, sign in (((0, 1, 2), 1), ((1, 2, 0), 1), ((2, 0, 1), 1),
+                       ((1, 0, 2), -1), ((0, 2, 1), -1), ((2, 1, 0), -1)):
+        out += sign * x.transpose(*perm, 3, 4, 5)
+    return 0.5 * out
+
+
+def restricted_and_pyscf_t(atom, basis):
+    """Closed-shell E(T) two ways from the restricted lowering, and PySCF's.
+
+    ``direct``: W and V integrated on the aaa and aab blocks separately.
+    ``one_block``: aab only, with aaa from the virtual antisymmetrizer -- the
+    form the restricted C++ kernel will use."""
+    from pyscf import ao2mo, cc
+    from pyscf.cc import ccsd_t
+    from ccgen.methods.ccsd_t import build_ccsd_t_restricted
+    from ccgen.spin import _adapt_on_block
+
+    mol = gto.M(atom=atom, basis=basis, verbose=0)
+    mf = scf.RHF(mol).run(conv_tol=1e-12)
+    mycc = cc.CCSD(mf)
+    mycc.conv_tol = 1e-11
+    mycc.conv_tol_normt = 1e-11
+    mycc.kernel()
+    no, nmo = mycc.nocc, mycc.nmo
+    nv = nmo - no
+    eri = ao2mo.restore(1, ao2mo.kernel(mol, mf.mo_coeff), nmo)
+    tensors = {"t1": mycc.t1.T, "t2": mycc.t2.transpose(2, 3, 0, 1),
+               "v": eri.transpose(0, 2, 1, 3)}  # physicist <pq|rs>
+    eris = mycc.ao2mo()
+    # PySCF's (T) takes D from diag(eris.fock), not mf.mo_energy; the two differ
+    # by the SCF residual (1.9e-11 in E(T) on C1 H2O2 6-31G).
+    e = np.asarray(eris.fock).diagonal()
+    d = _denominator(e[:no], e[no:])
+
+    def s(w, v):
+        return float(np.sum((w + v) * w / d))
+
+    so = build_ccsd_t_equations()
+    aaa = {k: _triples(_adapt_on_block(so[k], dict(zip("abcijk", "aaaaaa"))),
+                       no, nv, tensors) for k in ("W", "V")}
+    rs = build_ccsd_t_restricted()
+    w, v = (_triples(rs[k], no, nv, tensors) for k in ("W", "V"))
+    s_aab = s(w, v)
+    direct = s(aaa["W"], aaa["V"]) / 18 + s_aab / 2
+    one_block = s(_half_antisymmetrize_virtuals(w), _half_antisymmetrize_virtuals(v)) / 18 + s_aab / 2
+    return direct, one_block, float(ccsd_t.kernel(mycc, eris, verbose=0))
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "PySCF not importable")
+class RestrictedCCSDTriplesVsPySCF(unittest.TestCase):
+    def check(self, atom, basis):
+        direct, one_block, ref = restricted_and_pyscf_t(atom, basis)
+        print(f"\n  {atom[:12]:12s} {basis:7s} direct {direct - ref:.1e} "
+              f"one-block {one_block - ref:.1e} (pyscf {ref:.12f})")
+        self.assertGreater(abs(ref), 1e-6)
+        self.assertAlmostEqual(direct, ref, delta=1e-11)
+        self.assertAlmostEqual(one_block, ref, delta=1e-11)
+
+    def test_water_631g(self):
+        self.check(WATER, "6-31g")
+
+    def test_h2o2_c1_631g(self):
+        self.check(H2O2_C1, "6-31g")
+
+
 @unittest.skipUnless(_HAVE_PYSCF, "PySCF not importable")
 class CCSDTriplesVsPySCF(unittest.TestCase):
     def check(self, *args, **kw):
