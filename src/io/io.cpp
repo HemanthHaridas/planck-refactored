@@ -638,6 +638,7 @@ namespace HartreeFock::IO
                 {"rmp2", HartreeFock::PostHF::RMP2},
                 {"ump2", HartreeFock::PostHF::UMP2},
                 {"ccsd", HartreeFock::PostHF::RCCSD},
+                {"ccsd(t)", HartreeFock::PostHF::RCCSD}, // RCCSD + (T): scf._cc_triples
                 {"uccsd", HartreeFock::PostHF::UCCSD},
                 {"ccsdt", HartreeFock::PostHF::RCCSDT},
                 {"uccsdt", HartreeFock::PostHF::UCCSDT},
@@ -758,6 +759,7 @@ namespace HartreeFock::IO
                      if (!parsed)
                          return std::unexpected(parsed.error());
                      correlation = *parsed;
+                     scf._cc_triples = (value == "ccsd(t)");
                      // For the generated arbitrary-order RCC path (all spellings
                      // map to RCCSDTQ), carry the requested excitation rank so the
                      // driver dispatches to the right generated kernel without a

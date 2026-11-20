@@ -27,6 +27,12 @@ def main() -> None:
         help="CC methods to emit (default: ccsd ccsdt).",
     )
     parser.add_argument(
+        "--ccsd-t",
+        action="store_true",
+        help="Write only ccsd_t_planck_generated.cpp, the restricted CCSD(T) W and "
+             "V builders (docs/CCSD_T_SCOPE.md), and ignore every other option.",
+    )
+    parser.add_argument(
         "--include-intermediates",
         action="store_true",
         help="Also emit supported intermediate builders.",
@@ -147,6 +153,13 @@ def main() -> None:
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.ccsd_t:
+        from ccgen.methods.ccsd_t import emit_planck_ccsd_t_translation_unit
+        out_path = output_dir / "ccsd_t_planck_generated.cpp"
+        out_path.write_text(emit_planck_ccsd_t_translation_unit() + "\n", encoding="utf-8")
+        print(out_path)
+        return
 
     def emit(method: str, *, force_arbitrary: bool) -> str:
         # The arbitrary companion is co-included with the ccsdtq TU in the

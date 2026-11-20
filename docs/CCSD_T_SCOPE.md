@@ -120,20 +120,34 @@ blocks and the rank-3 denominators, returning E(T). Two shapes, in order:
 Thread over the outermost virtual index with partials summed in a fixed order
 (the determinism rule in `docs/HPC_MPI.md`).
 
+**2b done 2026-11-20.** `python/generate_planck_cc_kernels.py --ccsd-t`
+writes `ccsd_t_planck_generated.cpp`. It contains two full-tensor builders,
+`compute_ccsd_t_W_residual` and `compute_ccsd_t_V_residual`, each giving a
+Tensor6D (i,j,k,a,b,c) from spatial t1/t2 and the physicist ERI blocks. Both
+come from the existing `_emit_kernel` with `force_arbitrary`. That emitter
+parses its method as a CC level, so the kernels are emitted as `ccsd` with
+targets `t_W` and `t_V`.
+
+CMake runs this generation in every build, whatever `PLANCK_CC_MAXORDER` is,
+as a dependency of `ccgen-planck-kernels`. The default build otherwise runs
+no ccgen at all. `src/post_hf/cc/ccsd_t.cpp` includes the file through
+`__has_include` and contracts E(T) = S_aaa/18 + S_aab/2. It forms aaa with
+the virtual antisymmetrizer, computes D inline from `eps_occ`/`eps_virt`, and
+runs serially. It stores W and V as two full o³v³ tensors, so it is for small
+systems only. Step 2 proper, the batched kernel, is open.
+
 ### 3. Drive it
 
-Both RCC routes can feed it:
+**Done 2026-11-20 for the hand-written route.** `correlation ccsd(t)` maps to
+RCCSD and sets `OptionsSCF::_cc_triples`. At convergence, `run_rccsd`
+projects its spin-orbital amplitudes (`project_rccsd_amplitudes_to_spatial`)
+and calls `compute_rccsd_t_energy`. It logs `E_corr(CCSD)` and `E(T)` and
+adds E(T) to the correlation energy. The driver labels the total
+`Total RCCSD(T) Energy`, which the runner parses as `rccsd_t_total_energy`.
 
-- `run_rccsd` (hand-written, spin-orbital) already projects its converged
-  amplitudes to the spatial layout (`project_rccsd_amplitudes_to_spatial`,
-  gated by `tests/cc_spatial_amplitude_projection.cpp`) — call the restricted
-  kernel on those.
-- The generated rank-2 route (`cc2`, `solver_arbitrary.cpp`) already holds
-  spatial amplitudes.
-
-Input: a `cc_triples` flag (or `correlation ccsd(t)` mapping to RCCSD plus
-the flag); one driver branch, not a new solver. Print a
-`rccsd_t_total_energy` line the runner parses.
+This scope used to say that a generated rank-2 RCC route (`cc2`) could also
+feed (T). There is no such route: RCC has no generated rank-2 keyword,
+because the hand-written RCCSD covers rank 2.
 
 ### 4. Gates
 
@@ -141,11 +155,28 @@ PySCF `cc.CCSD(mf).ccsd_t()`, `mol.cart = True`: water/STO-3G, water/6-31G,
 C1 H2O2/6-31G, to every printed digit; spherical water/cc-pVDZ. The batched
 kernel must equal the full-tensor kernel bitwise or to 1e-14.
 
+**Cartesian gates done 2026-11-20.** `water_rccsd_t_sto3g` (core, smoke),
+`water_rccsd_t_631g` (core) and `h2o2_c1_rccsd_t_631g` (extended, 31 s)
+equal PySCF 2.15.0 to every printed digit, in E_HF, E(T) and the total.
+
+The references must use Planck's own GBS files (`parse_gaussian.load`).
+PySCF's built-in STO-3G and 6-31G put E_HF 2.4e-8 and 7.0e-9 away from
+Planck's on water. That difference is the basis library, not Planck: with the
+GBS files the two codes agree on E_HF to every printed digit.
+
+Still open: the spherical water/cc-pVDZ gate, and the batched-vs-full check
+once step 2 lands.
+
 ### 5. UHF-(T), then ROHF-(T)
 
 The unrestricted generation is the same method without the restricted
 lowering, emitted in the UCC kernel namespace (`-DPLANCK_CC_UCC=ON`), fed by
-the generated `ucc2` sector amplitudes. Gate against PySCF
+the generated `ucc2` sector amplitudes (or the hand-written `run_uccsd`, which
+needs no build option). It needs all four blocks, aaa, bbb, aab and abb,
+each with its own α/β denominators:
+E(T) = (S_aaa + S_bbb + 9 S_aab + 9 S_abb)/36. The closed-shell one-block
+identity does not apply. The spin-orbital Python gate already covers the OH
+doublet. Gate against PySCF
 `cc.UCCSD(mf).ccsd_t()` on OH and water⁺. ROHF-(T) needs f_ov terms
 (`canonical_fock=False`) on semicanonical orbitals; see
 `docs/ROHF_CORRELATION_SCOPE.md`.

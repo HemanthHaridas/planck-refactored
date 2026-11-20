@@ -9,8 +9,9 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-11-20 (RKS DH gradient refuses frozen-core and RI PT2; CI
-is not blocked on the shared-objects change). Previous rewrite 2026-11-16:
+Last updated: 2026-11-20 (restricted CCSD(T) full-tensor path; RKS DH
+gradient refuses frozen-core and RI PT2; CI is not blocked on the
+shared-objects change). Previous rewrite 2026-11-16:
 RI-JK answered and removed from the priority list; libecpint repinned to
 upstream, #82 filed; PySCF #3598 merged upstream.
 
@@ -37,8 +38,10 @@ teaching code) reorders it.
 
 **Necessary.** Without these the product is broken or misleading.
 
-1. **CCSD(T).** Not implemented: CCSD, CCSDT and higher exist, perturbative
-   triples do not. It is the benchmark method users ask for first. Scope: `docs/CCSD_T_SCOPE.md`.
+1. **CCSD(T).** It is the benchmark method users ask for first. Restricted
+   (T) landed 2026-11-20 and equals PySCF, but only as a full-tensor
+   reference for small systems. Remaining: the batched production kernel and
+   UHF-(T). Scope: `docs/CCSD_T_SCOPE.md`.
 2. **SCF robustness on medium systems.** 32-water RKS hits `max_cycles`
    (§2, DFT). Scope: `docs/SCF_CONVERGENCE_MEDIUM_SYSTEMS_SCOPE.md`.
 3. **Meta-GGA**, at least SCF energies with a by-name refusal everywhere else,
@@ -196,8 +199,14 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
 
 ### HF and post-HF
 
-- **CCSD(T) is not implemented.** The CC stack has CCSD, CCSDT, CCSDTQ and
-  arbitrary order, but no perturbative triples correction.
+- **CCSD(T): restricted works on small systems only** (`docs/CCSD_T_SCOPE.md`).
+  `correlation ccsd(t)` equals PySCF in Cartesian bases, but it stores W and
+  V as two full o³v³ tensors and runs serially. Open, in order:
+  - the batched, threaded (a,b,c) kernel, checked against the full-tensor
+    one;
+  - the spherical water/cc-pVDZ gate;
+  - UHF-(T), which needs four spin blocks;
+  - ROHF-(T), after semicanonical ROHF-CC.
 - **ROHF:** RMP2/UMP2, coupled cluster, stability, PCM and SOSCF reject ROHF.
   SOSCF and stability need new orbital-response machinery for the effective
   Roothaan Fock, which does not exist in the tree. ROHF CASSCF and RASSCF

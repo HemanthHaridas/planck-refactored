@@ -451,6 +451,23 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Restricted CCSD(T), full-tensor reference path (2026-11-20,
+  `docs/CCSD_T_SCOPE.md` steps 1–4).** `correlation ccsd(t)` runs the
+  hand-written RCCSD. At convergence it adds (T) from the ccgen-generated W
+  and V builders (`ccsd_t_planck_generated.cpp`, generated in every build),
+  evaluated on the aab|aab block.
+  - **Energy formula.** E(T) = S_aaa/18 + S_aab/2. The aaa block is half
+    the virtual antisymmetrizer of the aab block, which is exact.
+  - **Gates.** Water STO-3G and 6-31G and C1 H2O2 6-31G equal PySCF 2.15.0
+    to every printed digit, with references built from Planck's GBS files.
+    Gated by `*_rccsd_t_*`; the Python check is
+    `ccgen/tests/test_ccsd_t_vs_pyscf.py`.
+  - **ccgen fix.** The projector ignored `connected_only` (Wick was always
+    asked for connected contractions). It is honoured now, and the CCSD and
+    CCSDT equations are byte-identical.
+  - **Limits.** Full o³v³ storage and serial. The batched kernel, the
+    spherical gate and UHF-(T) are open.
+
 - **RKS double-hybrid gradients refuse frozen-core and RI PT2 (2026-11-20).**
   The UKS gate already did; the RKS gate checked only solvent. With
   `mp2_frozen 1` the gradient ran and missed its own energy FD by 6.2e-5

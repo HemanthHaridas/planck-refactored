@@ -6086,6 +6086,88 @@
    ]
   },
   {
+   "id": "water_rccsd_t_sto3g",
+   "input": "tests/inputs/regression/post_hf/water_rccsd_t_sto3g.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 RCCSD + ccsd_t, cart=True, Planck's GBS (parse_gaussian.load): E_CCSD(T) -75.0123539648, E(T) -0.0000673675. Equal to every printed digit (2026-11-20).",
+   "tags": [
+    "smoke",
+    "core",
+    "post_hf"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "RCCSD(T) :",
+    "Total RCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rccsd_t_total_energy",
+     "expected": -75.0123539648,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_lt_metric",
+     "left": "rccsd_t_total_energy",
+     "right": "rhf_total_energy"
+    }
+   ]
+  },
+  {
+   "id": "water_rccsd_t_631g",
+   "input": "tests/inputs/regression/post_hf/water_rccsd_t_631g.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 RCCSD + ccsd_t, cart=True, Planck's GBS (parse_gaussian.load): E_CCSD(T) -76.1203135797, E(T) -0.0009939583. Equal to every printed digit (2026-11-20).",
+   "tags": [
+    "core",
+    "post_hf"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "RCCSD(T) :",
+    "Total RCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rccsd_t_total_energy",
+     "expected": -76.1203135797,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_lt_metric",
+     "left": "rccsd_t_total_energy",
+     "right": "rhf_total_energy"
+    }
+   ]
+  },
+  {
+   "id": "h2o2_c1_rccsd_t_631g",
+   "input": "tests/inputs/regression/post_hf/h2o2_c1_rccsd_t_631g.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 RCCSD + ccsd_t, cart=True, Planck's GBS (parse_gaussian.load): E_CCSD(T) -150.9728052008, E(T) -0.0045341491. Equal to every printed digit (2026-11-20).",
+   "tags": [
+    "extended",
+    "post_hf"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "RCCSD(T) :",
+    "Total RCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rccsd_t_total_energy",
+     "expected": -150.9728052008,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_lt_metric",
+     "left": "rccsd_t_total_energy",
+     "right": "rhf_total_energy"
+    }
+   ]
+  },
+  {
    "id": "water_spherical_ccsd_sto3g",
    "input": "tests/inputs/regression/spherical/water_spherical_ccsd_sto3g.hfinp",
    "_pyscf_reference": "PySCF 2.13.0 RCCSD, cart=False, Planck's GBS: -75.0123316192. Re-pinned 2026-11-07 from Planck's own output (-75.0123310010), which lacked the F_me terms of the Stanton-Gauss doubles equation.",

@@ -832,7 +832,23 @@ if(Python3_Interpreter_FOUND)
     )
     endif()
 
-    add_custom_target(ccgen-planck-kernels DEPENDS ${_ccgen_planck_outputs})
+    # CCSD(T) W/V builders (docs/CCSD_T_SCOPE.md). Generated in every build,
+    # whatever PLANCK_CC_MAXORDER is: (T) reads only t1/t2. Included by
+    # src/post_hf/cc/ccsd_t.cpp, which reports (T) unavailable without it.
+    set(_ccgen_ccsd_t_output ${CMAKE_BINARY_DIR}/generated/cc/ccsd_t_planck_generated.cpp)
+    add_custom_command(
+        OUTPUT ${_ccgen_ccsd_t_output}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                --output-dir ${CMAKE_BINARY_DIR}/generated/cc --ccsd-t
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+        DEPENDS
+            ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+            ${_ccgen_package_sources}
+        COMMENT "Generating CCSD(T) kernels with ccgen")
+
+    add_custom_target(ccgen-planck-kernels DEPENDS ${_ccgen_planck_outputs} ${_ccgen_ccsd_t_output})
 
     # The UCC emit is a separate add_custom_command with its own OUTPUT, not a
     # POST_BUILD step on the target above: POST_BUILD commands are tied to

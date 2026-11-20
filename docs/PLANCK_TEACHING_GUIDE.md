@@ -5453,6 +5453,17 @@ broken. All three builders now share one check, `has_frozen_orbitals`. It
 compares the active count with the SCF's MO count, which is correct in either
 basis.
 
+The double-hybrid gradient (later in this section) inherits the same limit.
+Its PT2 part is an MP2 Lagrangian, so it also has no frozen–active blocks. Its
+gradient is also built on conventional integrals only, so it does not
+differentiate a density-fitted energy either. The UKS branch refused both from
+the start. The RKS branch checked only for solvent, so `mp2_frozen 1` ran and
+printed a gradient 6.2e-5 Ha/Bohr off its own energy finite difference. The
+all-electron control was off by 5.6e-8. `mp2_use_ri` was off by 4.8e-7. Both
+branches now call one `validate_dh_gradient_pt2_options`, which names the
+option it refuses. The lesson is the one above: when two code paths compute
+the same physics, give them one guard. Two copies drift apart.
+
 ### Checking an Analytic Gradient Against the Right Reference
 
 The spherical MP2 gates first compared with PySCF's analytic
@@ -6084,7 +6095,9 @@ typing a quadruples residual.
 ### The hand-written paths
 
 - **RCCSD** — a conventional iterative amplitude solver in the spin-orbital
-  basis for canonical closed-shell RHF references
+  basis for canonical closed-shell RHF references. `correlation ccsd(t)` runs
+  it and then adds the perturbative triples from generated kernels (see
+  "Perturbative Triples: CCSD(T)" below)
 - **RCCSDT** — dual-backend: a determinant-space teaching prototype for small
   systems and a staged tensor solver for larger systems; the default routing is
   chosen automatically by `choose_rccsdt_backend`, and a `TensorOptimized` entry
@@ -7133,6 +7146,113 @@ smaller systems cannot:
    enough that the \(O(o^3 v^4)\) and \(O(o^4 v^3)\) contractions in R3 are
    non-trivial, making it a useful check that the contraction order and
    intermediate reuse in `tensor_backend.cpp` are correct.
+
+### Perturbative Triples: CCSD(T)
+
+Full CCSDT costs \(O(o^3v^5)\) per iteration and stores the \(o^3v^3\) triples
+amplitudes. CCSD(T) estimates the triples' effect once, after CCSD has
+converged, by perturbation theory. Its non-iterative \(O(o^3v^4)\) step is
+what makes it the usual benchmark method.
+
+**The formula.** With a canonical reference (\(f_{ov}=0\)) there are two
+triples quantities, both projections onto the triply excited determinants:
+
+\[
+W_{ijk}^{abc} = \langle\Phi_{ijk}^{abc}|(V_N T_2)_C|0\rangle, \qquad
+V_{ijk}^{abc} = \langle\Phi_{ijk}^{abc}|V_N T_1|0\rangle .
+\]
+
+\(W\) is connected. It comes from two contractions, one through a virtual
+\(\langle bc\|dk\rangle t_{ij}^{ad}\) and one through an occupied
+\(\langle lc\|jk\rangle t_{il}^{ab}\). Each is antisymmetrized by
+\(P(i/jk)P(a/bc)\), giving 18 terms. \(V\) is **disconnected**: it is
+\(P(i/jk)P(a/bc)\, t_i^a \langle jk\|bc\rangle\), 9 terms, a singles
+amplitude next to an untouched double-excitation integral. In spin orbitals,
+
+\[
+E_{(T)} = \frac{1}{36}\sum_{ijkabc} \frac{(W_{ijk}^{abc} + V_{ijk}^{abc})\,W_{ijk}^{abc}}{D_{ijk}^{abc}},
+\qquad D_{ijk}^{abc} = \varepsilon_i+\varepsilon_j+\varepsilon_k-\varepsilon_a-\varepsilon_b-\varepsilon_c .
+\]
+
+The \(W^2/D\) part is the fourth-order triples energy. The \(VW/D\) part is
+the fifth-order singles–triples coupling that defines "(T)".
+
+**How ccgen derives it.** A CC residual is \(\langle\Phi|\bar H|0\rangle\), with
+\(\bar H\) from the BCH expansion. (T) needs no \(\bar H\), only two bare
+operator products, \(V_N T_2\) and \(V_N T_1\), projected onto triples. So
+`python/ccgen/methods/ccsd_t.py` multiplies the operators, projects each
+product with the same Wick machinery the residuals use, and keeps \(W\)'s
+connected terms. Two things in the generator assumed every product is
+connected, which is true for BCH commutators:
+
+- The projector always asked Wick for connected contractions, so
+  `connected_only=False` did nothing and \(V\) came out empty. The flag now
+  reaches the projector. The default is unchanged, and the CCSD and CCSDT
+  equations are byte-identical.
+- The manifold pre-filter drops disconnected products before projection. The
+  (T) builder skips it; two small products need no pre-pruning.
+
+The first test was numeric. Evaluated at PySCF's converged GCCSD amplitudes,
+the generated \(W\) and \(V\) reproduce PySCF's spin-orbital (T) to
+\(\le 4.8\times10^{-12}\) on water, C1 H\(_2\)O\(_2\) and the OH doublet.
+Dropping \(V\) misses by \(9.9\times10^{-5}\). Flipping one \(W\) term
+misses by \(1.3\times10^{-3}\).
+
+**The restricted form needs one spin block.** A closed shell has four kinds
+of triples block: aaa, bbb, aab and abb. By spin symmetry aaa = bbb and
+aab = abb. The lone β index can sit in any of three occupied and three
+virtual places, giving nine aab arrangements and nine abb. The spin-orbital
+sum is therefore
+
+\[
+E_{(T)} = \frac{2\,S_{aaa} + 18\,S_{aab}}{36} = \frac{S_{aaa}}{18} + \frac{S_{aab}}{2},
+\qquad S_{\rm blk} = \sum_{\rm blk}\frac{(W+V)W}{D} .
+\]
+
+`spin_adapt_equations` lowers \(W\) and \(V\) onto the aab block: 24 and 6
+terms, in spatial \(t_1\), \(t_2\) and the plain \(\langle pq|rs\rangle\). The
+all-α block is not a second integration. It is half the full antisymmetrizer
+over the three virtuals applied to the aab block, for \(W\) and \(V\) alike:
+
+\[
+X_{aaa}(abc,ijk) = \tfrac12 \sum_{P\in S_3} \operatorname{sign}(P)\,
+X_{aab}(P(abc),ijk).
+\]
+
+This was found numerically. A least-squares fit of the aaa block onto the six
+virtual permutations of the aab block gave coefficients \(\pm\tfrac12\), with
+a relative residual of \(4\times10^{-14}\). Through this identity the
+restricted (T) matches PySCF's RHF `ccsd_t` to
+\(\le 5.6\times10^{-12}\). A factor of 1 instead of ½ misses by
+\(2.3\times10^{-4}\).
+
+**One detail that cost 2e-11.** PySCF builds \(D\) from the diagonal of the
+Fock matrix, not from the SCF's orbital energies. At a finite SCF tolerance
+the two differ by the SCF residual. Using `mf.mo_energy` on C1 H\(_2\)O\(_2\)
+6-31G put the restricted (T) \(1.9\times10^{-11}\) off, and only that case.
+Compare like with like: the denominator must come from the same orbital
+energies the CCSD amplitudes were solved with.
+
+**Running it.** `correlation ccsd(t)` runs the hand-written RCCSD. At
+convergence, the driver projects the amplitudes to the spatial layout and
+calls `compute_rccsd_t_energy` (`src/post_hf/cc/ccsd_t.cpp`), which evaluates
+the generated \(W\) and \(V\) builders from `ccsd_t_planck_generated.cpp`.
+This first C++ version builds both as full \(o^3v^3\) tensors, so it is the
+reference for a batched kernel and is meant for small systems only.
+
+It matches PySCF's CCSD(T) to every printed digit on water (STO-3G and 6-31G)
+and C1 H\(_2\)O\(_2\) 6-31G (`*_rccsd_t_*`). One trap appeared while setting
+up those references. PySCF's built-in STO-3G and 6-31G are not quite Planck's
+GBS files: on water the Hartree-Fock energies differed by \(2.4\times10^{-8}\).
+That looks like a Planck defect, but loading Planck's own files into PySCF
+(`parse_gaussian.load`) closes it to every digit. When two codes disagree at
+\(10^{-8}\), check that they are solving the same basis before looking for a
+bug.
+
+The batched kernel builds \(W\) and \(V\) for one virtual triple
+\((a,b,c)\) at a time, \(o^3\) each, and never forms the full tensor. That is
+the production shape. Unrestricted (T) is not done yet: it needs all four
+spin blocks, each with its own α or β denominators.
 
 ---
 
