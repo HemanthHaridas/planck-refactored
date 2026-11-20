@@ -680,6 +680,7 @@ namespace HartreeFock::IO
                 // have no consumer. `ucc2` exists because U5.4 needs it as the
                 // comparison against hand-written UCCSD.
                 {"ucc2", HartreeFock::PostHF::UCCGEN},
+                {"uccsd(t)", HartreeFock::PostHF::UCCGEN}, // ucc2 + (T): scf._cc_triples
                 {"uccsd_gen", HartreeFock::PostHF::UCCGEN},
                 {"ucc3", HartreeFock::PostHF::UCCGEN},
                 {"uccsdt_gen", HartreeFock::PostHF::UCCGEN},
@@ -759,7 +760,7 @@ namespace HartreeFock::IO
                      if (!parsed)
                          return std::unexpected(parsed.error());
                      correlation = *parsed;
-                     scf._cc_triples = (value == "ccsd(t)");
+                     scf._cc_triples = (value == "ccsd(t)" || value == "uccsd(t)");
                      // For the generated arbitrary-order RCC path (all spellings
                      // map to RCCSDTQ), carry the requested excitation rank so the
                      // driver dispatches to the right generated kernel without a
@@ -783,7 +784,7 @@ namespace HartreeFock::IO
                      {
                          static const std::unordered_map<std::string, int> _ucc_rank =
                              {
-                                 {"ucc2", 2}, {"uccsd_gen", 2},
+                                 {"ucc2", 2}, {"uccsd_gen", 2}, {"uccsd(t)", 2},
                                  {"ucc3", 3}, {"uccsdt_gen", 3},
                                  {"ucc4", 4}, {"uccsdtq_gen", 4},
                                  {"ucc5", 5},

@@ -25,6 +25,7 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     # |batched - full-tensor| E(T), printed at verbosity verbose (ccsd_t.cpp).
     "ccsd_t_oracle_diff": re.compile(r"\|batched - full-tensor\| E\(T\) = ([-+0-9Ee\.]+)"),
     "uccsd_total_energy": re.compile(r"^\s*Total UCCSD Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "uccsd_t_total_energy": re.compile(r"^\s*Total UCCSD\(T\) Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "rccsdt_total_energy": re.compile(
         r"^\s*(?:Total RCCSDT Energy|\[INF\]\s+CCSDT Energy)\s+([-+0-9Ee\.]+)",
         re.MULTILINE,

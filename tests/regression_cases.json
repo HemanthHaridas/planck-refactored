@@ -6086,6 +6086,69 @@
    ]
   },
   {
+   "id": "oh_uccsd_t_631g",
+   "input": "tests/inputs/regression/post_hf/oh_uccsd_t_631g.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 UHF (conv_tol_grad 1e-10) + UCCSD + uccsd_t, cart=True, Planck's GBS: E_UCCSD(T) -75.4625534241, E(T) -0.0005574953. Equal to the last printed digit (2026-11-20).",
+   "tags": [
+    "extended",
+    "ucc",
+    "post_hf"
+   ],
+   "requires_build_option": "PLANCK_CC_UCC",
+   "expected_exit_code": 0,
+   "contains": [
+    "UCCSD(T) :",
+    "Total UCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "uccsd_t_total_energy",
+     "expected": -75.4625534241,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "ccsd_t_oracle_diff",
+     "value": 1e-14
+    },
+    {
+     "type": "metric_lt_metric",
+     "left": "uccsd_t_total_energy",
+     "right": "rhf_total_energy"
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uccsd_t_631g",
+   "input": "tests/inputs/regression/post_hf/water_cation_uccsd_t_631g.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 UHF (conv_tol_grad 1e-10) + UCCSD + uccsd_t, cart=True, Planck's GBS: E_UCCSD(T) -75.6836253364, E(T) -0.0006729001. Equal to the last printed digit (2026-11-20).",
+   "tags": [
+    "extended",
+    "ucc",
+    "post_hf"
+   ],
+   "requires_build_option": "PLANCK_CC_UCC",
+   "expected_exit_code": 0,
+   "contains": [
+    "UCCSD(T) :",
+    "Total UCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "uccsd_t_total_energy",
+     "expected": -75.6836253364,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_lt_metric",
+     "left": "uccsd_t_total_energy",
+     "right": "rhf_total_energy"
+    }
+   ]
+  },
+  {
    "id": "water_rccsd_t_sto3g",
    "input": "tests/inputs/regression/post_hf/water_rccsd_t_sto3g.hfinp",
    "_pyscf_reference": "PySCF 2.15.0 RCCSD + ccsd_t, cart=True, Planck's GBS (parse_gaussian.load): E_CCSD(T) -75.0123539648, E(T) -0.0000673675. Equal to every printed digit (2026-11-20).",

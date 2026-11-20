@@ -1353,6 +1353,10 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                             ? HartreeFock::Correlation::CC::rcc_method_label(
                                   calculator._scf._cc_generated_rank)
                         : (calculator._correlation == HartreeFock::PostHF::FCI)     ? "FCI"
+                        // ucc2 keeps the generic label (the runner parses it as
+                        // correlated_total_energy); only uccsd(t) gets its own.
+                        : (calculator._correlation == HartreeFock::PostHF::UCCGEN &&
+                           calculator._scf._cc_triples)                             ? "UCCSD(T)"
                                                                                     : "Correlated";
                     HartreeFock::Logger::correlation_energy(
                         calculator._total_energy, calculator._correlation_energy, method_label);

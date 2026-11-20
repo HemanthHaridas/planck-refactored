@@ -30,6 +30,21 @@ namespace HartreeFock::Correlation::CC
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const ArbitraryOrderRCCAmplitudes &t1_t2);
+
+    struct ArbitraryOrderTensorCCState;
+
+    // Open-shell (T) from a converged generated UCCSD state (ucc2): t1_aa/bb and
+    // t2_aaaa/abab/bbbb sectors, spin-blocked physicist ERIs and the per-spin
+    // Fock blocks, whose diagonals are the denominators:
+    //
+    //   E(T) = (S_aaa + S_bbb)/36 + (S_aab + S_abb)/4.
+    //
+    // Batched over each block's distinct virtual triples, threaded, independent
+    // of the thread count; at verbose output on small systems it also logs the
+    // difference from the full-tensor kernels.
+    std::expected<double, std::string> compute_uccsd_t_energy(
+        const HartreeFock::Calculator &calculator,
+        const ArbitraryOrderTensorCCState &state);
 } // namespace HartreeFock::Correlation::CC
 
 #endif // HF_POSTHF_CC_CCSD_T_H

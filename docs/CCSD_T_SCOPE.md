@@ -5,87 +5,50 @@ then as the answer. Status lives in `vault/Status/Open Work.md` (priority 1).
 
 ## Current state (2026-11-20)
 
-**Restricted (T) works and equals PySCF, on small systems.**
-`correlation ccsd(t)` runs the hand-written RCCSD, then adds (T) from
-ccgen-generated W and V kernels. Water STO-3G, water 6-31G and C1 H2O2 6-31G
-equal PySCF 2.15.0 CCSD(T) to every printed digit (`*_rccsd_t_*`, commit
-`9e330d91`).
+**Restricted and unrestricted (T) both work and equal PySCF.**
+- `correlation ccsd(t)` runs the hand-written RCCSD, then adds (T). Water
+  STO-3G and 6-31G and C1 H2O2 6-31G equal PySCF 2.15.0 CCSD(T) to every
+  printed digit (`*_rccsd_t_*`).
+- `correlation uccsd(t)` runs the generated `ucc2`, then adds (T). OH and
+  water⁺ in 6-31G equal PySCF UCCSD(T) to the last printed digit
+  (`*_uccsd_t_*`). Needs `-DPLANCK_CC_UCC=ON`.
+- Both use batched, threaded kernels that ccgen generates. They form no
+  o³v³ tensor, and E(T) is bitwise identical at any thread count.
 
 | | State |
 |---|---|
 | ccgen W and V, spin-orbital | Done. Equal to PySCF `gccsd_t` to ≤ 4.8e-12, including the OH doublet |
 | Restricted lowering (one spin block) | Done. Equal to PySCF RHF `ccsd_t` to ≤ 5.6e-12 |
-| Full-tensor C++ kernel | Done. Serial, two o³v³ tensors, small systems only |
-| Driver (`correlation ccsd(t)`) | Done, on the hand-written RCCSD route |
-| Cartesian PySCF gates | Done: water STO-3G and 6-31G (core), C1 H2O2 6-31G (extended, 31 s) |
-| Batched kernel | Done and verified, not yet committed. Bitwise identical at 1/2/4/8 threads, within 1.4e-16 of the full-tensor kernel |
+| Restricted C++ (`ccsd(t)`) | Done (`9e330d91`, batched `cf1e1d79`). Cartesian gates: water STO-3G and 6-31G (core), C1 H2O2 6-31G (extended) |
+| Unrestricted lowering (four blocks) | Done. Equal to PySCF `uccsd_t` to ≤ 7.3e-15 on OH and water⁺ |
+| Unrestricted C++ (`uccsd(t)`) | Done, not yet committed. Gates `oh_uccsd_t_631g`, `water_cation_uccsd_t_631g` (extended, skip without UCC) |
 | Spherical gate (water cc-pVDZ) | Open |
-| UHF-(T) | Open. The algebra is checked in Python (OH doublet); lowering, kernels and driver are not written |
 | ROHF-(T) | Open; needs semicanonical ROHF-CC first |
+| Larger systems | Limited by the CCSD, not (T): the hand-written RCCSD is spin-orbital |
 
 ## What remains, in order
 
-### 1. The batched kernel (verified 2026-11-20, not yet committed)
-
-What is built:
-- **Generated block kernels.** `compute_ccsd_t_{W,V}_block(a, b, c, ...)`
-  are emitted by `_emit_block_kernel` in `python/ccgen/methods/ccsd_t.py`.
-  Each fills an o³ (i,j,k) block for one virtual triple. Each term's text is
-  `_term_coeff_product`, the same string the full-tensor kernel uses.
-- **Driver loop.** `src/post_hf/cc/ccsd_t.cpp` loops over a ≥ b ≥ c and
-  computes W and V for the six orderings. S_aab counts each distinct ordering
-  once. S_aaa counts 6× the antisymmetrized block when a > b > c and is zero
-  otherwise.
-- **Threading.** OpenMP over the triples. Each triple writes its own slot,
-  and the slots are summed in triple order, so the result does not depend on
-  the thread count.
-- **Oracle check.** At `verbosity verbose` with o³v³ ≤ 2e6, the full-tensor
-  path also runs and logs `|batched - full-tensor| E(T)`. Runner metric
-  `ccsd_t_oracle_diff`; `water_rccsd_t_631g` requires ≤ 1e-14.
-
-Verified:
-- **Gates.** All three PySCF gates pass, still equal to every printed digit.
-- **Against the full-tensor kernel.** E(T) differs by 1.1e-18 on water 6-31G
-  and 1.4e-16 on C1 H2O2 6-31G.
-- **Thread count.** That difference is identical at 1, 2, 4 and 8 threads.
-  The full-tensor path is serial, so the batched E(T) is bitwise invariant.
-- **Mutation.** Setting the S_aaa factor to 3 instead of 6 fails
-  `water_rccsd_t_631g` twice: the total is off by 7.6e-6, and so is the
-  oracle difference. `water_rccsd_t_sto3g` cannot catch it: with 2 virtuals
-  no triple has a > b > c, so S_aaa is identically zero there.
-- **Timing.** The `RCCSD(T) :` line now reports (T)'s own wall time. On C1
-  H2O2 6-31G at 4 threads, (T) takes 0.27 s; the 31 s run is the
-  spin-orbital CCSD (22 × 1.39 s). That case cannot show the batched
-  kernel's gain, which is memory: no o³v³ tensor.
-
-The block kernels index t2 and the ERI blocks through the generic accessors,
-one term at a time, so they are not BLAS-shaped. Measure before reshaping
-them.
-
-### 2. Spherical gate
+### 1. Spherical gate
 
 Water cc-pVDZ, `basis_type spherical`, against PySCF `cart=False` built from
-Planck's GBS. Nothing (T)-specific is expected to change: the amplitudes and
-MO blocks are already in the working basis.
+Planck's GBS, for `ccsd(t)` and `uccsd(t)`. Nothing (T)-specific is expected
+to change: the amplitudes and MO blocks are already in the working basis.
 
-### 3. UHF-(T)
-
-The spin-orbital W and V are already checked on an open shell (OH doublet,
-GHF). What is missing:
-- the unrestricted lowering onto all four blocks, aaa, bbb, aab and abb, each
-  with its own α/β denominators:
-  E(T) = (S_aaa + S_bbb + 9 S_aab + 9 S_abb)/36. The closed-shell one-block
-  identity does not apply;
-- kernels emitted into the UCC namespace;
-- a driver hook fed by the hand-written `run_uccsd` (no build option) or by
-  the generated `ucc2` (`-DPLANCK_CC_UCC=ON`).
-
-Gate against PySCF `cc.UCCSD(mf).ccsd_t()` on OH and water⁺.
-
-### 4. ROHF-(T)
+### 2. ROHF-(T)
 
 Needs semicanonical ROHF-CC and the f_ov terms (`canonical_fock=False`). It
 comes after `docs/ROHF_CORRELATION_SCOPE.md`.
+
+### 3. Size
+
+At C1 H2O2 6-31G, (T) takes 0.27 s against 31 s of spin-orbital RCCSD
+(22 × 1.39 s). The hand-written RCCSD stores (2o)²(2v)² amplitudes and
+blocks up to (2v)⁴, about 1 GB of `vvvv` at water cc-pVTZ. A larger
+`ccsd(t)` needs a spatial RCCSD, not a faster (T).
+
+The block kernels index t2 and the ERI blocks through the generic
+accessors, one term at a time, so they are not BLAS-shaped. Measure before
+reshaping them.
 
 ## How it works
 
@@ -132,6 +95,57 @@ converged amplitudes:
 - The mutations fail: dropping V misses by 9.9e-5, flipping one W term by
   1.3e-3, a factor of 1 for ½ by 2.3e-4, and dropping aaa by 7.8e-5.
 
+### Unrestricted: four blocks, each with its own denominators
+
+`build_ccsd_t_unrestricted()` runs `ucc_adapt_equations` onto the four t3
+blocks. That gives W 18/16/16/18 and V 9/5/5/9 terms for aaa/aab/abb/bbb,
+in the stored UCC vocabulary (`t1_aa/bb`, `t2_aaaa/abab/bbbb`,
+`v_aaaa/abab/bbbb`). Each mixed block stands for 9 index arrangements and
+each pure block for 1:
+
+```
+E(T) = (S_aaa + S_bbb)/36 + (S_aab + S_abb)/4
+```
+
+That reduces to the restricted S_aaa/18 + S_aab/2 when α = β. There is no
+aaa-from-aab identity here, because α and β orbitals differ.
+
+Python gate (`UnrestrictedCCSDTriplesVsPySCF`): equal to `uccsd_t.kernel`
+to 7.3e-15 on OH 6-31G and 1.4e-15 on water⁺ 6-31G. Dropping V on the aab
+block misses by 6.7e-5.
+
+In C++, `compute_uccsd_t_energy` batches each block over its distinct
+virtual triples only, because W and V are antisymmetric in same-spin
+virtuals:
+
+| Block | Triples visited | Multiplicity |
+|---|---|---|
+| aaa | a > b > c | 6 |
+| aab | a > b (α), any c (β) | 2 |
+| abb | any a (α), b > c (β) | 2 |
+| bbb | a > b > c | 6 |
+
+Denominators are the diagonals of the UCC Fock blocks (`spin_block("oo",
+"aa")` and so on): the orbital energies the `ucc2` solve used.
+
+Results:
+- OH and water⁺ equal PySCF's UCCSD(T) total to the last printed digit
+  (1e-10).
+- ⟨S²⟩ is identical to PySCF's (0.753774 and 0.755267), so both codes are in
+  the same state. Water⁺ runs from `guess sad`, because from `hcore` UHF can
+  land on the ²A₁ saddle.
+- On OH the batched kernel agrees with the full-tensor kernels to 1.2e-18,
+  and that difference is identical at 1, 2, 4 and 8 threads.
+- (T) takes 0.024 s on OH.
+
+**Why `ucc2` feeds it.** The hand-written `run_uccsd` is a determinant-space
+solver (`solve_determinant_cc`) and holds no t1/t2 block arrays. The
+generated `ucc2` holds exactly the blocks the lowering reads, with
+spin-blocked ERIs. The cost is that `uccsd(t)` needs `-DPLANCK_CC_UCC=ON`;
+without it, `run_uccgen` refuses by name. The unrestricted kernels
+themselves compile in every build, in the same generated file as the
+restricted ones.
+
 ### Build and drive
 
 - **Generation.** `python/generate_planck_cc_kernels.py --ccsd-t` writes
@@ -141,7 +155,10 @@ converged amplitudes:
 - **Kernels.** They go through the existing `_emit_kernel` with
   `force_arbitrary`. That emitter parses its method as a CC level, so the
   full-tensor kernels are named `compute_ccsd_t_{W,V}_residual` (method
-  `ccsd`, targets `t_W` and `t_V`).
+  `ccsd`, targets `t_W` and `t_V`). The per-triple kernels come from
+  `_emit_block_kernel`, which reuses each term's `_term_coeff_product` text.
+  The unrestricted ones carry a `ucc_` prefix and a block tag, e.g.
+  `compute_ucc_ccsd_t_W_aabaab_block`.
 - **Fallback.** `src/post_hf/cc/ccsd_t.cpp` includes the generated file
   through `__has_include`. Without it, (T) returns a named error.
 - **Driver.** `correlation ccsd(t)` maps to RCCSD and sets
@@ -150,9 +167,19 @@ converged amplitudes:
   `compute_rccsd_t_energy`, logs `E_corr(CCSD)` and `E(T)`, and adds E(T) to
   the correlation energy. The total prints as `Total RCCSD(T) Energy`
   (runner metric `rccsd_t_total_energy`).
+- **Unrestricted driver.** `correlation uccsd(t)` maps to UCCGEN at rank 2
+  and sets the same flag. `run_uccgen` calls `compute_uccsd_t_energy` on its
+  converged state and prints `Total UCCSD(T) Energy`
+  (`uccsd_t_total_energy`). Plain `ucc2` keeps `Total Correlated Energy`.
+- **Reference check and timing.** At `verbosity verbose`, both paths also
+  run the full-tensor kernels on small systems and log
+  `|batched - full-tensor| E(T)` (`ccsd_t_oracle_diff`, gated at ≤ 1e-14 on
+  `water_rccsd_t_631g` and `oh_uccsd_t_631g`). The `RCCSD(T) :` and
+  `UCCSD(T) :` lines report (T)'s wall time.
 - **Denominators.** D is computed inline from the reference's
-  `eps_occ`/`eps_virt`, the orbital energies the CCSD used. No rank-3
-  denominator cache is built.
+  `eps_occ`/`eps_virt` (restricted) or the UCC Fock-block diagonals
+  (unrestricted): the orbital energies the CCSD used. No rank-3 denominator
+  cache is built.
 
 ## Findings and corrected premises
 
@@ -165,6 +192,10 @@ converged amplitudes:
   `ccsd_t.py` bypasses it.
 - **D must match PySCF's.** PySCF takes D from diag(Fock). Using
   `mf.mo_energy` in the Python gate cost 1.9e-11 on C1 H2O2.
+- **Open-shell references need a converged orbital gradient.** At UHF
+  `conv_tol` 1e-12 alone, water⁺ missed PySCF by 2.0e-11; with
+  `conv_tol_grad` 1e-10 the two agree to 1e-15. The leftover off-diagonal
+  Fock enters W/V and PySCF's (T) differently.
 - **References need Planck's GBS files** (`parse_gaussian.load`). PySCF's
   built-in STO-3G and 6-31G put E_HF up to 2.4e-8 from Planck's on water.
   With the GBS files the two codes agree to every printed digit.

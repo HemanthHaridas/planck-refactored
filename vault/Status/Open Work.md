@@ -9,7 +9,7 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-11-20 (restricted CCSD(T) full-tensor path; RKS DH
+Last updated: 2026-11-20 (restricted and UHF CCSD(T); RKS DH
 gradient refuses frozen-core and RI PT2; CI is not blocked on the
 shared-objects change). Previous rewrite 2026-11-16:
 RI-JK answered and removed from the priority list; libecpint repinned to
@@ -38,10 +38,11 @@ teaching code) reorders it.
 
 **Necessary.** Without these the product is broken or misleading.
 
-1. **CCSD(T).** It is the benchmark method users ask for first. Restricted
-   (T) landed 2026-11-20, batched and threaded, and equals PySCF.
-   Remaining: UHF-(T), and a larger-system RCCSD (the spin-orbital solver
-   limits size). Scope: `docs/CCSD_T_SCOPE.md`.
+1. **CCSD(T).** It is the benchmark method users ask for first.
+   Restricted and UHF (T) landed 2026-11-20, batched and threaded, and equal
+   PySCF. Remaining: a spatial RCCSD for larger systems (the spin-orbital
+   solver limits size), the spherical gate and ROHF-(T).
+   Scope: `docs/CCSD_T_SCOPE.md`.
 2. **SCF robustness on medium systems.** 32-water RKS hits `max_cycles`
    (§2, DFT). Scope: `docs/SCF_CONVERGENCE_MEDIUM_SYSTEMS_SCOPE.md`.
 3. **Meta-GGA**, at least SCF energies with a by-name refusal everywhere else,
@@ -199,13 +200,13 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
 
 ### HF and post-HF
 
-- **CCSD(T): restricted is done** (`docs/CCSD_T_SCOPE.md`).
-  `correlation ccsd(t)` equals PySCF in Cartesian bases, with a batched,
-  threaded (T). System size is now limited by the hand-written spin-orbital
-  RCCSD, not by (T). Open, in order:
+- **CCSD(T): restricted and UHF are done** (`docs/CCSD_T_SCOPE.md`).
+  `correlation ccsd(t)` and `uccsd(t)` equal PySCF in Cartesian bases, with
+  batched, threaded (T). `uccsd(t)` needs `-DPLANCK_CC_UCC=ON`. System size
+  is now limited by the hand-written spin-orbital RCCSD, not by (T). Open:
   - the spherical water/cc-pVDZ gate;
-  - UHF-(T), which needs four spin blocks;
-  - ROHF-(T), after semicanonical ROHF-CC.
+  - ROHF-(T), after semicanonical ROHF-CC;
+  - a spatial RCCSD for larger `ccsd(t)` systems.
 - **ROHF:** RMP2/UMP2, coupled cluster, stability, PCM and SOSCF reject ROHF.
   SOSCF and stability need new orbital-response machinery for the effective
   Roothaan Fock, which does not exist in the tree. ROHF CASSCF and RASSCF

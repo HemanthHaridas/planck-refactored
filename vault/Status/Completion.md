@@ -451,8 +451,8 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
-- **Restricted CCSD(T), full-tensor reference path (2026-11-20,
-  `docs/CCSD_T_SCOPE.md` steps 1–4).** `correlation ccsd(t)` runs the
+- **CCSD(T), restricted and unrestricted (2026-11-20,
+  `docs/CCSD_T_SCOPE.md`).** `correlation ccsd(t)` runs the
   hand-written RCCSD. At convergence it adds (T) from the ccgen-generated W
   and V builders (`ccsd_t_planck_generated.cpp`, generated in every build),
   evaluated on the aab|aab block.
@@ -472,7 +472,16 @@ historical design context, but they are no longer the source of truth for
     gated at 1e-14 on `water_rccsd_t_631g`. A wrong S_aaa factor fails that
     gate by 7.6e-6. (T) on C1 H2O2 6-31G takes 0.27 s; the run's 31 s is
     the spin-orbital CCSD.
-  - **Open.** The spherical gate and UHF-(T).
+  - **UCCSD(T) (same day).** `correlation uccsd(t)` runs the generated
+    `ucc2` (`-DPLANCK_CC_UCC=ON`) and adds (T) over the four t3 blocks:
+    E(T) = (S_aaa + S_bbb)/36 + (S_aab + S_abb)/4, with per-spin
+    denominators from the UCC Fock-block diagonals. OH and water⁺ 6-31G
+    equal PySCF UCCSD(T) to the last printed digit, with the same ⟨S²⟩. The
+    full-tensor reference check agrees to 1.2e-18, bitwise identical at
+    1/2/4/8 threads. Gated by `*_uccsd_t_631g` (extended; skipped without
+    UCC). The hand-written UCCSD is determinant-space and cannot feed (T).
+  - **Open.** The spherical gate, ROHF-(T), and a spatial RCCSD for larger
+    systems.
 
 - **RKS double-hybrid gradients refuse frozen-core and RI PT2 (2026-11-20).**
   The UKS gate already did; the RKS gate checked only solvent. With

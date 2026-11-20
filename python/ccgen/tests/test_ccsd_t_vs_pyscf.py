@@ -141,6 +141,79 @@ class RestrictedCCSDTriplesVsPySCF(unittest.TestCase):
         self.check(H2O2_C1, "6-31g")
 
 
+def unrestricted_and_pyscf_t(atom, basis, spin, charge=0):
+    """Open-shell E(T) from the four-block unrestricted lowering, and PySCF's
+    UCCSD(T), both at PySCF's converged UCCSD amplitudes."""
+    from pyscf import ao2mo, cc
+    from pyscf.cc import uccsd_t
+    from ccgen.methods.ccsd_t import build_ccsd_t_unrestricted
+    from ccgen.tests.residual_eval import ucc_residual_einsum
+
+    mol = gto.M(atom=atom, basis=basis, spin=spin, charge=charge, verbose=0)
+    # A tight orbital gradient matters here: at conv_tol 1e-12 alone, water+
+    # missed PySCF by 2.0e-11 (the residual off-diagonal Fock); at 1e-10 in the
+    # gradient the two agree to 1e-15.
+    mf = scf.UHF(mol).run(conv_tol=1e-14, conv_tol_grad=1e-10)
+    mycc = cc.UCCSD(mf)
+    mycc.conv_tol = 1e-11
+    mycc.conv_tol_normt = 1e-10
+    mycc.kernel()
+    eris = mycc.ao2mo()
+    ca, cb = mf.mo_coeff
+    noa, nob = mol.nelec
+    nva, nvb = ca.shape[1] - noa, cb.shape[1] - nob
+
+    def phys(c1, c2):
+        g = ao2mo.general(mol, (c1, c1, c2, c2), compact=False).reshape(
+            c1.shape[1], c1.shape[1], c2.shape[1], c2.shape[1])
+        return g.transpose(0, 2, 1, 3)
+
+    vaa, vbb = phys(ca, ca), phys(cb, cb)
+    t1a, t1b = mycc.t1
+    t2aa, t2ab, t2bb = mycc.t2
+    tensors = {
+        "t1_aa": t1a.T, "t1_bb": t1b.T,
+        "t2_aaaa": t2aa.transpose(2, 3, 0, 1), "t2_abab": t2ab.transpose(2, 3, 0, 1),
+        "t2_bbbb": t2bb.transpose(2, 3, 0, 1),
+        "v_aaaa": vaa - vaa.transpose(0, 1, 3, 2), "v_bbbb": vbb - vbb.transpose(0, 1, 3, 2),
+        "v_abab": phys(ca, cb),
+    }
+    dims = dict(noa=noa, nva=nva, nob=nob, nvb=nvb)
+    # D from diag(Fock), as PySCF's (T) uses (see the restricted finding).
+    eps = {"a": np.asarray(eris.focka).diagonal(), "b": np.asarray(eris.fockb).diagonal()}
+    nocc = {"a": noa, "b": nob}
+
+    blocks = build_ccsd_t_unrestricted()
+    e_t = 0.0
+    for tag, weight in (("aaaaaa", 1 / 36), ("bbbbbb", 1 / 36),
+                        ("aabaab", 1 / 4), ("abbabb", 1 / 4)):
+        w = sum(ucc_residual_einsum(t, dims, tensors) for t in blocks[f"W_{tag}"])
+        v = sum(ucc_residual_einsum(t, dims, tensors) for t in blocks[f"V_{tag}"])
+        ev = [eps[sp][nocc[sp]:] for sp in tag[:3]]
+        eo = [eps[sp][:nocc[sp]] for sp in tag[3:]]
+        d = (-ev[0][:, None, None, None, None, None] - ev[1][None, :, None, None, None, None]
+             - ev[2][None, None, :, None, None, None] + eo[0][None, None, None, :, None, None]
+             + eo[1][None, None, None, None, :, None] + eo[2][None, None, None, None, None, :])
+        e_t += weight * float(np.sum((w + v) * w / d))
+    return e_t, float(uccsd_t.kernel(mycc, eris, verbose=0))
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "PySCF not importable")
+class UnrestrictedCCSDTriplesVsPySCF(unittest.TestCase):
+    def check(self, atom, basis, spin, charge=0):
+        ours, ref = unrestricted_and_pyscf_t(atom, basis, spin, charge)
+        print(f"\n  {atom[:12]:12s} {basis:7s} ours {ours:.12f} pyscf {ref:.12f} "
+              f"diff {ours - ref:.1e}")
+        self.assertGreater(abs(ref), 1e-6)
+        self.assertAlmostEqual(ours, ref, delta=1e-11)
+
+    def test_oh_doublet_631g(self):
+        self.check(OH, "6-31g", spin=1)
+
+    def test_water_cation_631g(self):
+        self.check(WATER, "6-31g", spin=1, charge=1)
+
+
 @unittest.skipUnless(_HAVE_PYSCF, "PySCF not importable")
 class CCSDTriplesVsPySCF(unittest.TestCase):
     def check(self, *args, **kw):

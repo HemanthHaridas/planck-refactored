@@ -6119,6 +6119,7 @@ member and no new driver branch. The ceiling is `PLANCK_CC_MAXORDER` alone.
 | `ccsdtq` / `cc4` | 4 | generated RCC (the usual entry) |
 | `ccsdtqp` / `cc5`, `cc6` | 5, 6 | generated RCC |
 | `ucc2` / `uccsd_gen` | 2 | generated **U**CC — needs `-DPLANCK_CC_UCC=ON` |
+| `uccsd(t)` | 2 + (T) | `ucc2`, then the unrestricted perturbative triples |
 | `ucc3` / `uccsdt_gen`, `ucc4` … `ucc6` | 3-6 | generated UCC |
 
 Two asymmetries that look like oversights and are not:
@@ -7236,9 +7237,7 @@ energies the CCSD amplitudes were solved with.
 **Running it.** `correlation ccsd(t)` runs the hand-written RCCSD. At
 convergence, the driver projects the amplitudes to the spatial layout and
 calls `compute_rccsd_t_energy` (`src/post_hf/cc/ccsd_t.cpp`), which evaluates
-the generated \(W\) and \(V\) builders from `ccsd_t_planck_generated.cpp`.
-This first C++ version builds both as full \(o^3v^3\) tensors, so it is the
-reference for a batched kernel and is meant for small systems only.
+the generated \(W\) and \(V\) kernels from `ccsd_t_planck_generated.cpp`.
 
 It matches PySCF's CCSD(T) to every printed digit on water (STO-3G and 6-31G)
 and C1 H\(_2\)O\(_2\) 6-31G (`*_rccsd_t_*`). One trap appeared while setting
@@ -7249,10 +7248,51 @@ That looks like a Planck defect, but loading Planck's own files into PySCF
 \(10^{-8}\), check that they are solving the same basis before looking for a
 bug.
 
-The batched kernel builds \(W\) and \(V\) for one virtual triple
-\((a,b,c)\) at a time, \(o^3\) each, and never forms the full tensor. That is
-the production shape. Unrestricted (T) is not done yet: it needs all four
-spin blocks, each with its own α or β denominators.
+**Batching.** ccgen emits each kernel in two shapes from the same terms:
+the full \(o^3v^3\) tensor, and one \((a,b,c)\) block of \(o^3\) values. The
+production path loops over virtual triples \(a \ge b \ge c\). For each it
+builds \(W\) and \(V\) for the six orderings, adds every distinct ordering
+to \(S_{aab}\), and adds \(6\times\) the antisymmetrized block to
+\(S_{aaa}\) when all three differ. No \(o^3v^3\) tensor is formed.
+
+The triples are threaded with OpenMP. Each triple's energy goes into its
+own slot, and the slots are summed in a fixed order afterwards. That makes
+\(E_{(T)}\) bitwise identical at any thread count. A reduction summed in
+thread-completion order would not be; that is the DFT-grid jitter lesson.
+At `verbosity verbose` the full-tensor kernels still run on small systems
+and the difference is logged (\(\le 1.4\times10^{-16}\)). The regression
+suite gates it, so the reference version cannot silently go stale.
+
+A small fixture can hide a whole code path. Water in STO-3G has only two
+virtual orbitals, so no triple has \(a > b > c\) and \(S_{aaa}\) is zero
+there. A deliberately wrong \(S_{aaa}\) factor passes that case and fails
+water 6-31G by \(7.6\times10^{-6}\). Before trusting a gate, check that its
+fixture reaches the code being tested.
+
+**Open shells: UCCSD(T).** `correlation uccsd(t)` runs the generated
+`ucc2` and adds the unrestricted (T). The same two operator products are
+lowered onto all four triples blocks. There is no closed-shell shortcut,
+because α and β orbitals differ:
+
+\[
+E_{(T)} = \frac{S_{aaa} + S_{bbb}}{36} + \frac{S_{aab} + S_{abb}}{4}.
+\]
+
+A pure block occurs once in the spin-orbital sum and a mixed block nine
+times. With α = β this reduces to the restricted formula above. Each block
+uses its own α or β orbital energies in \(D\), taken from the diagonal of
+that spin's Fock block.
+
+OH and water\(^+\) in 6-31G match PySCF's UCCSD(T) to the last printed
+digit, with the same \(\langle S^2\rangle\) in both codes. One more
+reference trap showed up here: with PySCF's UHF converged only on the
+energy (1e-12), water\(^+\) missed by \(2\times10^{-11}\). Converging the
+orbital gradient as well (1e-10) closed it to \(10^{-15}\). For open-shell
+references, converge the orbitals, not just the energy.
+
+UCCSD(T) needs the generated UCC kernels (`-DPLANCK_CC_UCC=ON`). The
+hand-written UCCSD is a determinant-space solver and has no amplitude
+blocks to hand over.
 
 ---
 
