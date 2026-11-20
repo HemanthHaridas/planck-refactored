@@ -480,8 +480,24 @@ historical design context, but they are no longer the source of truth for
     full-tensor reference check agrees to 1.2e-18, bitwise identical at
     1/2/4/8 threads. Gated by `*_uccsd_t_631g` (extended; skipped without
     UCC). The hand-written UCCSD is determinant-space and cannot feed (T).
-  - **Open.** The spherical gate, ROHF-(T), and a spatial RCCSD for larger
-    systems.
+  - **Spherical gates (same day).** Water `ccsd(t)` and water⁺ `uccsd(t)`
+    in cc-pVDZ, `basis_type spherical`, equal PySCF `cart=False` exactly
+    (`*_rccsd_t_spherical_ccpvdz`, `*_uccsd_t_spherical_ccpvdz`; extended).
+  - **Open.** ROHF-(T), and a faster CCSD for larger systems
+    (`docs/CCSD_T_SIZE_SCOPE.md`).
+
+- **Generated CC kernels threaded by default (2026-11-20,
+  `docs/CCGEN_CC_OPENMP.md`).** The emitter's docstring named a CMake
+  option `PLANCK_CC_OMP_COLLAPSE` that did not exist, so every build's
+  generated CC kernels had no `#pragma omp` and ran on one core. The option
+  now exists (default 3) and is passed to the RCC, UCC and CCSD(T)
+  generator runs. A stamp file in their dependencies regenerates the kernels
+  when the value changes. Against the old single-core binary, every
+  iteration's numbers are bitwise identical at 1/2/4/8 threads on
+  `b_ucc2_sto3g`, `oh_uccsd_t_631g`, `be_rccsdtq_sto3g` (rank 4, never
+  threaded before) and `water_rccsd_t_631g`. `oh_uccsd_t_631g` went from
+  12.25 to 3.59 s at 4 threads. The tiny Be rank-4 case is slower threaded
+  (1.50 → 2.70 s at 8 threads).
 
 - **RKS double-hybrid gradients refuse frozen-core and RI PT2 (2026-11-20).**
   The UKS gate already did; the RKS gate checked only solvent. With

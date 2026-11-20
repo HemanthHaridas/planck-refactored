@@ -126,6 +126,15 @@ set(PLANCK_CC_INTERMEDIATE_THRESHOLD "5" CACHE STRING
 # build finishes in seconds instead of minutes.
 set(PLANCK_CC_ENGINE "diagram" CACHE STRING
     "ccgen generation engine: diagram (default, fast) or wick (textbook)")
+# OpenMP collapse depth for the generated CC residual nests, passed to ccgen as
+# CCGEN_OMP_COLLAPSE. 3 is the measured value (docs/CCGEN_CC_OPENMP.md: 3.22x at
+# 4 threads, energies bitwise identical at 1/2/4/8 threads); 0 emits no pragma.
+set(PLANCK_CC_OMP_COLLAPSE "3" CACHE STRING
+    "OpenMP collapse depth for generated CC kernels (0 = unthreaded)")
+if(NOT PLANCK_CC_OMP_COLLAPSE MATCHES "^[0-9]$")
+    message(FATAL_ERROR
+        "PLANCK_CC_OMP_COLLAPSE must be a single digit, got '${PLANCK_CC_OMP_COLLAPSE}'")
+endif()
 
 if(NOT PLANCK_CC_MAXORDER MATCHES "^[2-6]$")
     message(FATAL_ERROR
@@ -793,6 +802,19 @@ if(Python3_Interpreter_FOUND)
     file(GLOB_RECURSE _ccgen_package_sources CONFIGURE_DEPENDS
         ${CMAKE_SOURCE_DIR}/python/ccgen/*.py)
 
+    # Custom commands do not see cache variables, so the collapse depth reaches
+    # their DEPENDS through a stamp rewritten only when its value changes.
+    set(_ccgen_omp_stamp ${CMAKE_BINARY_DIR}/generated/cc/omp_collapse.stamp)
+    set(_ccgen_omp_value "${PLANCK_CC_OMP_COLLAPSE}\n")
+    set(_ccgen_omp_old "")
+    if(EXISTS ${_ccgen_omp_stamp})
+        file(READ ${_ccgen_omp_stamp} _ccgen_omp_old)
+    endif()
+    if(NOT _ccgen_omp_old STREQUAL _ccgen_omp_value)
+        file(WRITE ${_ccgen_omp_stamp} "${_ccgen_omp_value}")
+    endif()
+    set(_ccgen_env ${CMAKE_COMMAND} -E env CCGEN_OMP_COLLAPSE=${PLANCK_CC_OMP_COLLAPSE})
+
     # Compute the exact output file list ccgen writes, mirroring
     # generate_planck_cc_kernels.py's naming rule, so OUTPUT can be declared and
     # the custom command only reruns when something upstream actually changed.
@@ -821,13 +843,14 @@ if(Python3_Interpreter_FOUND)
     add_custom_command(
         OUTPUT ${_ccgen_planck_outputs}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
-        COMMAND ${Python3_EXECUTABLE}
+        COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
                 ${_ccgen_planck_kernel_args}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
         DEPENDS
             ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
             ${_ccgen_package_sources}
+            ${_ccgen_omp_stamp}
         COMMENT "Generating Planck-compatible CC kernels with ccgen (up to rank ${PLANCK_CC_MAXORDER}: ${_ccgen_rcc_methods})"
     )
     endif()
@@ -839,13 +862,14 @@ if(Python3_Interpreter_FOUND)
     add_custom_command(
         OUTPUT ${_ccgen_ccsd_t_output}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
-        COMMAND ${Python3_EXECUTABLE}
+        COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
                 --output-dir ${CMAKE_BINARY_DIR}/generated/cc --ccsd-t
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
         DEPENDS
             ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
             ${_ccgen_package_sources}
+            ${_ccgen_omp_stamp}
         COMMENT "Generating CCSD(T) kernels with ccgen")
 
     add_custom_target(ccgen-planck-kernels DEPENDS ${_ccgen_planck_outputs} ${_ccgen_ccsd_t_output})
@@ -859,13 +883,14 @@ if(Python3_Interpreter_FOUND)
     if(PLANCK_CC_UCC)
         add_custom_command(
             OUTPUT ${_ccgen_ucc_outputs}
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
                     ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
                     ${_ccgen_ucc_kernel_args}
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
             DEPENDS
                 ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
                 ${_ccgen_package_sources}
+                ${_ccgen_omp_stamp}
             COMMENT "Generating unrestricted (UCC) CC kernels with ccgen")
 
         add_custom_target(ccgen-planck-ucc-kernels DEPENDS ${_ccgen_ucc_outputs})

@@ -1,0 +1,32 @@
+# CCSD(T) spherical gate (docs/CCSD_T_SCOPE.md), against PySCF RCCSD + ccsd_t,
+# mol.cart = False, Planck's GBS.
+%begin_control
+    basis       cc-pvdz
+    calculation energy
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation ccsd(t)
+    use_diis    .true.
+    diis_dim    8
+    save_checkpoint .false.
+    guess       sad
+    tol_energy  1.0e-11
+    tol_density 1.0e-10
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.117176
+H     0.000000     0.756950    -0.468703
+H     0.000000    -0.756950    -0.468703
+%end_coords

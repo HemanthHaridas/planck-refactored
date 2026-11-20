@@ -40,8 +40,9 @@ teaching code) reorders it.
 
 1. **CCSD(T).** It is the benchmark method users ask for first.
    Restricted and UHF (T) landed 2026-11-20, batched and threaded, and equal
-   PySCF. Remaining: a spatial RCCSD for larger systems (the spin-orbital
-   solver limits size), the spherical gate and ROHF-(T).
+   PySCF in Cartesian and spherical bases. Remaining: a faster CCSD for
+   larger systems (the spin-orbital RCCSD and the generated UCCSD limit
+   size, not (T)), and ROHF-(T).
    Scope: `docs/CCSD_T_SCOPE.md`.
 2. **SCF robustness on medium systems.** 32-water RKS hits `max_cycles`
    (§2, DFT). Scope: `docs/SCF_CONVERGENCE_MEDIUM_SYSTEMS_SCOPE.md`.
@@ -201,12 +202,14 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
 ### HF and post-HF
 
 - **CCSD(T): restricted and UHF are done** (`docs/CCSD_T_SCOPE.md`).
-  `correlation ccsd(t)` and `uccsd(t)` equal PySCF in Cartesian bases, with
-  batched, threaded (T). `uccsd(t)` needs `-DPLANCK_CC_UCC=ON`. System size
-  is now limited by the hand-written spin-orbital RCCSD, not by (T). Open:
-  - the spherical water/cc-pVDZ gate;
+  `correlation ccsd(t)` and `uccsd(t)` equal PySCF in Cartesian and
+  spherical bases, with batched, threaded (T). `uccsd(t)` needs
+  `-DPLANCK_CC_UCC=ON`. System size is now limited by the CCSD, not by (T).
+  Open:
   - ROHF-(T), after semicanonical ROHF-CC;
-  - a spatial RCCSD for larger `ccsd(t)` systems.
+  - a spatial RCCSD for larger `ccsd(t)` systems (`docs/CCSD_T_SIZE_SCOPE.md`:
+    try the generated rank-2 RCC route first; it is already emitted, but the
+    generated floor is 3, so nothing runs it).
 - **ROHF:** RMP2/UMP2, coupled cluster, stability, PCM and SOSCF reject ROHF.
   SOSCF and stability need new orbital-response machinery for the effective
   Roothaan Fock, which does not exist in the tree. ROHF CASSCF and RASSCF
@@ -365,6 +368,16 @@ None of these blocks correctness. Take each up only with a current profile.
   memory strategy, not a prerequisite for it. RI work is split across ranks
   with the data replicated (M1, 2026-11-17); distributing the 3-center
   tensor (M2) is open: `docs/RI_MPI_SCOPE.md`.
+  - **CC under MPI** (`docs/CC_MPI_SCOPE.md`). Every rank currently runs
+    the full CC redundantly. In order:
+    - M0: (T) across ranks; bitwise equal to serial through owned slots.
+    - M1: split the generated CCSD residual by outer index, after the
+      spatial RCCSD.
+    - M2: split the memory; only once a single node is saturated.
+
+    The spatial RCCSD and RI come first. (Threading the generated kernels,
+    also a prerequisite, is now the default.)
+    `planck-mpi` also lacks `PLANCK_CC_UCC`, so it has no `uccsd(t)`.
 - **CASSCF** (`docs/CASSCF_PERFORMANCE.md`). Stopped at 1.3× behind PySCF at
   water cc-pVTZ C2v, which was accepted. Leftovers, only with a new target:
   re-profile cc-pVTZ C2v, a better relaxed-solve preconditioner, and the RI
@@ -422,11 +435,13 @@ None of these blocks correctness. Take each up only with a current profile.
     after the rounding fix no parent is below one walker, so the option has
     no effect and can be removed.
 - **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
-  `docs/CCGEN_KERNEL_PERFORMANCE.md`):
+  `docs/CCGEN_KERNEL_PERFORMANCE.md`). Threading has been on by default
+  since 2026-11-20 (`PLANCK_CC_OMP_COLLAPSE`, default 3):
   - Re-profile the generated production configuration, separating
     per-iteration cost from iteration count.
   - Measure rank 4 on its own, including the registry `-O1` pin. Rank 3 is
-    not a proxy.
+    not a proxy. Threaded rank 4 is bitwise correct, but slower on
+    Be/STO-3G (thousands of short nests); time it on a system that matters.
   - Extend occupied-size and working-set coverage if cache effects matter.
   - Confirm the actual route for new fixtures: the determinant backstop
     belongs to `tensor_backend.cpp` only.

@@ -6149,6 +6149,53 @@
    ]
   },
   {
+   "id": "water_rccsd_t_spherical_ccpvdz",
+   "input": "tests/inputs/regression/post_hf/water_rccsd_t_spherical_ccpvdz.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 RCCSD + ccsd_t, cart=False, Planck's GBS: total -76.2431380861, E(T) -0.0030556274. Equal to every printed digit (2026-11-20).",
+   "tags": [
+    "extended",
+    "post_hf",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Total RCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rccsd_t_total_energy",
+     "expected": -76.2431380861,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uccsd_t_spherical_ccpvdz",
+   "input": "tests/inputs/regression/post_hf/water_cation_uccsd_t_spherical_ccpvdz.hfinp",
+   "timeout_s": 600,
+   "_pyscf_reference": "PySCF 2.15.0 UHF + UCCSD + uccsd_t, cart=False, Planck's GBS: total -75.8035962274, E(T) -0.0021313223. Equal to every printed digit (2026-11-20).",
+   "tags": [
+    "extended",
+    "post_hf",
+    "spherical",
+    "ucc"
+   ],
+   "requires_build_option": "PLANCK_CC_UCC",
+   "expected_exit_code": 0,
+   "contains": [
+    "Total UCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "uccsd_t_total_energy",
+     "expected": -75.8035962274,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "water_rccsd_t_sto3g",
    "input": "tests/inputs/regression/post_hf/water_rccsd_t_sto3g.hfinp",
    "_pyscf_reference": "PySCF 2.15.0 RCCSD + ccsd_t, cart=True, Planck's GBS (parse_gaussian.load): E_CCSD(T) -75.0123539648, E(T) -0.0000673675. Equal to every printed digit (2026-11-20).",

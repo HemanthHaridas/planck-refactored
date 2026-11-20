@@ -22,27 +22,24 @@ then as the answer. Status lives in `vault/Status/Open Work.md` (priority 1).
 | Restricted C++ (`ccsd(t)`) | Done (`9e330d91`, batched `cf1e1d79`). Cartesian gates: water STO-3G and 6-31G (core), C1 H2O2 6-31G (extended) |
 | Unrestricted lowering (four blocks) | Done. Equal to PySCF `uccsd_t` to ≤ 7.3e-15 on OH and water⁺ |
 | Unrestricted C++ (`uccsd(t)`) | Done, not yet committed. Gates `oh_uccsd_t_631g`, `water_cation_uccsd_t_631g` (extended, skip without UCC) |
-| Spherical gate (water cc-pVDZ) | Open |
+| Spherical gates (water cc-pVDZ) | Done. `water_rccsd_t_spherical_ccpvdz` and `water_cation_uccsd_t_spherical_ccpvdz` equal PySCF `cart=False` exactly (extended) |
 | ROHF-(T) | Open; needs semicanonical ROHF-CC first |
 | Larger systems | Limited by the CCSD, not (T): the hand-written RCCSD is spin-orbital |
 
 ## What remains, in order
 
-### 1. Spherical gate
-
-Water cc-pVDZ, `basis_type spherical`, against PySCF `cart=False` built from
-Planck's GBS, for `ccsd(t)` and `uccsd(t)`. Nothing (T)-specific is expected
-to change: the amplitudes and MO blocks are already in the working basis.
-
-### 2. ROHF-(T)
+### 1. ROHF-(T)
 
 Needs semicanonical ROHF-CC and the f_ov terms (`canonical_fock=False`). It
 comes after `docs/ROHF_CORRELATION_SCOPE.md`.
 
-### 3. Size
+### 2. Size
+
+Scoped separately: `docs/CCSD_T_SIZE_SCOPE.md`.
 
 At C1 H2O2 6-31G, (T) takes 0.27 s against 31 s of spin-orbital RCCSD
-(22 × 1.39 s). The hand-written RCCSD stores (2o)²(2v)² amplitudes and
+(22 × 1.39 s). On spherical water⁺ cc-pVDZ, the generated UCCSD takes
+23 × 9.4 s at 4 threads against 0.09 s of (T). The hand-written RCCSD stores (2o)²(2v)² amplitudes and
 blocks up to (2v)⁴, about 1 GB of `vvvv` at water cc-pVTZ. A larger
 `ccsd(t)` needs a spatial RCCSD, not a faster (T).
 

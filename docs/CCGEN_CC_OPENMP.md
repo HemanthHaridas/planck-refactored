@@ -11,16 +11,16 @@ This file answers a narrower architecture question:
 
 ## Short answer
 
-**3.22x at 4 threads, and a 2.6 % win that has nothing to do with threading.** Landed 2026-08-30. CC was the only hot path in Planck with no OpenMP at all; it now emits `#pragma omp parallel for collapse(3) schedule(static)` on every residual nest, behind `CCGEN_OMP_COLLAPSE` (default off).
+**3.22x at 4 threads, and a 2.6 % win that has nothing to do with threading.** Landed 2026-08-30. CC was the only hot path in Planck with no OpenMP at all; it now emits `#pragma omp parallel for collapse(3) schedule(static)` on every residual nest when `CCGEN_OMP_COLLAPSE` is set. **Since 2026-11-20 it is on by default in every CMake build**: the option `PLANCK_CC_OMP_COLLAPSE` (default 3) passes it to all three generator runs (RCC, UCC, CCSD(T)).
 
 | emit | 1t | 4t | 8t | **4t speedup** |
 |---|---|---|---|---|
-| default (`CCGEN_OMP_COLLAPSE` unset) | **76.68 s** | 75.82 s | — | 1.01x |
+| unthreaded (`CCGEN_OMP_COLLAPSE` unset; the default until 2026-11-20) | **76.68 s** | 75.82 s | — | 1.01x |
 | `CCGEN_OMP_COLLAPSE=3` | 74.37 s | **23.11 s** | 18.31 s | **3.22x** |
 
 HF/6-31G through the generated rank-3 route, on `build-full` (g++-15, Release, MAXORDER=4, dressed + merged). Energies are **bitwise identical** at 1/2/4/8 threads and against the unthreaded baseline. CPU utilization went **99.1 % -> 359.9 %** on a 4-performance-core machine.
 
-The default row is the surprise: it carries no threading — it is a by-product (a duplicate-builder fix) worth 2.6 % to every build whether or not anyone enables OpenMP.
+The unthreaded row is the surprise: it carries no threading — it is a by-product (a duplicate-builder fix) worth 2.6 % to every build whether or not anyone enables OpenMP.
 
 ## Where the logic lives
 
@@ -109,11 +109,25 @@ Quote the same-binary serial reference: 3.22x is against 74.37 s, the threaded b
 
 ## Using it
 
+Threaded is the default:
+
 ```bash
-CCGEN_OMP_COLLAPSE=3 cmake --build build    # threaded CC kernels
+cmake -DPLANCK_CC_OMP_COLLAPSE=3 ..   # the default; 0 emits no pragma
 ```
 
-Default (unset or 0) emits no pragma and is byte-identical to the pre-existing emit apart from the removed dead builds. If threading becomes the default, that is the moment for a CMake option, not before.
+CMake passes the value to the generator as `CCGEN_OMP_COLLAPSE`. Custom commands do not see cache variables, so the value also goes into `build/generated/cc/omp_collapse.stamp`, which every generator command depends on. That file is rewritten only when the value changes, so changing the option regenerates the kernels and leaving it alone does not. A direct run of `generate_planck_cc_kernels.py` without the variable still emits no pragma.
+
+**Default switch, verified 2026-11-20** (old single-core binary as the baseline, timings stripped). Every iteration's E_corr, dE, rms(res) and rms(step) are bitwise identical at 1, 2, 4 and 8 threads, and identical to the baseline:
+
+| case | baseline | 4 threads | 8 threads |
+|---|---|---|---|
+| `oh_uccsd_t_631g` (generated UCC + (T)) | 12.25 s | 3.59 s (3.4×) | 2.90 s |
+| `be_rccsdtq_sto3g` (generated rank 4) | 1.50 s | 1.75 s | 2.70 s |
+| `water_rccsd_t_631g` (hand-written CCSD) | 1.07 s | 0.97 s | 0.97 s |
+
+Pragma counts per generated TU: `ccsdt` 948 (the count recorded above), `ccsdtq` 11995, `ccsdtq_ucc` 18425.
+
+Tiny systems get slower. Be/STO-3G rank 4 has about 12,000 short nests per iteration, and starting a parallel region for each costs more than the work. It is harmless at that size; a minimum-work threshold per nest would fix it if a small case ever matters.
 
 ## Validation strategy that should remain in place
 
@@ -131,5 +145,5 @@ Default (unset or 0) emits no pragma and is byte-identical to the pre-existing e
 
 ## Remaining architecture concern
 
-- **Rank 4 threading is untested.** The dead-builder fix is verified there (`be_rccsdtq_sto3g` passes), but no threaded rank-4 TU has been built. With 894 operators against 88, the dead-builder share should be larger than rank 3's 2.6 %.
+- **Rank 4 threading is verified for correctness, not for speed.** `be_rccsdtq_sto3g` is bitwise identical at 1/2/4/8 threads (2026-11-20), but it is too small to show a speedup, and is slower threaded. A rank-4 timing on a system large enough to matter is still to do.
 - **Beyond 4 threads is unmeasured on real hardware.** 8 threads gives 3.22x -> 4.06x of the serial time but the measuring machine has only 4 performance cores, so the 8-thread numbers say little about a real 8-core run.

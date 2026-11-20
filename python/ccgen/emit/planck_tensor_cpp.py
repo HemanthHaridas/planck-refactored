@@ -653,7 +653,9 @@ def _omp_collapse_setting() -> int:
     An env var rather than a threaded parameter, following `_fuse_loops_setting`
     and for the same reason: `print_cpp_planck` already carries 16 branches, and
     W3 set the precedent that a knob earns a parameter only once it is staying.
-    The CMake option `PLANCK_CC_OMP_COLLAPSE` sets it for a build.
+    The CMake option `PLANCK_CC_OMP_COLLAPSE` (default 3) passes it to every
+    generator invocation, so a CMake build is threaded by default; a direct
+    script run without the variable is not.
 
     Unset or 0 => no pragma, byte-identical to the unthreaded emit. **3 is the
     measured value** (docs/CCGEN_CC_OPENMP.md): 3.22x at 4 threads on HF/6-31G
@@ -665,6 +667,8 @@ def _omp_collapse_setting() -> int:
         return max(0, int(raw))
     except ValueError:
         return 0
+
+
 def _fuse_loops_setting() -> int:
     """How many loop-signature groups to fuse, from `CCGEN_FUSE_LOOPS`.
 
