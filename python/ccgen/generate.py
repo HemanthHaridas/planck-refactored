@@ -217,7 +217,8 @@ def _process_term_chunk(
     # Projection is streamed term-by-term so we never materialize the full
     # projected list for a large BCH expansion.  This keeps memory usage closer
     # to "current chunk" size instead of "all terms for the manifold".
-    projected_terms = iter(iter_projected_terms_from_terms(terms, manifold))
+    projected_terms = iter(iter_projected_terms_from_terms(
+        terms, manifold, require_connected=connected_only))
 
     while True:
         t1 = time.monotonic()

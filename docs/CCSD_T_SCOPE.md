@@ -61,6 +61,26 @@ target `Σ X·Y/D`. No new Wick machinery.
   compare E(T) with PySCF `ccsd_t_slow` (spin-orbital, then spatial). This is
   where sign and weight errors show up cheaply.
 
+**Done 2026-11-20.** `python/ccgen/methods/ccsd_t.py` gives W (18 terms,
+P(i/jk)P(a/bc) of the two V·T2 contractions) and V (9 terms,
+P(i/jk)P(a/bc) t_i^a ⟨jk||bc⟩). At PySCF's converged GCCSD amplitudes,
+E(T) = (1/36) Σ (W+V) W / D equals `gccsd_t.kernel` to ≤ 4.8e-12 on water
+STO-3G and 6-31G, C1 H2O2 STO-3G and the OH doublet 6-31G (GHF)
+(`ccgen/tests/test_ccsd_t_vs_pyscf.py`). Dropping V misses by 9.9e-5 and
+flipping one W term by 1.3e-3.
+
+The premise above was wrong in one place. `connected_only` did nothing:
+`iter_projected_terms_from_terms` called `wick_contract` with
+`require_connected=True` hardwired for every excited manifold, so V came out
+empty. The projector now takes `require_connected`, which
+`_process_term_chunk` passes as `connected_only`. The default is unchanged.
+`bucket_terms_by_manifold` also drops disconnected products, because its
+pre-filter assumes BCH commutators, so `ccsd_t.py` bypasses it. Two bare
+products need no pre-pruning.
+
+Spatial (restricted) lowering of W and V is not done yet. It is needed
+before the restricted C++ kernel (step 2).
+
 ### 2. Emit the kernel
 
 Through the existing emitter (`emit/planck_tensor_cpp.py`) into the generated

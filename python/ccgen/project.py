@@ -536,8 +536,14 @@ def _classify_indices(
 def iter_projected_terms_from_terms(
     terms: tuple[OpTerm, ...] | list[OpTerm],
     manifold: str,
+    require_connected: bool = True,
 ) -> Iterator[AlgebraTerm]:
-    """Yield projected algebra terms for a given excitation manifold."""
+    """Yield projected algebra terms for a given excitation manifold.
+
+    Excited manifolds keep only connected contractions unless
+    ``require_connected`` is False; the (T) disconnected V_N T1 projection is
+    the one caller that needs the full set (methods/ccsd_t.py).
+    """
     proj_ops, proj_free = _get_projector(manifold)
 
     for term in terms:
@@ -553,7 +559,7 @@ def iter_projected_terms_from_terms(
             combined,
             term.tensors,
             block_ids,
-            require_connected=(manifold not in ("energy", "reference")),
+            require_connected=(require_connected and manifold not in ("energy", "reference")),
             n_blocks=n_blocks,
             ignore_block=ignore,
         )
@@ -568,7 +574,7 @@ def iter_projected_terms_from_terms(
                 continue
             conn = (
                 True
-                if manifold not in ("energy", "reference")
+                if require_connected and manifold not in ("energy", "reference")
                 else is_connected(n_blocks, wr.block_edges, ignore_block=ignore)
             )
 
