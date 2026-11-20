@@ -46,6 +46,14 @@ namespace DFT
         Eigen::Index point_begin = 0,
         Eigen::Index point_end = -1);
 
+    std::expected<XCMatrixContribution, std::string>
+    assemble_xc_matrix(
+        const MolecularGrid &molecular_grid,
+        const ScreenedAOGrid &ao_grid,
+        const XCGridEvaluation &xc_grid,
+        Eigen::Index point_begin = 0,
+        Eigen::Index point_end = -1);
+
     KSPotentialMatrices combine_ks_potential(
         const Eigen::Ref<const Eigen::MatrixXd> &coulomb,
         const XCMatrixContribution &xc_matrix,

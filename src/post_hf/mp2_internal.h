@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/mpi_env.h"
 #include "base/types.h"
 #include "integrals/shellpair.h"
 
@@ -258,6 +259,11 @@ namespace HartreeFock::Correlation::detail
             return std::unexpected("RMP2 OVOV RI tile stream: pair tile width must be positive.");
         if (!consumer)
             return std::unexpected("RMP2 OVOV RI tile stream: consumer is empty.");
+        // RI under MPI (docs/RI_MPI_SCOPE.md): each rank sums its own aux
+        // columns and every tile is summed over ranks before the consumer
+        // sees it, so all ranks hand the consumer the same tiles in the same
+        // order.
+        const HartreeFock::Mpi::Stripe stripe;
         for (int p0=0;p0<npair;p0+=pair_tile_width)
             for (int q0=0;q0<npair;q0+=pair_tile_width)
             {
@@ -268,8 +274,10 @@ namespace HartreeFock::Correlation::detail
                 for (int ip=0;ip<rows;++ip)
                     for (int iq=0;iq<cols;++iq)
                         for (Eigen::Index qaux=0;qaux<b_ov.cols();++qaux)
-                            tile.values[static_cast<std::size_t>(ip)*cols+iq]+=
-                                b_ov(p0+ip,qaux)*b_ov(q0+iq,qaux);
+                            if (stripe.owns(static_cast<std::size_t>(qaux)))
+                                tile.values[static_cast<std::size_t>(ip)*cols+iq]+=
+                                    b_ov(p0+ip,qaux)*b_ov(q0+iq,qaux);
+                HartreeFock::Mpi::allreduce_inplace(tile.values.data(), tile.values.size());
                 if (!consumer(tile)) return {};
             }
         return {};

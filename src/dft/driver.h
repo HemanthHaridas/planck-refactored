@@ -44,7 +44,24 @@ namespace DFT::Driver
     {
         std::vector<HartreeFock::ShellPair> shell_pairs;
         MolecularGrid molecular_grid;
-        AOGridEvaluation ao_grid;
+        // AO values/gradients, screened per point block. The SCF density, XC
+        // matrix and XC gradient run on it directly.
+        ScreenedAOGrid ao_blocks;
+        // Dense arrays for the consumers not yet ported to blocks (Hessian-
+        // vector products, double hybrids, TDDFT), built from ao_blocks on
+        // first use. Set ao_blocks only through set_ao_blocks.
+        mutable std::optional<AOGridEvaluation> ao_dense;
+        [[nodiscard]] const AOGridEvaluation &dense_ao() const
+        {
+            if (!ao_dense)
+                ao_dense = to_dense(ao_blocks);
+            return *ao_dense;
+        }
+        void set_ao_blocks(ScreenedAOGrid blocks)
+        {
+            ao_blocks = std::move(blocks);
+            ao_dense.reset();
+        }
         GridPreset grid_preset;
         // The immutable quadrature policy used to build molecular_grid.  Keep
         // it beside the geometry-dependent grid so derivative/rebuild paths

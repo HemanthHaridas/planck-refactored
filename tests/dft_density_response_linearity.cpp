@@ -86,7 +86,7 @@ namespace
 
         // The evaluator itself symmetrizes internally, so delta-P must be
         // symmetric for the finite difference to compare like with like --
-        // exactly the shape build_uhf_cphf_matrix's own dm1a_sym construction
+        // exactly the shape OrbitalHessian's UHF own dm1a_sym construction
         // produces for a real trial orbital rotation (Ca_virt*x*Ca_occ^T +
         // transpose), so this is not a special case invented for the test.
 

@@ -1,0 +1,30 @@
+# Cartesian UMP2 frequency gate (docs/SPHERICAL_MP2_GRADIENTS.md).
+# Reference: tests/pyscf/mp2_frequency_references.py.
+%begin_control
+    basis       sto-3g
+    calculation frequency
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    uhf
+    correlation ump2
+    guess       sad
+    max_cycles  100
+    tol_energy  1.0e-12
+    tol_density 1.0e-11
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+1   2
+O     0.000000    0.000000     0.117176
+H     0.000000    0.756950    -0.468703
+H     0.000000   -0.756950    -0.468703
+%end_coords

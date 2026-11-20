@@ -77,11 +77,19 @@ class WorkflowRoutingTests(unittest.TestCase):
     def test_frequency_restores_state_before_publishing(self):
         block = self.driver.split("run_frequency_analysis(", 1)[1].split("run_geometry_optimization(", 1)[0]
         markers = ["compute_hessian(calculator, gradient_runner)",
-                   "set_standard_from_bohr(reference_geometry)", "gradient_runner(calculator)",
+                   "set_standard_from_bohr(reference_geometry)",
                    "store_frequency_result(calculator, *result)"]
         offsets = [block.index(marker) for marker in markers]
         self.assertEqual(offsets, sorted(offsets))
         self.assertIn("calculator._hessian_step", block)
+        # compute_hessian itself rebuilds the reference state (since 33944891),
+        # after the displacement loop and before the vibrational analysis.
+        hessian = (ROOT / "src" / "freq" / "hessian.cpp").read_text()
+        tail = hessian.split("result.hessian = (0.5 * (result.hessian + result.hessian.transpose())).eval();", 1)[1]
+        rebuild = ["sync_coordinate_frames_from_standard()", "gradient_runner(calc)",
+                   "vibrational_analysis(result, calc)"]
+        offsets = [tail.index(marker) for marker in rebuild]
+        self.assertEqual(offsets, sorted(offsets))
 
     def test_geometry_preparation_preserves_user_scf_limit(self):
         block = self.driver.split("prepare_current_geometry(", 1)[1].split(

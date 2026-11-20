@@ -1,6 +1,8 @@
 #include "dft_gradient.h"
 
+#include <algorithm>
 #include <array>
+#include <string>
 #include <vector>
 
 #include "basis/basis.h"
@@ -232,10 +234,24 @@ namespace DFT::Gradient
         const Eigen::MatrixXd &coordinates = mol._standard;
         const Eigen::VectorXi &atomic_numbers = mol.atomic_numbers;
 
-        std::vector<double> products(static_cast<std::size_t>(natoms), 1.0);
-        std::vector<Eigen::MatrixXd> dproducts(
-            static_cast<std::size_t>(natoms),
-            Eigen::MatrixXd::Zero(natoms, 3));
+        // O(natoms^2) per point. s(k,j) is the cell function of atom k against
+        // j (s(j,k) = 1 - s(k,j), s(k,k) = 1); ds(i,j) for i < j lives in three
+        // rows only (owner, i, j). P_k = prod_j s(k,j) and
+        // dP_k = sum_j (prod_{l != j} s(k,l)) ds(k,j), the excluded products
+        // from prefix/suffix products (no division, so s -> 0 is safe).
+        struct Scratch
+        {
+            Eigen::MatrixXd s;                  // natoms x natoms
+            std::vector<Eigen::Matrix3d> ds;    // per i<j pair: rows = d/dR of owner, i, j (cols x,y,z)
+            std::vector<double> pre;            // natoms + 1
+        };
+        thread_local Scratch scratch;
+        Eigen::MatrixXd &s = scratch.s;
+        s.setOnes(natoms, natoms);
+        scratch.ds.resize(static_cast<std::size_t>(natoms * natoms));
+        scratch.pre.resize(static_cast<std::size_t>(natoms + 1));
+        const auto ds_of = [&](Eigen::Index i, Eigen::Index j) -> Eigen::Matrix3d &
+        { return scratch.ds[static_cast<std::size_t>(i * natoms + j)]; };
 
         for (Eigen::Index i = 0; i < natoms; ++i)
         {
@@ -270,9 +286,18 @@ namespace DFT::Gradient
                         ? DFT::detail::becke_switch_derivative(mu_clamped)
                         : 0.0;
 
-                Eigen::MatrixXd ds = Eigen::MatrixXd::Zero(natoms, 3);
-                for (Eigen::Index atom = 0; atom < natoms; ++atom)
+                s(i, j) = sij;
+                s(j, i) = 1.0 - sij;
+                Eigen::Matrix3d &dsij = ds_of(i, j);
+                dsij.setZero();
+
+                // d s_ij / dR is nonzero only in the rows of the owner, i and j.
+                const Eigen::Index rows[3] = {owner, i, j};
+                for (int r = 0; r < 3; ++r)
                 {
+                    const Eigen::Index atom = rows[r];
+                    if (r > 0 && atom == owner)
+                        continue;
                     const double delta_owner = (atom == owner) ? 1.0 : 0.0;
                     const double delta_i = (atom == i) ? 1.0 : 0.0;
                     const double delta_j = (atom == j) ? 1.0 : 0.0;
@@ -284,62 +309,238 @@ namespace DFT::Gradient
                         ((ddi - ddj) * Rij - (di - dj) * dR) / (Rij * Rij);
                     const Eigen::Vector3d dmu_adjusted =
                         (1.0 - 2.0 * aij * mu_raw) * dmu_raw;
-                    ds.row(atom) = (ds_dmu * dmu_adjusted).transpose();
+                    dsij.row(r) = (ds_dmu * dmu_adjusted).transpose();
                 }
-
-                const double old_pi = products[static_cast<std::size_t>(i)];
-                const double old_pj = products[static_cast<std::size_t>(j)];
-                const Eigen::MatrixXd old_dpi = dproducts[static_cast<std::size_t>(i)];
-                const Eigen::MatrixXd old_dpj = dproducts[static_cast<std::size_t>(j)];
-
-                products[static_cast<std::size_t>(i)] = old_pi * sij;
-                products[static_cast<std::size_t>(j)] = old_pj * (1.0 - sij);
-                dproducts[static_cast<std::size_t>(i)] = old_dpi * sij + old_pi * ds;
-                dproducts[static_cast<std::size_t>(j)] = old_dpj * (1.0 - sij) - old_pj * ds;
             }
         }
 
-        double sum = 0.0;
+        // dP_owner and dsum = sum_k dP_k, both natoms x 3.
+        Eigen::MatrixXd downer = Eigen::MatrixXd::Zero(natoms, 3);
         Eigen::MatrixXd dsum = Eigen::MatrixXd::Zero(natoms, 3);
-        for (Eigen::Index atom = 0; atom < natoms; ++atom)
+        double sum = 0.0, owner_product = 0.0;
+        auto &pre = scratch.pre;
+        for (Eigen::Index k = 0; k < natoms; ++k)
         {
-            sum += products[static_cast<std::size_t>(atom)];
-            dsum += dproducts[static_cast<std::size_t>(atom)];
+            pre[0] = 1.0;
+            for (Eigen::Index j = 0; j < natoms; ++j)
+                pre[static_cast<std::size_t>(j + 1)] = pre[static_cast<std::size_t>(j)] * s(k, j);
+            const double Pk = pre[static_cast<std::size_t>(natoms)];
+            sum += Pk;
+            if (k == owner)
+                owner_product = Pk;
+
+            double suffix = 1.0; // prod_{l > j} s(k,l)
+            for (Eigen::Index j = natoms - 1; j >= 0; --j)
+            {
+                if (j != k)
+                {
+                    // ds(k,j) = +ds_{kj} for k < j, -ds_{jk} for k > j (s(j,k) = 1 - s(k,j)).
+                    const Eigen::Index lo = std::min(k, j), hi = std::max(k, j);
+                    const double coeff = (k < j ? 1.0 : -1.0) * pre[static_cast<std::size_t>(j)] * suffix;
+                    const Eigen::Matrix3d &d = ds_of(lo, hi);
+                    const Eigen::Index rows[3] = {owner, lo, hi};
+                    for (int r = 0; r < 3; ++r)
+                    {
+                        if (r > 0 && rows[r] == owner)
+                            continue;
+                        dsum.row(rows[r]) += coeff * d.row(r);
+                        if (k == owner)
+                            downer.row(rows[r]) += coeff * d.row(r);
+                    }
+                }
+                suffix *= s(k, j);
+            }
         }
         if (sum <= 0.0)
             return std::unexpected("Becke partition derivative: partition denominator underflowed");
 
-        const double owner_product = products[static_cast<std::size_t>(owner)];
-        Eigen::MatrixXd derivatives = Eigen::MatrixXd::Zero(natoms, 3);
-        for (Eigen::Index atom = 0; atom < natoms; ++atom)
-        {
-            for (int q = 0; q < 3; ++q)
-            {
-                derivatives(atom, q) =
-                    (dproducts[static_cast<std::size_t>(owner)](atom, q) * sum -
-                     owner_product * dsum(atom, q)) /
-                    (sum * sum);
-            }
-        }
-
-        return derivatives;
+        return (downer * sum - owner_product * dsum) / (sum * sum);
     }
 
+    namespace
+    {
+        // One spin channel of the XC nuclear gradient: symmetrized density and
+        // the per-point weights of the AO contraction. LDA: aow = wv0 phi.
+        // GGA: aow = wv0 phi + sum_k wvg_k g_k and aow_q = wv0 g_q + sum_k wvg_k h_qk.
+        struct XCGradientChannel
+        {
+            Eigen::MatrixXd P;   // nb x nb, symmetric
+            Eigen::VectorXd wv0; // npts
+            Eigen::MatrixXd wvg; // npts x 3 (GGA only)
+        };
+
+        constexpr Eigen::Index kXCGradientBins = 64; // fixed: the sum order must not depend on threads
+
+        // Shared RKS/UKS driver. Per point, vtmp_q = g_q aow^T (+ aow_q phi^T
+        // for GGA) is only ever contracted with P (symmetric). Per block that is
+        // E_q = g_q o (A P) + A_q o (Phi P) (elementwise, n x nb): its row sums
+        // are the owner-atom term, its column sums the basis-function-motion
+        // term of each AO. No nb x nb accumulator is needed.
+        template <class AOGrid>
+        std::expected<Eigen::MatrixXd, std::string> xc_nuclear_gradient(
+            const HartreeFock::Molecule &mol,
+            const HartreeFock::Basis &basis,
+            const MolecularGrid &grid,
+            const AOGrid &ao,
+            const XCGridEvaluation &xc,
+            const std::vector<XCGradientChannel> &channels,
+            bool gga)
+        {
+            auto atoms_bf = atom_bf_lists(mol, basis);
+            if (!atoms_bf)
+                return std::unexpected(atoms_bf.error());
+
+            const Eigen::Index nb = ao.nbasis();
+            const Eigen::Index npts = ao.npoints();
+            const Eigen::Index natoms = static_cast<Eigen::Index>(mol.natoms);
+            constexpr int hidx[3][3] = {{0, 1, 2}, {1, 3, 4}, {2, 4, 5}};
+
+            // Determinism: blocks go into a fixed number of bins of contiguous
+            // blocks (independent of the thread count); each bin is summed
+            // serially in block order, and the bins in bin order.
+            const Eigen::Index nblocks = ao_block_count(npts);
+            const Eigen::Index nbins = std::min<Eigen::Index>(kXCGradientBins, std::max<Eigen::Index>(nblocks, 1));
+            const Eigen::Index blocks_per_bin = (nblocks + nbins - 1) / std::max<Eigen::Index>(nbins, 1);
+            std::vector<Eigen::MatrixXd> grad_bin(nbins), bf_bin(nbins); // natoms x 3, nb x 3 (per-AO basis motion)
+            std::vector<std::string> err_bin(nbins);
+
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(dynamic, 1)
+#endif
+            for (Eigen::Index bin = 0; bin < nbins; ++bin)
+            {
+                Eigen::MatrixXd &grad = grad_bin[bin];
+                Eigen::MatrixXd &bf_t = bf_bin[bin];
+                grad.setZero(natoms, 3);
+                bf_t.setZero(nb, 3);
+                Eigen::MatrixXd phi, A, Aq, AP, phiP, E, owner_t, P_sub;
+                std::array<Eigen::MatrixXd, 3> g;
+                std::array<Eigen::MatrixXd, 6> h; // xx xy xz yy yz zz
+                MolecularGrid block_grid;         // GGA: this block's points, for its AO Hessian
+
+                const Eigen::Index b_end = std::min(nblocks, (bin + 1) * blocks_per_bin);
+                for (Eigen::Index b = bin * blocks_per_bin; b < b_end && err_bin[bin].empty(); ++b)
+                {
+                    // A screened block works on its kept AOs only: every
+                    // product below is zero on the others.
+                    const AOBlockView blk = ao.block(b);
+                    const Eigen::Index p0 = blk.p0;
+                    const Eigen::Index n = blk.n;
+                    phi = blk.phi;
+                    for (int k = 0; k < 3; ++k)
+                        g[k] = blk.grad[k];
+                    if (gga)
+                    {
+                        block_grid.points = grid.points.middleRows(p0, n);
+                        auto hess = evaluate_ao_hessian_on_grid(basis, block_grid, blk.cols);
+                        if (!hess)
+                        {
+                            err_bin[bin] = "DFT XC gradient: AO Hessian failed: " + hess.error();
+                            break;
+                        }
+                        h = {std::move(hess->h_xx), std::move(hess->h_xy), std::move(hess->h_xz),
+                             std::move(hess->h_yy), std::move(hess->h_yz), std::move(hess->h_zz)};
+                    }
+                    owner_t.setZero(n, 3);
+
+                    for (std::size_t c = 0; c < channels.size(); ++c)
+                    {
+                        const auto &ch = channels[c];
+                        if (blk.cols)
+                            P_sub = ch.P(*blk.cols, *blk.cols);
+                        const Eigen::MatrixXd &P = blk.cols ? P_sub : ch.P;
+                        const auto wv0 = ch.wv0.segment(p0, n).asDiagonal();
+                        A = wv0 * phi;
+                        if (gga)
+                            for (int k = 0; k < 3; ++k)
+                                A.noalias() += ch.wvg.col(k).segment(p0, n).asDiagonal() * g[k];
+                        AP.noalias() = A * P;
+                        if (gga)
+                            phiP.noalias() = phi * P;
+
+                        for (int q = 0; q < 3; ++q)
+                        {
+                            E = g[q].cwiseProduct(AP);
+                            if (gga)
+                            {
+                                Aq = wv0 * g[q];
+                                for (int k = 0; k < 3; ++k)
+                                    Aq.noalias() += ch.wvg.col(k).segment(p0, n).asDiagonal() * h[hidx[q][k]];
+                                E += Aq.cwiseProduct(phiP);
+                            }
+                            owner_t.col(q) += E.rowwise().sum();
+                            if (blk.cols)
+                                bf_t(*blk.cols, q) += E.colwise().sum().transpose();
+                            else
+                                bf_t.col(q) += E.colwise().sum().transpose();
+                        }
+                    }
+
+                    for (Eigen::Index i = 0; i < n; ++i)
+                    {
+                        const Eigen::Index ip = p0 + i;
+                        if (grid.points(ip, 3) == 0.0)
+                            continue;
+                        const Eigen::Index owner = grid.owner(ip);
+                        grad.row(owner) += 2.0 * owner_t.row(i);
+
+                        auto dpartition = becke_partition_owner_derivatives(grid, mol, ip);
+                        if (!dpartition)
+                        {
+                            err_bin[bin] = dpartition.error();
+                            break;
+                        }
+                        grad += (grid.atomic_weights(ip) * xc.energy_density(ip)) * (*dpartition);
+                    }
+                }
+            }
+
+            Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(natoms, 3);
+            Eigen::MatrixXd bf_t = Eigen::MatrixXd::Zero(nb, 3);
+            for (Eigen::Index bin = 0; bin < nbins; ++bin)
+            {
+                if (!err_bin[bin].empty())
+                    return std::unexpected(err_bin[bin]);
+                grad += grad_bin[bin];
+                bf_t += bf_bin[bin];
+            }
+
+            // Basis-function-motion term, gathered onto the atom carrying each AO.
+            for (std::size_t atom_A = 0; atom_A < mol.natoms; ++atom_A)
+                for (int mu : (*atoms_bf)[atom_A])
+                    grad.row(static_cast<Eigen::Index>(atom_A)) -= 2.0 * bf_t.row(mu);
+
+            return grad;
+        }
+
+        // Zero the weights of points the quadrature drops, so a non-finite XC
+        // value there cannot reach the block GEMMs (the old loop skipped them).
+        void mask_zero_weight(const Eigen::VectorXd &w, Eigen::VectorXd &wv0, Eigen::MatrixXd &wvg)
+        {
+            for (Eigen::Index p = 0; p < w.size(); ++p)
+                if (w(p) == 0.0)
+                {
+                    wv0(p) = 0.0;
+                    if (wvg.size() != 0)
+                        wvg.row(p).setZero();
+                }
+        }
+    } // namespace
+
+    namespace
+    {
+    template <class AOGrid>
     std::expected<Eigen::MatrixXd, std::string>
-    compute_xc_nuclear_gradient_rks(
+    xc_gradient_rks(
         const HartreeFock::Molecule &mol,
         const HartreeFock::Basis &basis,
         const MolecularGrid &grid,
-        const AOGridEvaluation &ao,
-        const AOGridHessian &hess,
+        const AOGrid &ao,
         const XCGridEvaluation &xc,
         const Eigen::Ref<const Eigen::MatrixXd> &density_restricted)
     {
         if (xc.density.polarized)
             return std::unexpected("compute_xc_nuclear_gradient_rks requires spin-unpolarized XC density");
-
-        if (hess.npoints() != ao.npoints() || hess.nbasis() != ao.nbasis())
-            return std::unexpected("AO Hessian dimensions do not match AO grid");
 
         if (grid.points.rows() != ao.npoints())
             return std::unexpected("molecular grid point count mismatch in XC gradient");
@@ -348,136 +549,33 @@ namespace DFT::Gradient
         if (density_restricted.rows() != nb || density_restricted.cols() != nb)
             return std::unexpected("restricted density dimension mismatch for XC gradient");
 
-        auto bf_shell = build_bf_shell_map(basis);
-        if (!bf_shell)
-            return std::unexpected(bf_shell.error());
-        auto shell_atom = build_shell_atom_map(mol, basis);
-        if (!shell_atom)
-            return std::unexpected(shell_atom.error());
-        const auto atoms_bf =
-            build_atoms_bf_lists(mol.natoms, *bf_shell, *shell_atom);
-
-        const Eigen::MatrixXd P_sym = 0.5 * (density_restricted + density_restricted.transpose());
-
-        Eigen::MatrixXd grad =
-            Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(mol.natoms), 3);
-        std::array<Eigen::MatrixXd, 3> vxc1 = {
-            Eigen::MatrixXd::Zero(nb, nb),
-            Eigen::MatrixXd::Zero(nb, nb),
-            Eigen::MatrixXd::Zero(nb, nb)};
-
         const bool gga = xc.vsigma.cols() >= 1;
-        const Eigen::Index npts = ao.npoints();
+        const Eigen::VectorXd w = grid.points.col(3);
 
-        for (Eigen::Index ip = 0; ip < npts; ++ip)
+        XCGradientChannel ch;
+        ch.P = 0.5 * (density_restricted + density_restricted.transpose());
+        // LDA's term is g_q aow^T alone; GGA splits vrho over two terms.
+        ch.wv0 = w.cwiseProduct(xc.vrho.col(0)) * (gga ? 0.5 : 1.0);
+        if (gga)
         {
-            const double w = grid.points(ip, 3);
-            if (w == 0.0)
-                continue;
-
-            auto dpartition = becke_partition_owner_derivatives(grid, mol, ip);
-            if (!dpartition)
-                return std::unexpected(dpartition.error());
-            const double w_atomic = grid.atomic_weights(ip);
-            const int owner_atom = grid.owner(ip);
-            const Eigen::VectorXd phi = ao.values.row(ip).transpose();
-            const Eigen::VectorXd gx = ao.grad_x.row(ip).transpose();
-            const Eigen::VectorXd gy = ao.grad_y.row(ip).transpose();
-            const Eigen::VectorXd gz = ao.grad_z.row(ip).transpose();
-
-            const double vrho = xc.vrho(ip, 0);
-            const double exc_density = xc.energy_density(ip);
-
-            std::array<Eigen::MatrixXd, 3> vtmp = {
-                Eigen::MatrixXd::Zero(nb, nb),
-                Eigen::MatrixXd::Zero(nb, nb),
-                Eigen::MatrixXd::Zero(nb, nb)};
-
-            if (!gga)
-            {
-                // LDA depends only on rho, so the AO derivative contribution is
-                // first-order in the AO gradients.
-                const Eigen::VectorXd aow = phi * (w * vrho);
-                vtmp[0].noalias() += gx * aow.transpose();
-                vtmp[1].noalias() += gy * aow.transpose();
-                vtmp[2].noalias() += gz * aow.transpose();
-            }
-            else
-            {
-                // GGA depends on grad(rho) as well, so the moving-grid term
-                // needs AO Hessians in addition to AO values and gradients.
-                const double vs = xc.vsigma(ip, 0);
-                const Eigen::Vector3d coeff =
-                    2.0 * vs * Eigen::Vector3d(xc.density.total.grad_x(ip), xc.density.total.grad_y(ip), xc.density.total.grad_z(ip));
-                const double wv0 = w * vrho * 0.5;
-                const double wv1 = w * coeff.x();
-                const double wv2 = w * coeff.y();
-                const double wv3 = w * coeff.z();
-
-                const Eigen::VectorXd aow =
-                    phi * wv0 + gx * wv1 + gy * wv2 + gz * wv3;
-                const Eigen::VectorXd aow_x =
-                    gx * wv0 +
-                    hess.h_xx.row(ip).transpose() * wv1 +
-                    hess.h_xy.row(ip).transpose() * wv2 +
-                    hess.h_xz.row(ip).transpose() * wv3;
-                const Eigen::VectorXd aow_y =
-                    gy * wv0 +
-                    hess.h_xy.row(ip).transpose() * wv1 +
-                    hess.h_yy.row(ip).transpose() * wv2 +
-                    hess.h_yz.row(ip).transpose() * wv3;
-                const Eigen::VectorXd aow_z =
-                    gz * wv0 +
-                    hess.h_xz.row(ip).transpose() * wv1 +
-                    hess.h_yz.row(ip).transpose() * wv2 +
-                    hess.h_zz.row(ip).transpose() * wv3;
-
-                vtmp[0].noalias() += gx * aow.transpose() + aow_x * phi.transpose();
-                vtmp[1].noalias() += gy * aow.transpose() + aow_y * phi.transpose();
-                vtmp[2].noalias() += gz * aow.transpose() + aow_z * phi.transpose();
-            }
-
-            for (int q = 0; q < 3; ++q)
-            {
-                vxc1[static_cast<std::size_t>(q)].noalias() -= vtmp[static_cast<std::size_t>(q)];
-                grad(static_cast<Eigen::Index>(owner_atom), q) +=
-                    2.0 * (vtmp[static_cast<std::size_t>(q)].cwiseProduct(P_sym)).sum();
-            }
-
-            for (std::size_t atom_A = 0; atom_A < mol.natoms; ++atom_A)
-                for (int q = 0; q < 3; ++q)
-                    grad(static_cast<Eigen::Index>(atom_A), q) +=
-                        w_atomic *
-                        (*dpartition)(static_cast<Eigen::Index>(atom_A), q) *
-                        exc_density;
+            const Eigen::VectorXd s = 2.0 * w.cwiseProduct(xc.vsigma.col(0));
+            ch.wvg.resize(w.size(), 3);
+            ch.wvg.col(0) = s.cwiseProduct(xc.density.total.grad_x);
+            ch.wvg.col(1) = s.cwiseProduct(xc.density.total.grad_y);
+            ch.wvg.col(2) = s.cwiseProduct(xc.density.total.grad_z);
         }
+        mask_zero_weight(w, ch.wv0, ch.wvg);
 
-        for (std::size_t atom_A = 0; atom_A < mol.natoms; ++atom_A)
-        {
-            for (int mu : atoms_bf[atom_A])
-            {
-                const Eigen::Index imu = static_cast<Eigen::Index>(mu);
-                for (Eigen::Index nu = 0; nu < nb; ++nu)
-                {
-                    for (int q = 0; q < 3; ++q)
-                    {
-                        grad(static_cast<Eigen::Index>(atom_A), q) +=
-                            2.0 * vxc1[static_cast<std::size_t>(q)](imu, nu) * P_sym(imu, nu);
-                    }
-                }
-            }
-        }
-
-        return grad;
+        return xc_nuclear_gradient(mol, basis, grid, ao, xc, {std::move(ch)}, gga);
     }
 
+    template <class AOGrid>
     std::expected<Eigen::MatrixXd, std::string>
-    compute_xc_nuclear_gradient_uks(
+    xc_gradient_uks(
         const HartreeFock::Molecule &mol,
         const HartreeFock::Basis &basis,
         const MolecularGrid &grid,
-        const AOGridEvaluation &ao,
-        const AOGridHessian &hess,
+        const AOGrid &ao,
         const XCGridEvaluation &xc,
         const Eigen::Ref<const Eigen::MatrixXd> &density_alpha,
         const Eigen::Ref<const Eigen::MatrixXd> &density_beta)
@@ -488,169 +586,75 @@ namespace DFT::Gradient
         if (xc.vrho.cols() != 2)
             return std::unexpected("polarized XC gradient expects vrho with two columns");
 
-        if (hess.npoints() != ao.npoints() || hess.nbasis() != ao.nbasis())
-            return std::unexpected("AO Hessian dimensions do not match AO grid");
-
         const Eigen::Index nb = ao.nbasis();
         if (density_alpha.rows() != nb || density_beta.rows() != nb)
             return std::unexpected("UKS density dimension mismatch for XC gradient");
 
-        auto bf_shell = build_bf_shell_map(basis);
-        if (!bf_shell)
-            return std::unexpected(bf_shell.error());
-        auto shell_atom = build_shell_atom_map(mol, basis);
-        if (!shell_atom)
-            return std::unexpected(shell_atom.error());
-        const auto atoms_bf =
-            build_atoms_bf_lists(mol.natoms, *bf_shell, *shell_atom);
-
-        const Eigen::MatrixXd Pa_sym = 0.5 * (density_alpha + density_alpha.transpose());
-        const Eigen::MatrixXd Pb_sym = 0.5 * (density_beta + density_beta.transpose());
-
-        Eigen::MatrixXd grad =
-            Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(mol.natoms), 3);
-        std::array<Eigen::MatrixXd, 3> vxc1_alpha = {
-            Eigen::MatrixXd::Zero(nb, nb),
-            Eigen::MatrixXd::Zero(nb, nb),
-            Eigen::MatrixXd::Zero(nb, nb)};
-        std::array<Eigen::MatrixXd, 3> vxc1_beta = {
-            Eigen::MatrixXd::Zero(nb, nb),
-            Eigen::MatrixXd::Zero(nb, nb),
-            Eigen::MatrixXd::Zero(nb, nb)};
-
         const bool gga = xc.vsigma.cols() == 3;
-        const Eigen::Index npts = ao.npoints();
+        const Eigen::VectorXd w = grid.points.col(3);
 
-        for (Eigen::Index ip = 0; ip < npts; ++ip)
+        std::vector<XCGradientChannel> channels(2);
+        channels[0].P = 0.5 * (density_alpha + density_alpha.transpose());
+        channels[1].P = 0.5 * (density_beta + density_beta.transpose());
+        for (int s = 0; s < 2; ++s)
+            channels[s].wv0 = w.cwiseProduct(xc.vrho.col(s)) * (gga ? 0.5 : 1.0);
+        if (gga)
         {
-            const double w = grid.points(ip, 3);
-            if (w == 0.0)
-                continue;
-
-            auto dpartition = becke_partition_owner_derivatives(grid, mol, ip);
-            if (!dpartition)
-                return std::unexpected(dpartition.error());
-            const double w_atomic = grid.atomic_weights(ip);
-            const int owner_atom = grid.owner(ip);
-            const Eigen::VectorXd phi = ao.values.row(ip).transpose();
-            const Eigen::VectorXd gx = ao.grad_x.row(ip).transpose();
-            const Eigen::VectorXd gy = ao.grad_y.row(ip).transpose();
-            const Eigen::VectorXd gz = ao.grad_z.row(ip).transpose();
-
-            const double vrho_a = xc.vrho(ip, 0);
-            const double vrho_b = xc.vrho(ip, 1);
-            const double exc_density = xc.energy_density(ip);
-
-            std::array<Eigen::MatrixXd, 3> vtmp_alpha = {
-                Eigen::MatrixXd::Zero(nb, nb),
-                Eigen::MatrixXd::Zero(nb, nb),
-                Eigen::MatrixXd::Zero(nb, nb)};
-            std::array<Eigen::MatrixXd, 3> vtmp_beta = {
-                Eigen::MatrixXd::Zero(nb, nb),
-                Eigen::MatrixXd::Zero(nb, nb),
-                Eigen::MatrixXd::Zero(nb, nb)};
-
-            if (!gga)
+            // coeff_a = 2 vs_aa grad_a + vs_ab grad_b; coeff_b = vs_ab grad_a + 2 vs_bb grad_b.
+            const auto &da = xc.density.alpha;
+            const auto &db = xc.density.beta;
+            const std::array<const Eigen::VectorXd *, 3> ga = {&da.grad_x, &da.grad_y, &da.grad_z};
+            const std::array<const Eigen::VectorXd *, 3> gb = {&db.grad_x, &db.grad_y, &db.grad_z};
+            const Eigen::VectorXd aa = 2.0 * w.cwiseProduct(xc.vsigma.col(0));
+            const Eigen::VectorXd ab = w.cwiseProduct(xc.vsigma.col(1));
+            const Eigen::VectorXd bb = 2.0 * w.cwiseProduct(xc.vsigma.col(2));
+            channels[0].wvg.resize(w.size(), 3);
+            channels[1].wvg.resize(w.size(), 3);
+            for (int k = 0; k < 3; ++k)
             {
-                const Eigen::VectorXd aow_a = phi * (w * vrho_a);
-                const Eigen::VectorXd aow_b = phi * (w * vrho_b);
-                vtmp_alpha[0].noalias() += gx * aow_a.transpose();
-                vtmp_alpha[1].noalias() += gy * aow_a.transpose();
-                vtmp_alpha[2].noalias() += gz * aow_a.transpose();
-                vtmp_beta[0].noalias() += gx * aow_b.transpose();
-                vtmp_beta[1].noalias() += gy * aow_b.transpose();
-                vtmp_beta[2].noalias() += gz * aow_b.transpose();
-            }
-            else
-            {
-                const Eigen::Vector3d grad_a(
-                    xc.density.alpha.grad_x(ip),
-                    xc.density.alpha.grad_y(ip),
-                    xc.density.alpha.grad_z(ip));
-                const Eigen::Vector3d grad_b(
-                    xc.density.beta.grad_x(ip),
-                    xc.density.beta.grad_y(ip),
-                    xc.density.beta.grad_z(ip));
-                const double vs_aa = xc.vsigma(ip, 0);
-                const double vs_ab = xc.vsigma(ip, 1);
-                const double vs_bb = xc.vsigma(ip, 2);
-                const Eigen::Vector3d coeff_a =
-                    2.0 * vs_aa * grad_a + vs_ab * grad_b;
-                const Eigen::Vector3d coeff_b =
-                    vs_ab * grad_a + 2.0 * vs_bb * grad_b;
-
-                const auto accumulate_gga_spin =
-                    [&](std::array<Eigen::MatrixXd, 3> &vtmp_spin,
-                        double vrho_spin,
-                        const Eigen::Vector3d &coeff_spin)
-                {
-                    const double wv0 = w * vrho_spin * 0.5;
-                    const double wv1 = w * coeff_spin.x();
-                    const double wv2 = w * coeff_spin.y();
-                    const double wv3 = w * coeff_spin.z();
-
-                    const Eigen::VectorXd aow =
-                        phi * wv0 + gx * wv1 + gy * wv2 + gz * wv3;
-                    const Eigen::VectorXd aow_x =
-                        gx * wv0 +
-                        hess.h_xx.row(ip).transpose() * wv1 +
-                        hess.h_xy.row(ip).transpose() * wv2 +
-                        hess.h_xz.row(ip).transpose() * wv3;
-                    const Eigen::VectorXd aow_y =
-                        gy * wv0 +
-                        hess.h_xy.row(ip).transpose() * wv1 +
-                        hess.h_yy.row(ip).transpose() * wv2 +
-                        hess.h_yz.row(ip).transpose() * wv3;
-                    const Eigen::VectorXd aow_z =
-                        gz * wv0 +
-                        hess.h_xz.row(ip).transpose() * wv1 +
-                        hess.h_yz.row(ip).transpose() * wv2 +
-                        hess.h_zz.row(ip).transpose() * wv3;
-
-                    vtmp_spin[0].noalias() += gx * aow.transpose() + aow_x * phi.transpose();
-                    vtmp_spin[1].noalias() += gy * aow.transpose() + aow_y * phi.transpose();
-                    vtmp_spin[2].noalias() += gz * aow.transpose() + aow_z * phi.transpose();
-                };
-
-                accumulate_gga_spin(vtmp_alpha, vrho_a, coeff_a);
-                accumulate_gga_spin(vtmp_beta, vrho_b, coeff_b);
-            }
-
-            for (int q = 0; q < 3; ++q)
-            {
-                vxc1_alpha[static_cast<std::size_t>(q)].noalias() -= vtmp_alpha[static_cast<std::size_t>(q)];
-                vxc1_beta[static_cast<std::size_t>(q)].noalias() -= vtmp_beta[static_cast<std::size_t>(q)];
-                grad(static_cast<Eigen::Index>(owner_atom), q) +=
-                    2.0 * (vtmp_alpha[static_cast<std::size_t>(q)].cwiseProduct(Pa_sym)).sum() +
-                    2.0 * (vtmp_beta[static_cast<std::size_t>(q)].cwiseProduct(Pb_sym)).sum();
-            }
-
-            for (std::size_t atom_A = 0; atom_A < mol.natoms; ++atom_A)
-                for (int q = 0; q < 3; ++q)
-                    grad(static_cast<Eigen::Index>(atom_A), q) +=
-                        w_atomic *
-                        (*dpartition)(static_cast<Eigen::Index>(atom_A), q) *
-                        exc_density;
-        }
-
-        for (std::size_t atom_A = 0; atom_A < mol.natoms; ++atom_A)
-        {
-            for (int mu : atoms_bf[atom_A])
-            {
-                const Eigen::Index imu = static_cast<Eigen::Index>(mu);
-                for (Eigen::Index nu = 0; nu < nb; ++nu)
-                {
-                    for (int q = 0; q < 3; ++q)
-                    {
-                        grad(static_cast<Eigen::Index>(atom_A), q) +=
-                            2.0 * vxc1_alpha[static_cast<std::size_t>(q)](imu, nu) * Pa_sym(imu, nu) +
-                            2.0 * vxc1_beta[static_cast<std::size_t>(q)](imu, nu) * Pb_sym(imu, nu);
-                    }
-                }
+                channels[0].wvg.col(k) = aa.cwiseProduct(*ga[k]) + ab.cwiseProduct(*gb[k]);
+                channels[1].wvg.col(k) = ab.cwiseProduct(*ga[k]) + bb.cwiseProduct(*gb[k]);
             }
         }
+        for (auto &ch : channels)
+            mask_zero_weight(w, ch.wv0, ch.wvg);
 
-        return grad;
+        return xc_nuclear_gradient(mol, basis, grid, ao, xc, channels, gga);
+    }
+    } // namespace
+
+    std::expected<Eigen::MatrixXd, std::string>
+    compute_xc_nuclear_gradient_rks(const HartreeFock::Molecule &mol, const HartreeFock::Basis &basis,
+                                    const MolecularGrid &grid, const AOGridEvaluation &ao,
+                                    const XCGridEvaluation &xc, const Eigen::Ref<const Eigen::MatrixXd> &density_restricted)
+    {
+        return xc_gradient_rks(mol, basis, grid, ao, xc, density_restricted);
+    }
+
+    std::expected<Eigen::MatrixXd, std::string>
+    compute_xc_nuclear_gradient_rks(const HartreeFock::Molecule &mol, const HartreeFock::Basis &basis,
+                                    const MolecularGrid &grid, const ScreenedAOGrid &ao,
+                                    const XCGridEvaluation &xc, const Eigen::Ref<const Eigen::MatrixXd> &density_restricted)
+    {
+        return xc_gradient_rks(mol, basis, grid, ao, xc, density_restricted);
+    }
+
+    std::expected<Eigen::MatrixXd, std::string>
+    compute_xc_nuclear_gradient_uks(const HartreeFock::Molecule &mol, const HartreeFock::Basis &basis,
+                                    const MolecularGrid &grid, const AOGridEvaluation &ao,
+                                    const XCGridEvaluation &xc, const Eigen::Ref<const Eigen::MatrixXd> &density_alpha,
+                                    const Eigen::Ref<const Eigen::MatrixXd> &density_beta)
+    {
+        return xc_gradient_uks(mol, basis, grid, ao, xc, density_alpha, density_beta);
+    }
+
+    std::expected<Eigen::MatrixXd, std::string>
+    compute_xc_nuclear_gradient_uks(const HartreeFock::Molecule &mol, const HartreeFock::Basis &basis,
+                                    const MolecularGrid &grid, const ScreenedAOGrid &ao,
+                                    const XCGridEvaluation &xc, const Eigen::Ref<const Eigen::MatrixXd> &density_alpha,
+                                    const Eigen::Ref<const Eigen::MatrixXd> &density_beta)
+    {
+        return xc_gradient_uks(mol, basis, grid, ao, xc, density_alpha, density_beta);
     }
 
 } // namespace DFT::Gradient

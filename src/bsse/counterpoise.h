@@ -2,6 +2,7 @@
 #define HF_BSSE_COUNTERPOISE_H
 
 #include <expected>
+#include <functional>
 #include <string>
 
 #include "base/types.h"
@@ -26,11 +27,21 @@ namespace HartreeFock
             double interaction_cp = 0.0;  // E(AB) - E(A)* - E(B)*  (= raw - bsse)
         };
 
+        // Runs one prepared sub-Calculator (sub-molecule, ghosts, options set)
+        // and returns its total energy. The orchestration is the same for every
+        // method; only this differs (HF SCF in hartree-fock, the KS single point
+        // in planck-dft).
+        using SubCalcRunner =
+            std::function<std::expected<double, std::string>(HartreeFock::Calculator &)>;
+
         // Run the full counterpoise procedure described by calculator._bsse.
         // The parent calculator must already be parsed (molecule, basis, scf
-        // options); this function builds and runs the five SCF sub-calculations
-        // internally, prints a report, and returns the energy decomposition.
-        // SCF-level only (RHF/UHF/ROHF); errors propagate as strings.
+        // options) with _coordinates in Bohr; this function builds the five
+        // sub-calculations, runs each through `run_sub`, prints a report, and
+        // returns the energy decomposition. The one-argument form uses the HF
+        // SCF (RHF/UHF/ROHF). Errors propagate as strings.
+        std::expected<CounterpoiseResult, std::string>
+        run_counterpoise(const HartreeFock::Calculator &parent, const SubCalcRunner &run_sub);
         std::expected<CounterpoiseResult, std::string>
         run_counterpoise(const HartreeFock::Calculator &parent);
     } // namespace BSSE

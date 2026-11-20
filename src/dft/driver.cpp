@@ -1,6 +1,8 @@
 #include "driver.h"
 
 #include "analytic_hessian.h"
+#include "bsse/counterpoise.h"
+#include "post_hf/ri/ri_eri.h"
 #include "dispersion.h"
 #include "ks_orbital_hessian.h"
 #include "tddft_exchange.h"
@@ -94,6 +96,11 @@ namespace DFT::Driver
 
     namespace
     {
+        // DIIS-residual stall floor for the KS SCF (SCF::is_converged). Above
+        // HF's 1e-10: the pure-SOSCF deadband stops at a KS residual of 4.1e-10
+        // (water_rks_pbe_soscf_puredeadband_631g); the lone-He hcore stall it
+        // must catch sits at ~1e-3 (he2_rks_b3lyp_cp_ccpvdz).
+        constexpr double kKsDiisStallFloor = 1E-8;
 
         DFT::GridLevel to_grid_level(HartreeFock::DFTGridQuality quality)
         {
@@ -457,6 +464,17 @@ namespace DFT::Driver
                     "DFT Symmetry :",
                     "Skipped for guess full restart to preserve checkpoint AO frame");
                 return {};
+            }
+
+            // Ghost atoms keep their real Z, so libmsym would treat them as
+            // nuclei and mix ghost and real centres (He + Gh(He) -> Dinfh, and
+            // the SCF diverges). Same rule as hf_driver.cpp.
+            if (calculator._molecule.has_ghost_atoms() && calculator._geometry._use_symm)
+            {
+                calculator._geometry._use_symm = false;
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning, "DFT Symmetry :",
+                    "Disabled because ghost atoms are present (counterpoise / BSSE)");
             }
 
             if (!options.use_symmetry || !calculator._geometry._use_symm)
@@ -1312,10 +1330,10 @@ namespace DFT::Driver
                 return std::unexpected("TDDFT molecular grid construction failed: " + molecular_grid.error());
             prepared.molecular_grid = std::move(*molecular_grid);
 
-            auto ao_grid = evaluate_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
+            auto ao_grid = evaluate_screened_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
             if (!ao_grid)
                 return std::unexpected("TDDFT AO grid evaluation failed: " + ao_grid.error());
-            prepared.ao_grid = std::move(*ao_grid);
+            prepared.set_ao_blocks(std::move(*ao_grid));
 
             const bool unrestricted = calculator._scf._scf == HartreeFock::SCFType::UHF;
             if (!unrestricted && calculator._scf._scf != HartreeFock::SCFType::RHF)
@@ -1340,8 +1358,8 @@ namespace DFT::Driver
             // to_cartesian; MO counts come from the coefficient columns.
             const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator._shells.nbasis());
             const bool spherical = calculator._shells._spherical;
-            const auto cartesian_mos = [&](const Eigen::MatrixXd &C) -> Eigen::MatrixXd
-            { return spherical ? Eigen::MatrixXd(calculator._shells._cart_to_sph.transpose() * C) : C; };
+            const auto cartesian_mos = [&](const Eigen::MatrixXd &C)
+            { return HartreeFock::BasisFunctions::mos_to_cartesian(calculator._shells, C); };
             auto P_alpha = HartreeFock::BasisFunctions::to_cartesian(calculator._shells,
                                                                      calculator._info._scf.alpha.density);
             if (!P_alpha)
@@ -1819,10 +1837,10 @@ namespace DFT::Driver
             // This routine is the shared KS-SCF engine used for the initial
             // single-point, displaced geometries in numerical derivatives, and
             // repeated geometry-optimization/frequency evaluations.
-            if (prepared.ao_grid.npoints() != prepared.molecular_grid.points.rows())
+            if (prepared.ao_blocks.npoints() != prepared.molecular_grid.points.rows())
                 return std::unexpected("DFT KS-SCF scaffold reached with inconsistent AO/grid dimensions");
 
-            if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
+            if (prepared.ao_blocks.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
                 return std::unexpected("DFT KS-SCF scaffold reached with inconsistent AO/basis dimensions");
 
             const std::size_t nbasis = calculator.working_nbasis();
@@ -1850,6 +1868,7 @@ namespace DFT::Driver
 
             Result result;
             result.dispersion_energy = dispersion_energy;
+            calculator._dispersion_energy = dispersion_energy; // results JSON
 
             if (!unrestricted)
             {
@@ -2077,9 +2096,10 @@ namespace DFT::Driver
                         // (docs/SOSCF_DFT.md invariant 2/3).
                         DFT::Driver::KsOrbitalHessianInputs h_in;
                         h_in.basis = &calculator._shells;
+                        h_in.ri = calculator._scf._ri_jk ? &calculator : nullptr;
                         h_in.shell_pairs = &prepared.shell_pairs;
                         h_in.molecular_grid = &prepared.molecular_grid;
-                        h_in.ao_grid = &prepared.ao_grid;
+                        h_in.ao_grid = &prepared.dense_ao();
                         h_in.density = density;
                         h_in.C_occ = C_occ_prev;
                         h_in.C_virt = C_virt_prev;
@@ -2210,11 +2230,15 @@ namespace DFT::Driver
                     }
 
                     const Eigen::MatrixXd next_density = density_from_orbitals(C_new, n_occ, 2.0);
-                    const auto metrics = HartreeFock::SCF::restricted_iteration_metrics(
+                    auto metrics = HartreeFock::SCF::restricted_iteration_metrics(
                         density,
                         next_density,
                         previous_total_energy,
                         total_energy);
+                    // Gate convergence on the DIIS residual as run_rhf does: a lone
+                    // He from hcore otherwise stops at a stalled step (dP = 0,
+                    // FPS-SPF ~1e-3), 6.2e-7 Eh above the minimum.
+                    metrics.diis_error = diis_error;
 
                     const double iter_time = std::chrono::duration<double>(
                                                  std::chrono::steady_clock::now() - iter_start)
@@ -2265,8 +2289,9 @@ namespace DFT::Driver
                                                  static_cast<double>(calculator._molecule.total_nuclear_charge() -
                                                                      calculator._molecule.charge))));
                     result.solvation_energy = pcm_energy;
+                    calculator._solvation_energy = pcm_energy; // results JSON
 
-                    if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
+                    if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter, kKsDiisStallFloor))
                     {
                         // Store orbitals of the true KS matrix, not the DIIS
                         // extrapolation (same reason as run_rhf: with ~0 error
@@ -2368,7 +2393,7 @@ namespace DFT::Driver
             // reference orbitals persisted every iteration; the (a,i)
             // gradient/Hessian are evaluated in the PREVIOUS iteration's MO
             // basis against THIS iteration's Fock. Packing convention:
-            // build_uhf_cphf_matrix's [0,nova) alpha + [nova,nova+novb)
+            // OrbitalHessian's UHF [0,nova) alpha + [nova,nova+novb)
             // beta, virtual-major (a*n_occ + i) within each block -- NOT a
             // third convention.
             Eigen::MatrixXd Ca_soscf_prev, Cb_soscf_prev;
@@ -2626,9 +2651,10 @@ namespace DFT::Driver
 
                     DFT::Driver::UksOrbitalHessianInputs h_in;
                     h_in.basis = &calculator._shells;
+                    h_in.ri = calculator._scf._ri_jk ? &calculator : nullptr;
                     h_in.shell_pairs = &prepared.shell_pairs;
                     h_in.molecular_grid = &prepared.molecular_grid;
-                    h_in.ao_grid = &prepared.ao_grid;
+                    h_in.ao_grid = &prepared.dense_ao();
                     h_in.alpha_density = alpha_density;
                     h_in.beta_density = beta_density;
                     h_in.Ca_occ = Ca_occ;
@@ -2778,6 +2804,7 @@ namespace DFT::Driver
                     next_beta_density,
                     previous_total_energy,
                     total_energy);
+                metrics.diis_error = diis_error; // stalled-step guard, as run_uhf
                 if (requested_level_shift > 0.0 || require_pt2_stationarity)
                 {
                     // Opposite alpha/beta changes must not cancel in the
@@ -2786,7 +2813,6 @@ namespace DFT::Driver
                     const Eigen::MatrixXd db = next_beta_density - beta_density;
                     metrics.delta_density_max = std::max(da.cwiseAbs().maxCoeff(), db.cwiseAbs().maxCoeff());
                     metrics.delta_density_rms = std::max(da.norm(), db.norm()) / static_cast<double>(nbasis);
-                    metrics.diis_error = diis_error; // physical commutator, including polishing
                 }
 
                 const double iter_time = std::chrono::duration<double>(
@@ -2835,6 +2861,7 @@ namespace DFT::Driver
                 result.xc_energy = xc_grid->total_energy + ks_potential->exact_exchange_energy;
                 result.integrated_electrons = xc_grid->integrated_electrons;
                 result.solvation_energy = pcm_energy;
+                calculator._solvation_energy = pcm_energy; // results JSON
 
                 // Release the shift on a loose stability test, well before the
                 // full convergence gate: see shift_release_tol above.
@@ -2865,7 +2892,7 @@ namespace DFT::Driver
                     continue;
                 }
 
-                if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
+                if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter, kKsDiisStallFloor))
                 {
                     if (active_level_shift > 0.0)
                     {
@@ -3017,6 +3044,45 @@ namespace DFT::Driver
             return {};
         }
 
+        // RI-JK in planck-dft (docs/RI_JK_ROUTINE.md steps 12-15): the
+        // fitted J and K replace the direct ones for pure and global-hybrid
+        // functionals.
+        // Everything that would still build exact J or K, or differentiate the
+        // energy, is refused by name until its step lands.
+        std::expected<void, std::string> validate_ri_jk_support(
+            const HartreeFock::Calculator &calculator, const InitializedFunctionals &functionals)
+        {
+            if (!calculator._scf._ri_jk)
+                return {};
+            const auto refuse = [](const std::string &what) -> std::expected<void, std::string>
+            {
+                return std::unexpected("RI-JK (scf_ri_jk) in planck-dft supports pure and global-hybrid "
+                                       "functionals, derivatives, SOSCF and stability, not " + what +
+                                       ". Disable RI-JK (scf_ri_jk false).");
+            };
+            if (calculator._mp2.ri_basis_name.empty())
+                return std::unexpected("RI-JK SCF (scf_ri_jk) needs an auxiliary basis: set mp2_ri_basis.");
+            if (functionals.has_double_hybrid_pt2)
+                return refuse("a double-hybrid functional");
+            if (functionals.has_range_separation)
+                return refuse("a range-separated functional (the RI integrals are Coulomb-kernel only)");
+            // Gradients, geomopt and frequencies: the KS gradient takes the
+            // fitted 2e term under RI (steps 15-16), Cartesian or spherical.
+            const auto calc = calculator._calculation;
+            const bool derivative =
+                calc == HartreeFock::CalculationType::Gradient ||
+                calc == HartreeFock::CalculationType::GeomOpt ||
+                calc == HartreeFock::CalculationType::Frequency ||
+                calc == HartreeFock::CalculationType::GeomOptFrequency;
+            if (calc != HartreeFock::CalculationType::SinglePoint && !derivative)
+                return refuse(workflow_label(calc));
+            // SOSCF and stability: the KS orbital Hessian takes the fitted J/K
+            // under RI (KsOrbitalHessianInputs::ri, step 14).
+            if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+                return refuse("PCM");
+            return {};
+        }
+
         std::expected<void, std::string> validate_workflow_support(
             const HartreeFock::Calculator &calculator,
             const InitializedFunctionals &functionals,const Options &options)
@@ -3075,11 +3141,15 @@ namespace DFT::Driver
             // Production UKS global-double-hybrid gradients are deliberately
             // narrower than the validation sidecar: only the conventional,
             // all-active UMP2 implementation and the independently qualified
-            // V4 grid are admitted.  Geometry optimization and frequencies
-            // remain RKS-only until their UKS workflow contracts are accepted.
+            // V4 grid are admitted, for the gradient and the geometry
+            // optimization and frequency workflows built on it.
+            const bool gradient_workflow =
+                calculator._calculation == HartreeFock::CalculationType::Gradient ||
+                calculator._calculation == HartreeFock::CalculationType::GeomOpt ||
+                calculator._calculation == HartreeFock::CalculationType::Frequency ||
+                calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency;
             if (functionals.has_double_hybrid_pt2 && !functionals.has_range_separation &&
-                calculator._scf._scf == HartreeFock::SCFType::UHF &&
-                calculator._calculation == HartreeFock::CalculationType::Gradient)
+                calculator._scf._scf == HartreeFock::SCFType::UHF && gradient_workflow)
             {
                 if (calculator._solvation._model != HartreeFock::SolvationModel::None)
                     return std::unexpected("UKS double-hybrid analytic gradients do not implement solvent response.");
@@ -3349,10 +3419,10 @@ namespace DFT::Driver
                 return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
             prepared.molecular_grid = std::move(*molecular_grid);
 
-            auto ao_grid = evaluate_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
+            auto ao_grid = evaluate_screened_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
             if (!ao_grid)
                 return std::unexpected("DFT AO grid evaluation failed: " + ao_grid.error());
-            prepared.ao_grid = std::move(*ao_grid);
+            prepared.set_ao_blocks(std::move(*ao_grid));
 
             if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             {
@@ -3405,10 +3475,10 @@ namespace DFT::Driver
                 return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
             prepared.molecular_grid = std::move(*molecular_grid);
 
-            auto ao_grid = evaluate_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
+            auto ao_grid = evaluate_screened_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
             if (!ao_grid)
                 return std::unexpected("DFT AO grid evaluation failed: " + ao_grid.error());
-            prepared.ao_grid = std::move(*ao_grid);
+            prepared.set_ao_blocks(std::move(*ao_grid));
 
             if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             {
@@ -3480,7 +3550,7 @@ namespace DFT::Driver
                 return std::unexpected("DFT double-hybrid XC-II AO Hessian construction failed: " + ao_hessian.error());
             const Gradient::DHEq33XCFixedDensityInputs xc_inputs{
                 &calculator._molecule, &calculator._shells, &prepared.molecular_grid,
-                &prepared.ao_grid, &*ao_hessian, calculator._info._scf.alpha.density,
+                &prepared.dense_ao(), &*ao_hessian, calculator._info._scf.alpha.density,
                 &functionals.exchange, &functionals.correlation};
             const auto workspace = std::make_shared<const Gradient::DHGradientGeometryWorkspace>(
                 Gradient::DHGradientGeometryWorkspace{{}, std::move(*derivatives)});
@@ -3514,6 +3584,27 @@ namespace DFT::Driver
             return Eigen::MatrixXd(*ks_gradient + pt2_correction->total);
         }
 
+        // UKS counterpart of compute_analytic_dh_gradient: KS gradient plus the
+        // UMP2 correction, both in the current working frame. Returns the whole
+        // result because the validation sidecar reads its pieces.
+        std::expected<UDHGradientResult, std::string> compute_analytic_udh_gradient(
+            HartreeFock::Calculator &calculator,
+            PreparedSystem &prepared,
+            const InitializedFunctionals &functionals,
+            const HartreeFock::Correlation::UMP2Result &pt2)
+        {
+            auto correction = build_udh_gradient_correction(calculator, prepared, functionals.exchange,
+                functionals.correlation, pt2, functionals.perturbative_correlation_coefficient);
+            if (!correction) return std::unexpected(correction.error());
+            auto ks = compute_analytic_ks_gradient(calculator, prepared, functionals);
+            if (!ks) return std::unexpected(ks.error());
+            if (ks->rows() != correction->correction.rows() || ks->cols() != 3 || !ks->allFinite())
+                return std::unexpected("UDH driver: invalid KS/correction result shape");
+            correction->ks = *ks;
+            correction->total = *ks + correction->correction;
+            return correction;
+        }
+
         // Optimizers read current_total_energy() after this callback. Keep the
         // scaled PT2 energy and its full derivative at exactly the same geometry.
         // No C, epsilon, amplitudes, Z or derivative arrays survive a displacement.
@@ -3530,6 +3621,21 @@ namespace DFT::Driver
                 return std::unexpected(result.error());
             if (!result->converged)
                 return std::unexpected("KS-SCF did not converge during analytic gradient evaluation");
+
+            if (functionals.has_double_hybrid_pt2 &&
+                calculator._scf._scf == HartreeFock::SCFType::UHF)
+            {
+                HartreeFock::Correlation::UMP2Result pt2;
+                if (auto applied = apply_post_ks_double_hybrid_correction(
+                        calculator, prepared->shell_pairs, functionals, *result, nullptr, &pt2);
+                    !applied)
+                    return std::unexpected(applied.error());
+                auto udh = compute_analytic_udh_gradient(calculator, *prepared, functionals, pt2);
+                if (!udh)
+                    return std::unexpected(udh.error());
+                calculator._gradient = udh->total;
+                return udh->total;
+            }
 
             HartreeFock::Correlation::RMP2Result pt2_result;
             if (auto correction = apply_post_ks_double_hybrid_correction(
@@ -3612,9 +3718,10 @@ namespace DFT::Driver
 
             DFT::Driver::UksOrbitalHessianInputs h_in;
             h_in.basis = &calculator._shells;
+            h_in.ri = calculator._scf._ri_jk ? &calculator : nullptr;
             h_in.shell_pairs = &prepared.shell_pairs;
             h_in.molecular_grid = &prepared.molecular_grid;
-            h_in.ao_grid = &prepared.ao_grid;
+            h_in.ao_grid = &prepared.dense_ao();
             h_in.alpha_density = scf.alpha.density;
             h_in.beta_density = scf.beta.density;
             h_in.Ca_occ = scf.alpha.mo_coefficients.leftCols(n_alpha);
@@ -3692,9 +3799,10 @@ namespace DFT::Driver
 
             DFT::Driver::UksOrbitalHessianInputs h_in;
             h_in.basis = &calculator._shells;
+            h_in.ri = calculator._scf._ri_jk ? &calculator : nullptr;
             h_in.shell_pairs = &prepared.shell_pairs;
             h_in.molecular_grid = &prepared.molecular_grid;
-            h_in.ao_grid = &prepared.ao_grid;
+            h_in.ao_grid = &prepared.dense_ao();
             h_in.alpha_density = 0.5 * scf.alpha.density; // RKS stores the total density
             h_in.beta_density = h_in.alpha_density;
             h_in.Ca_occ = h_in.Cb_occ = scf.alpha.mo_coefficients.leftCols(nocc);
@@ -4158,11 +4266,8 @@ namespace DFT::Driver
             calculator.sync_coordinate_frames_from_standard();
             if (!result)
                 return std::unexpected(result.error());
-            // compute_hessian restores coordinates, but its last wavefunction,
-            // energy and gradient still belong to the final -h displacement.
-            // Rebuild the complete reference state before publishing results.
-            if (auto reference = gradient_runner(calculator); !reference)
-                return std::unexpected("DFT frequency reference restoration failed: " + reference.error());
+            // compute_hessian rebuilds the reference wavefunction, energy and
+            // gradient before returning.
             store_frequency_result(calculator, *result);
             print_frequency_report(calculator, *result);
             return result;
@@ -4298,7 +4403,7 @@ namespace DFT::Driver
         // straddling it put a spurious jump/(2 step) into the kernel, shifting
         // spherical water/6-31G* HSE06 roots by up to 4.4e-4 eV
         // (docs/WPBEH_S_SCALING_SCOPE.md).
-        auto kernel = prepare_uks_xc_kernel(prepared.molecular_grid, prepared.ao_grid, ground_alpha_density,
+        auto kernel = prepare_uks_xc_kernel(prepared.molecular_grid, prepared.dense_ao(), ground_alpha_density,
                                             ground_beta_density, exchange_functional, correlation_functional);
         if (!kernel)
             return std::unexpected("TDDFT XC kernel: " + kernel.error());
@@ -4375,14 +4480,14 @@ namespace DFT::Driver
         Eigen::Index slice_begin,
         Eigen::Index slice_end)
     {
-        if (prepared.ao_grid.npoints() != prepared.molecular_grid.points.rows())
+        if (prepared.ao_blocks.npoints() != prepared.molecular_grid.points.rows())
             return std::unexpected("AO grid and molecular grid point counts do not match");
 
-        if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
+        if (prepared.ao_blocks.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
             return std::unexpected("AO grid basis dimension does not match the calculator basis");
 
         // The grid is Cartesian; the stored densities are in the working basis.
-        const Eigen::Index nbasis = prepared.ao_grid.nbasis();
+        const Eigen::Index nbasis = prepared.ao_blocks.nbasis();
         auto alpha_lifted = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, calculator._info._scf.alpha.density);
         if (!alpha_lifted)
             return std::unexpected("alpha density: " + alpha_lifted.error());
@@ -4401,7 +4506,7 @@ namespace DFT::Driver
 
             return evaluate_xc_on_grid(
                 prepared.molecular_grid,
-                prepared.ao_grid,
+                prepared.ao_blocks,
                 alpha_density,
                 beta_density,
                 exchange_functional,
@@ -4412,7 +4517,7 @@ namespace DFT::Driver
 
         return evaluate_xc_on_grid(
             prepared.molecular_grid,
-            prepared.ao_grid,
+            prepared.ao_blocks,
             alpha_density,
             exchange_functional,
             correlation_functional,
@@ -4435,33 +4540,6 @@ namespace DFT::Driver
                 functionals.correlation);
             if (!xc_grid)
                 return std::unexpected("DFT analytic gradient: XC evaluation failed: " + xc_grid.error());
-
-            const Eigen::Index npoints = prepared.molecular_grid.points.rows();
-            const Eigen::Index nbasis = prepared.ao_grid.nbasis();
-
-            DFT::AOGridHessian hess;
-            if (xc_grid->vsigma.cols() > 0)
-            {
-                auto hess_res = DFT::evaluate_ao_hessian_on_grid(calculator._shells, prepared.molecular_grid);
-                if (!hess_res)
-                    return std::unexpected("DFT analytic gradient: AO Hessian failed: " + hess_res.error());
-                hess = std::move(*hess_res);
-            }
-            else
-            {
-                hess.h_xx.resize(npoints, nbasis);
-                hess.h_xy.resize(npoints, nbasis);
-                hess.h_xz.resize(npoints, nbasis);
-                hess.h_yy.resize(npoints, nbasis);
-                hess.h_yz.resize(npoints, nbasis);
-                hess.h_zz.resize(npoints, nbasis);
-                hess.h_xx.setZero();
-                hess.h_xy.setZero();
-                hess.h_xz.setZero();
-                hess.h_yy.setZero();
-                hess.h_yz.setZero();
-                hess.h_zz.setZero();
-            }
 
             const HartreeFock::Gradient::ExchangeGradientKernel exchange_kernel{
                 .full_range_exchange_coefficient = xc_grid->full_range_exchange_coefficient,
@@ -4510,8 +4588,7 @@ namespace DFT::Driver
                           calculator._molecule,
                           calculator._shells,
                           prepared.molecular_grid,
-                          prepared.ao_grid,
-                          hess,
+                          prepared.ao_blocks,
                           *xc_grid,
                           *P_alpha,
                           *P_beta)
@@ -4519,8 +4596,7 @@ namespace DFT::Driver
                           calculator._molecule,
                           calculator._shells,
                           prepared.molecular_grid,
-                          prepared.ao_grid,
-                          hess,
+                          prepared.ao_blocks,
                           *xc_grid,
                           *P_alpha);
             if (!xc_grad)
@@ -4563,7 +4639,7 @@ namespace DFT::Driver
         Eigen::Index xc_point_begin,
         Eigen::Index xc_point_end)
     {
-        if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
+        if (prepared.ao_blocks.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
             return std::unexpected("AO grid basis dimension does not match the calculator basis");
 
         // No ERI tensor is built here any more: the J and K builds below are
@@ -4580,7 +4656,7 @@ namespace DFT::Driver
         // that pass no slice are byte-identical.
         auto xc_matrix = assemble_xc_matrix(
             prepared.molecular_grid,
-            prepared.ao_grid,
+            prepared.ao_blocks,
             xc_grid,
             xc_point_begin,
             xc_point_end);
@@ -4601,7 +4677,7 @@ namespace DFT::Driver
 
         // J, K and V_xc are built in Cartesian from lifted densities and the
         // result is projected to the working basis on return.
-        const Eigen::Index nbasis = prepared.ao_grid.nbasis();
+        const Eigen::Index nbasis = prepared.ao_blocks.nbasis();
         auto alpha_lifted = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, calculator._info._scf.alpha.density);
         if (!alpha_lifted)
             return std::unexpected("alpha density: " + alpha_lifted.error());
@@ -4629,15 +4705,21 @@ namespace DFT::Driver
         //
         // Raw J — no coefficient. See the prefactor contract in
         // fock_accumulate.h.
-        const Eigen::MatrixXd coulomb = _compute_2e_j_direct(
-            prepared.shell_pairs,
-            total_density,
-            calculator._shells.nbasis(),
-            calculator._integral._engine,
-            HartreeFock::ERIKernel::Coulomb,
-            0.0,
-            calculator._integral._tol_eri,
-            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        //
+        // RI-JK: the fitted J is built in the working basis below, after the
+        // projection, so the direct build is skipped here.
+        const bool ri_j = calculator._scf._ri_jk;
+        const Eigen::MatrixXd coulomb =
+            ri_j ? Eigen::MatrixXd(Eigen::MatrixXd::Zero(nbasis, nbasis))
+                 : _compute_2e_j_direct(
+                       prepared.shell_pairs,
+                       total_density,
+                       calculator._shells.nbasis(),
+                       calculator._integral._engine,
+                       HartreeFock::ERIKernel::Coulomb,
+                       0.0,
+                       calculator._integral._tol_eri,
+                       calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
 
         const double full_range_exchange_coefficient = xc_grid.full_range_exchange_coefficient;
         const double short_range_exchange_coefficient = xc_grid.short_range_exchange_coefficient;
@@ -4651,7 +4733,8 @@ namespace DFT::Driver
         // the screened omega either — the short-range K calls below pass the
         // omega straight to the fused loop.
 
-        if (std::abs(exact_exchange_coefficient) > 1.0e-14)
+        // RI-K is added in the working basis after the projection below.
+        if (!ri_j && std::abs(exact_exchange_coefficient) > 1.0e-14)
         {
             if (calculator._scf._scf == HartreeFock::SCFType::UHF)
             {
@@ -4745,6 +4828,54 @@ namespace DFT::Driver
                     return std::unexpected("KS potential: " + M_w.error());
                 *M = std::move(*M_w);
             }
+
+        // RI-J and RI-K (docs/RI_JK_ROUTINE.md steps 12-13). The RI
+        // builders take and return working-basis matrices, so this uses the
+        // stored working densities and is added after the projection above,
+        // never before it. K is unscaled from build_ri_k; the prefactors and
+        // the energy are the direct path's (-1/2 c for RKS, -c per spin for
+        // UKS). Range separation is refused by validate_ri_jk_support.
+        if (ri_j)
+        {
+            namespace RI = HartreeFock::Correlation::RI;
+            if (auto ready = RI::ensure_ri_3c_ready(calculator); !ready)
+                return std::unexpected("RI-JK: " + ready.error());
+            const bool uks = calculator._scf._scf == HartreeFock::SCFType::UHF;
+            const Eigen::MatrixXd &Pa = calculator._info._scf.alpha.density;
+            const Eigen::MatrixXd P_working = uks ? Eigen::MatrixXd(Pa + calculator._info._scf.beta.density) : Pa;
+            const Eigen::MatrixXd J = RI::build_ri_j(calculator, P_working);
+            potential.coulomb += J;
+            potential.alpha += J;
+            potential.beta += J;
+
+            const double c = full_range_exchange_coefficient;
+            if (std::abs(c) > 1.0e-14)
+            {
+                const std::vector<Eigen::MatrixXd> unpacked = RI::build_ri_3index_unpacked(calculator);
+                Eigen::MatrixXd Xa, Xb;
+                double energy = 0.0;
+                if (uks)
+                {
+                    const Eigen::MatrixXd &Pb = calculator._info._scf.beta.density;
+                    const Eigen::MatrixXd Ka = RI::build_ri_k(calculator, Pa, &unpacked);
+                    const Eigen::MatrixXd Kb = RI::build_ri_k(calculator, Pb, &unpacked);
+                    Xa = -c * Ka;
+                    Xb = -c * Kb;
+                    energy = -0.5 * c * (density_trace_product(Pa, Ka) + density_trace_product(Pb, Kb));
+                }
+                else
+                {
+                    const Eigen::MatrixXd K = RI::build_ri_k(calculator, Pa, &unpacked);
+                    Xa = Xb = -0.5 * c * K;
+                    energy = -0.25 * c * density_trace_product(Pa, K);
+                }
+                potential.exact_exchange_alpha += Xa;
+                potential.exact_exchange_beta += Xb;
+                potential.alpha += Xa;
+                potential.beta += Xb;
+                potential.exact_exchange_energy += energy;
+            }
+        }
         return potential;
     }
 
@@ -4951,7 +5082,7 @@ namespace DFT::Driver
             return std::unexpected("DH Eq. 41/Z-vector: inconsistent KS density or PT2 orbital dimensions.");
 
         const Gradient::DHEq41XCInputs xc_inputs{
-            &prepared.molecular_grid, &prepared.ao_grid, density,
+            &prepared.molecular_grid, &prepared.dense_ao(), density,
             &exchange_functional, &correlation_functional};
         const auto xc_response = Gradient::make_dh_eq41_xc_response_callback(xc_inputs);
         if (!xc_response)
@@ -5059,10 +5190,10 @@ namespace DFT::Driver
             return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
         prepared.molecular_grid = std::move(*molecular_grid);
 
-        auto ao_grid = evaluate_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
+        auto ao_grid = evaluate_screened_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
         if (!ao_grid)
             return std::unexpected("DFT AO grid evaluation failed: " + ao_grid.error());
-        prepared.ao_grid = std::move(*ao_grid);
+        prepared.set_ao_blocks(std::move(*ao_grid));
 
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
         {
@@ -5083,7 +5214,7 @@ namespace DFT::Driver
         // cannot be driven below a grid-dependent floor -- a tol_density under
         // that floor is unreachable by construction and the run reports failure
         // while sitting on the converged answer. This is the same defect class
-        // as the DIIS residual floor in SCF::is_converged (see kDiisStallFloor):
+        // as the DIIS residual floor in SCF::is_converged (see its diis_stall_floor):
         // a threshold compared against a quantity whose numerical floor is
         // higher than it.
         //
@@ -5125,8 +5256,15 @@ namespace DFT::Driver
                 std::format(
                     "{} points, {} basis functions, {} shell pairs",
                     prepared.molecular_grid.points.rows(),
-                    prepared.ao_grid.nbasis(),
+                    prepared.ao_blocks.nbasis(),
                     prepared.shell_pairs.size()));
+            const double dense = static_cast<double>(prepared.ao_blocks.npoints()) * prepared.ao_blocks.nbasis();
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "DFT AO screening :",
+                std::format("{:.1f} % of point x AO entries kept (tolerance {:.0e}, {}-point blocks)",
+                            dense > 0 ? 100.0 * prepared.ao_blocks.stored_entries() / dense : 100.0,
+                            kAOScreenTolerance, kAOBlock));
         }
 
         return prepared;
@@ -5153,6 +5291,8 @@ namespace DFT::Driver
 
         if (auto workflow_support = validate_workflow_support(calculator, *functionals,options); !workflow_support)
             return std::unexpected(workflow_support.error());
+        if (auto ri = validate_ri_jk_support(calculator, *functionals); !ri)
+            return std::unexpected(ri.error());
 
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,
@@ -5217,15 +5357,8 @@ namespace DFT::Driver
                     HartreeFock::Correlation::UMP2Result pt2;
                     if(auto applied=apply_post_ks_double_hybrid_correction(calculator,prepared->shell_pairs,
                         *functionals,*result,nullptr,&pt2); !applied) return std::unexpected(applied.error());
-                    auto correction=build_udh_gradient_correction(calculator,*prepared,functionals->exchange,
-                        functionals->correlation,pt2,functionals->perturbative_correlation_coefficient);
+                    auto correction=compute_analytic_udh_gradient(calculator,*prepared,*functionals,pt2);
                     if(!correction) return std::unexpected(correction.error());
-                    auto ks=compute_analytic_ks_gradient(calculator,*prepared,*functionals);
-                    if(!ks) return std::unexpected(ks.error());
-                    if(ks->rows()!=correction->correction.rows() || ks->cols()!=3 || !ks->allFinite())
-                        return std::unexpected("UDH driver: invalid KS/correction result shape");
-                    correction->ks=*ks;
-                    correction->total=*ks+correction->correction;
                     calculator._gradient=rotate_gradient_to_requested_frame_if_needed(
                         calculator,correction->total,requested_gradient_frame_bohr);
                     if (options.udh_gradient_validation)
@@ -5496,6 +5629,37 @@ namespace DFT::Driver
         const auto program_start = CliSystemClock::now();
 
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Input Parsing :", "Successful");
+
+        // RI-JK: the workflow checks live in validate_ri_jk_support, which runs
+        // once the functional is known. Counterpoise is refused here, before the
+        // sub-calculations (ghost atoms carry no fitting functions yet).
+        if (calculator._scf._ri_jk && calculator._bsse._enabled)
+            return std::unexpected(
+                "RI-JK SCF (scf_ri_jk) does not support counterpoise in planck-dft yet. "
+                "Disable RI-JK (scf_ri_jk false).");
+
+        // Counterpoise: the shared five-calculation driver, each sub-calculation
+        // a KS single point (docs/DFT_COUNTERPOISE.md §1).
+        if (calculator._bsse._enabled)
+        {
+            if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+                return std::unexpected("counterpoise in planck-dft supports single-point energies only");
+            calculator.prepare_coordinates(); // the sub-calculation builder needs Bohr
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Counterpoise :",
+                                         "BSSE counterpoise correction requested (Kohn-Sham)");
+            auto cp = HartreeFock::BSSE::run_counterpoise(
+                calculator, [](HartreeFock::Calculator &sub) -> std::expected<double, std::string> {
+                    auto r = run(sub);
+                    if (!r)
+                        return std::unexpected(r.error());
+                    if (!r->converged)
+                        return std::unexpected("KS SCF did not converge");
+                    return r->total_energy;
+                });
+            if (!cp)
+                return std::unexpected("counterpoise failed: " + cp.error());
+            return EXIT_SUCCESS;
+        }
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Calculation Type :", map_enum(calculator._calculation));
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Theory :", "Kohn-Sham DFT");
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Reference :", dft_reference_label(calculator._scf._scf));
@@ -5562,6 +5726,9 @@ namespace DFT::Driver
             // The DFT total lives in the driver Result, not on the Calculator;
             // copy it in so the shared serializer reports the log's energy.
             calculator._total_energy = result->total_energy;
+            // _dispersion_energy and _solvation_energy are set by the KS SCF
+            // itself, so they belong to the last SCF (the optimized geometry
+            // after geomopt, the reference after frequencies).
             if (auto res = HartreeFock::IO::dump_results_json(calculator, json_path); !res)
             {
                 HartreeFock::Logger::logging(

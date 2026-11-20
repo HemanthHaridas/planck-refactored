@@ -1,6 +1,7 @@
 %begin_control
     basis       sto-3g
-    calculation frequency
+    calculation gradient
+    print_populations .true.
     verbosity   normal
     basis_type  cartesian
 %end_control
@@ -13,6 +14,7 @@
     engine        os
     level_shift   0.3
     diis_restart  2.0
+    mp2_frozen    1
 %end_scf
 
 %begin_geom

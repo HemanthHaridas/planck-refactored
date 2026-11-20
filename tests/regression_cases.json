@@ -199,7 +199,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.2955800560,
+     "expected": -75.295580056,
      "atol": 1e-07
     }
    ]
@@ -410,6 +410,36 @@
    ]
   },
   {
+   "id": "water_rimp2_spherical_ccpvdz",
+   "input": "tests/inputs/regression/ri/water_rimp2_spherical_ccpvdz.hfinp",
+   "_note": "Spherical RI-MP2 (docs/RI_SPHERICAL_AUX.md): the fitted aux follows basis_type, so this equals PySCF DF-MP2 on a cart=False molecule (spherical aux) with the same GBS-read cc-pVDZ / cc-pVDZ-RIFIT: RHF -76.0228689456 to every digit, MP2 -76.2230990336 (PySCF) vs -76.2230990337. A Cartesian aux moves it by ~1e-4.",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged after",
+    "Total MP2 Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0228689456,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "mp2_total_energy",
+     "expected": -76.2230990337,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "h2_fci_rimp2_ccpvdz",
    "input": "tests/inputs/regression/ri/h2_fci_rimp2_ccpvdz.hfinp",
    "tags": [
@@ -550,6 +580,1212 @@
      "type": "metric_lt_metric",
      "left": "mp2_total_energy",
      "right": "rhf_total_energy"
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_rijk_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_631gd.hfinp",
+   "_note": "RI-JK SCF gate (docs/RI_JK_ROUTINE.md step 0): scf_ri_jk with cc-pVDZ-RIFIT, equal to PySCF density_fit with the same GBS-read orbital and auxiliary bases to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -76.0066326441; the MP2 fitting set costs -1.00e-03 Eh, the motivation for JKFIT sets (step 1).",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0076329813,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uhf_rijk_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_uhf_rijk_631gd.hfinp",
+   "_note": "RI-JK SCF gate (docs/RI_JK_ROUTINE.md step 0): scf_ri_jk with cc-pVDZ-RIFIT, equal to PySCF density_fit with the same GBS-read orbital and auxiliary bases to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -75.6033570420; the MP2 fitting set costs -1.03e-03 Eh, the motivation for JKFIT sets (step 1).",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.6043871772,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rhf_rijk_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_rhf_rijk_631gd.hfinp",
+   "_note": "RI-JK SCF gate (docs/RI_JK_ROUTINE.md step 0): scf_ri_jk with cc-pVDZ-RIFIT, equal to PySCF density_fit with the same GBS-read orbital and auxiliary bases to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -150.7539338384; the MP2 fitting set costs -1.56e-03 Eh, the motivation for JKFIT sets (step 1).",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.7554893339,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uhf_rijk_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_631gd.hfinp",
+   "_note": "RI-JK SCF gate (docs/RI_JK_ROUTINE.md step 0): scf_ri_jk with cc-pVDZ-RIFIT, equal to PySCF density_fit with the same GBS-read orbital and auxiliary bases to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -150.3692659085; the MP2 fitting set costs -1.69e-03 Eh, the motivation for JKFIT sets (step 1).",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.3709559632,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_rijk_jkfit_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_jkfit_631gd.hfinp",
+   "_note": "RI-JK with def2-universal-JKFIT (docs/RI_JK_ROUTINE.md step 1): contracted auxiliary shells, equal to PySCF density_fit with the same GBS-read bases to every printed digit (tests/pyscf/ri_jk_references.py def2-universal-JKFIT). Exact energy -76.0066326441; fitting error 2.67e-05 Eh, against ~1e-3 with cc-pVDZ-RIFIT.",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0066059836,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uhf_rijk_jkfit_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_jkfit_631gd.hfinp",
+   "_note": "RI-JK with def2-universal-JKFIT (docs/RI_JK_ROUTINE.md step 1): contracted auxiliary shells, equal to PySCF density_fit with the same GBS-read bases to every printed digit (tests/pyscf/ri_jk_references.py def2-universal-JKFIT). Exact energy -150.3692659085; fitting error 8.21e-05 Eh, against ~1e-3 with cc-pVDZ-RIFIT.",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.3691838375,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_rijk_spherical_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_spherical_631gd.hfinp",
+   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -76.0052429766; fitting error 2.10e-05 Eh.",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0052219694,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uhf_rijk_spherical_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_uhf_rijk_spherical_631gd.hfinp",
+   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -75.6016116469; fitting error 1.63e-05 Eh.",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.6015953457,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rhf_rijk_spherical_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_rhf_rijk_spherical_631gd.hfinp",
+   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -150.7516121007; fitting error 9.31e-05 Eh.",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.7515189627,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uhf_rijk_spherical_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_spherical_631gd.hfinp",
+   "_note": "Spherical RI-JK (docs/RI_JK_ROUTINE.md step 2), def2-universal-JKFIT. The fitted aux follows basis_type (spherical here, docs/RI_SPHERICAL_AUX.md), as in PySCF: equal to plain PySCF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact spherical energy -150.3668036892; fitting error 8.81e-05 Eh.",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.3667155884,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_rohf_rijk_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_rohf_rijk_631gd.hfinp",
+   "_note": "RI-JK ROHF (docs/RI_JK_ROUTINE.md step 5), def2-universal-JKFIT: equal to PySCF ROHF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -75.5989868950; fitting error 1.93e-05 Eh.",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ROHF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.5989675667,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_rohf_rijk_spherical_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_rohf_rijk_spherical_631gd.hfinp",
+   "_note": "RI-JK ROHF (docs/RI_JK_ROUTINE.md step 5), def2-universal-JKFIT: equal to PySCF ROHF density_fit to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -75.5972480819; fitting error 1.56e-05 Eh.",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ROHF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.5972324349,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "agcl_rhf_rijk_def2svp_ecp",
+   "input": "tests/inputs/regression/ri/agcl_rhf_rijk_def2svp_ecp.hfinp",
+   "_note": "RI-JK heavy-element gate (docs/RI_JK_ROUTINE.md step 8a): AgCl def2-SVP with the Ag ECP, spherical, def2-universal-JKFIT, whose Ag set has two l=6 shells (383 aux functions). Equal to PySCF density_fit with ECP and both bases read from Planck's GBS to every printed digit (tests/pyscf/ri_jk_references.py). Exact energy -605.4799989662; fitting error 4.92e-05 Eh.",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "def2",
+    "ecp",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -605.4799497321,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_rijk_soscf_stability_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_soscf_stability_631gd.hfinp",
+   "_note": "RI-JK SOSCF + stability (docs/RI_JK_ROUTINE.md step 4). Under scf_ri_jk the SOSCF Hessian and the stability MO blocks come from the RI factors; before, SOSCF rebuilt the dense AO ERI tensor every SOSCF step and stability diagonalized the exact Hessian at RI orbitals (~1e-6 off). Eigenvalues equal PySCF stability on mf.density_fit() (def2-universal-JKFIT; PySCF rhf_internal is 4x Planck's real-internal value: 1.5301167/4).",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SOSCF :",
+    "Wavefunction stability analysis"
+   ],
+   "not_contains": [
+    "Building AO ERI tensor"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0066059836,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_real_internal",
+     "expected": 0.38252918,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_complex_internal",
+     "expected": 0.35342077,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_triplet_external",
+     "expected": 0.30840102,
+     "atol": 1e-06
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uhf_rijk_soscf_stability_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_soscf_stability_631gd.hfinp",
+   "_note": "RI-JK SOSCF + stability (docs/RI_JK_ROUTINE.md step 4). Under scf_ri_jk the SOSCF Hessian and the stability MO blocks come from the RI factors; before, SOSCF rebuilt the dense AO ERI tensor every SOSCF step and stability diagonalized the exact Hessian at RI orbitals (~1e-6 off). Eigenvalues equal PySCF stability on mf.density_fit() (def2-universal-JKFIT; PySCF uhf_internal is 2x Planck's: 0.14645447/2).",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "open_shell"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SOSCF :",
+    "Wavefunction stability analysis"
+   ],
+   "not_contains": [
+    "Building AO ERI tensor"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.3691838375,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_uhf_internal",
+     "expected": 0.073227235,
+     "atol": 1e-06
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_gradient_631gd.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 8.3e-11). RI-JK RHF gradient (docs/RI_JK_ROUTINE.md step 9), def2-universal-JKFIT: Planck equals PySCF to every printed digit. Was water_rhf_rijk_gradient_rejected; before step 3 the exact-integral gradient at RI orbitals ran here, 9.9e-6 off. Forming V^-1 explicitly (cond ~8e11 for Cartesian JKFIT) put it 2.1e-6 off; the triangular solves fix that.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0066059836,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.0668716795
+      ],
+      [
+       -0.0302562839,
+       0.0,
+       -0.0334358397
+      ],
+      [
+       0.0302562839,
+       0.0,
+       -0.0334358397
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rhf_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_rhf_rijk_gradient_631gd.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 2.2e-9). C1 H2O2, all 12 components independent; Planck equals PySCF to every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.7538444878,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.0543264556,
+       0.0076076639,
+       -0.0374872943
+      ],
+      [
+       0.0420591616,
+       0.0104297256,
+       -0.0403316076
+      ],
+      [
+       0.0535452619,
+       0.004955153,
+       0.0301175181
+      ],
+      [
+       -0.041277968,
+       -0.0229925425,
+       0.0477013838
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_rijk_geomopt_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_geomopt_631gd.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 geometric GAU_TIGHT on mf.density_fit(), def2-universal-JKFIT (tests/pyscf/ri_jk_gradient_references.py): E_opt -76.0107180372, matched to every printed digit. geomopt_grad_tol 1.5e-5 is GAU_TIGHT's max force.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Geometry Optimization :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "geomopt_final_energy",
+     "expected": -76.0107180372,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_rijk_freq_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_freq_631gd.hfinp",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "timeout_s": 300,
+   "_pyscf_reference": "Central differences at h = 5e-3 Bohr of PySCF 2.15.0 analytic mf.density_fit() gradients + thermo.harmonic_analysis (tests/pyscf/ri_jk_gradient_references.py): 1578.68/4585.52/4766.02 cm-1. Planck matches every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Vibrational Frequencies"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1578.68,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 4585.52,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 4766.02,
+     "atol": 0.05
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uhf_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_uhf_rijk_gradient_631gd.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 4.9e-11). RI-JK UHF gradient (docs/RI_JK_ROUTINE.md step 10), def2-universal-JKFIT; Planck equals PySCF to every printed digit. Was water_cation_uhf_rijk_gradient_rejected.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.6033375269,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.0988229167
+      ],
+      [
+       -0.075368717,
+       0.0,
+       -0.0494114583
+      ],
+      [
+       0.075368717,
+       0.0,
+       -0.0494114583
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_rohf_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_rohf_rijk_gradient_631gd.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 8.5e-11). RI-JK ROHF gradient (step 10); Planck equals PySCF to every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.5989675667,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.0982693749
+      ],
+      [
+       -0.0747870819,
+       0.0,
+       -0.0491346875
+      ],
+      [
+       0.0747870819,
+       0.0,
+       -0.0491346875
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uhf_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_gradient_631gd.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/ri_jk_gradient_references.py (PySCF 2.15.0 mf.density_fit().nuc_grad_method(), orbital and aux bases from Planck's GBS; PySCF's analytic gradient matches its own fourth-order energy FD to 1.4e-9 with displaced SCFs seeded from the central density). C1 H2O2 cation UHF, all 12 components independent (step 10); Planck equals PySCF to every printed digit, and Planck's own 5-point energy FD to 3.7e-8. PySCF from 1e lands on a saddle; the script follows the instability.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.3691838375,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.0237477185,
+       0.0314877619,
+       -0.0290440048
+      ],
+      [
+       0.0246942156,
+       -0.0080101925,
+       -0.0254836713
+      ],
+      [
+       0.0186956789,
+       -0.0090002184,
+       0.0200386311
+      ],
+      [
+       -0.019642176,
+       -0.014477351,
+       0.034489045
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_rijk_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_spherical_gradient_631gd.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "spherical"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 mf.density_fit().nuc_grad_method(), cart=False, 6-31G* and def2-universal-JKFIT (spherical aux) from Planck's GBS (tests/pyscf/ri_jk_gradient_references.py; PySCF's analytic gradient matches its own energy FD to 9.0e-11). Planck matches every printed digit. Spherical RI derivative lift (docs/RI_JK_ROUTINE.md step 16). Was water_rhf_rijk_spherical_gradient_rejected (step 10).",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0052219694,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.0665729831
+      ],
+      [
+       -0.0303712792,
+       0.0,
+       -0.0332864915
+      ],
+      [
+       0.0303712792,
+       0.0,
+       -0.0332864915
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uhf_rijk_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_cation_uhf_rijk_spherical_gradient_631gd.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "spherical",
+    "open_shell"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 mf.density_fit().nuc_grad_method(), cart=False, 6-31G* and def2-universal-JKFIT (spherical aux) from Planck's GBS (tests/pyscf/ri_jk_gradient_references.py; PySCF's analytic gradient matches its own energy FD to 9.7e-10). Planck matches every printed digit. Spherical RI derivative lift (docs/RI_JK_ROUTINE.md step 16). C1 H2O2 cation UHF, all 12 components independent.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -150.3667155884,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.0227793861,
+       0.0311545078,
+       -0.0286381358
+      ],
+      [
+       0.0239217301,
+       -0.0077328588,
+       -0.0248903555
+      ],
+      [
+       0.0180311708,
+       -0.008860471,
+       0.0196110557
+      ],
+      [
+       -0.0191735149,
+       -0.014561178,
+       0.0339174357
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_rijk_631gd",
+   "input": "tests/inputs/regression/ri/water_rks_pbe_rijk_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit(), def2-universal-JKFIT and 6-31G* from Planck's GBS, unpruned 150 x 590 grid (tests/pyscf/ri_jk_dft_references.py): -76.3126823494; exact-integral energy -76.3126584396. Planck matches every printed digit. RI-J for pure functionals (docs/RI_JK_ROUTINE.md step 12). Was water_rks_pbe_rijk_rejected (step 6).",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3126823494,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_pbe_rijk_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_uks_pbe_rijk_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.UKS(...).density_fit(), def2-universal-JKFIT and 6-31G* from Planck's GBS, unpruned 150 x 590 grid (tests/pyscf/ri_jk_dft_references.py): -75.8534904952; exact-integral energy -75.8534653188. Planck matches every printed digit. UKS: J from the total density.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.8534904952,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_rijk_spherical_631gd",
+   "input": "tests/inputs/regression/ri/water_rks_pbe_rijk_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit(), def2-universal-JKFIT and 6-31G* from Planck's GBS, unpruned 150 x 590 grid (tests/pyscf/ri_jk_dft_references.py): -76.3107746348; exact-integral energy -76.3107325601. Planck matches every printed digit. Spherical: the RI J is built in the working basis and added after the Cartesian-to-working projection of the other KS terms.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3107746348,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rks_b3lyp_rijk_631gd",
+   "input": "tests/inputs/regression/ri/water_rks_b3lyp_rijk_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit(), B3LYP, def2-universal-JKFIT and 6-31G* from Planck's GBS, unpruned 150 x 590 grid (tests/pyscf/ri_jk_dft_references.py): -76.4009488436; exact-integral energy -76.4009350142. Planck matches every printed digit. RI-J + RI-K for a global hybrid (docs/RI_JK_ROUTINE.md step 13). Was water_rks_b3lyp_rijk_rejected (step 12).",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4009488436,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_b3lyp_rijk_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_uks_b3lyp_rijk_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.UKS(...).density_fit(), B3LYP, def2-universal-JKFIT and 6-31G* from Planck's GBS, unpruned 150 x 590 grid (tests/pyscf/ri_jk_dft_references.py): -75.9401245123; exact-integral energy -75.9401084943. Planck matches every printed digit. UKS: K per spin with -c, energy -1/2 c sum_sigma tr(P_sigma K_sigma).",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.9401245123,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rks_b3lyp_rijk_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_rks_b3lyp_rijk_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit(), B3LYP, def2-universal-JKFIT and 6-31G* from Planck's GBS, unpruned 150 x 590 grid (tests/pyscf/ri_jk_dft_references.py): -151.5278433929; exact-integral energy -151.5278251054. Planck matches every printed digit. C1 H2O2.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -151.5278433929,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rks_hse06_rijk_rejected",
+   "input": "tests/inputs/regression/ri/water_rks_hse06_rijk_rejected.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_note": "Boundary marker (docs/RI_JK_ROUTINE.md step 13): the RI 2c/3c integrals are Coulomb-kernel only, so range-separated functionals are refused under scf_ri_jk.",
+   "expected_exit_code": 1,
+   "contains": [
+    "not a range-separated functional"
+   ]
+  },
+  {
+   "id": "water_rks_b3lyp_rijk_soscf_stability_631gd",
+   "input": "tests/inputs/regression/ri/water_rks_b3lyp_rijk_soscf_stability_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "KS orbital Hessian on the fitted operator (docs/RI_JK_ROUTINE.md step 14): singlet gen_g_hop_rhf/2 +0.3242326, triplet rhf_external +0.2702975. PySCF 2.15.0 on dft.RKS(...).density_fit(), 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590 (tests/pyscf/ri_jk_dft_references.py). Planck matches every printed digit. With the exact-integral Hessian at the RI orbitals (the pre-step-14 behaviour) the eigenvalues move by 6.7e-6 (singlet) and 5e-7 (triplet), so atol is 2e-7. SOSCF reaches the RI DIIS energy.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT SOSCF :",
+    "RKS -> RKS (real, internal)",
+    "RKS -> UKS (triplet, external)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4009488436,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_internal",
+     "expected": 0.3242326,
+     "atol": 2e-07
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_triplet",
+     "expected": 0.2702975,
+     "atol": 2e-07
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_pbe_rijk_soscf_stability_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_uks_pbe_rijk_soscf_stability_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft",
+    "open_shell"
+   ],
+   "_pyscf_reference": "UKS orbital Hessian on the fitted operator (step 14): gen_g_hop_uhf +0.0688955. PySCF 2.15.0 on dft.UKS(...).density_fit(), 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590 (tests/pyscf/ri_jk_dft_references.py). Planck matches every printed digit. With the exact-integral Hessian at the RI orbitals (the pre-step-14 behaviour) the eigenvalues move by 6.4e-6, so atol is 2e-7. SOSCF reaches the RI DIIS energy.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT UKS SOSCF :",
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.8534904952,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_uks_internal",
+     "expected": 0.0688955,
+     "atol": 2e-07
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_rks_pbe_rijk_gradient_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit().nuc_grad_method() with grid response, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590, conv_tol_grad 1e-9 (tests/pyscf/ri_jk_dft_references.py). Planck matches every component to <= 7e-11 Ha/Bohr. KS RI-JK gradient (docs/RI_JK_ROUTINE.md step 15). Was water_rks_pbe_rijk_gradient_rejected (step 12).",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3126823494,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.0970587312
+      ],
+      [
+       -0.0518047078,
+       0.0,
+       -0.0485293656
+      ],
+      [
+       0.0518047078,
+       0.0,
+       -0.0485293656
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rks_b3lyp_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/h2o2_rks_b3lyp_rijk_gradient_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit().nuc_grad_method() with grid response, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590, conv_tol_grad 1e-9 (tests/pyscf/ri_jk_dft_references.py). Planck matches every component to <= 7e-11 Ha/Bohr. C1 H2O2 B3LYP: RI-K through the exchange fraction.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -151.5278433929,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.0295825789,
+       -0.0225488393,
+       -0.0218448412
+      ],
+      [
+       0.0227562077,
+       0.0381457757,
+       -0.0224515221
+      ],
+      [
+       0.0301253374,
+       0.0009681803,
+       0.0170656227
+      ],
+      [
+       -0.0232989661,
+       -0.0165651168,
+       0.0272307406
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_b3lyp_rijk_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_cation_uks_b3lyp_rijk_gradient_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft",
+    "open_shell"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.UKS(...).density_fit().nuc_grad_method() with grid response, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590, conv_tol_grad 1e-9 (tests/pyscf/ri_jk_dft_references.py). Planck matches every component to <= 7e-11 Ha/Bohr. UKS B3LYP.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.9401245123,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.1221574758
+      ],
+      [
+       -0.0905998929,
+       0.0,
+       -0.0610787379
+      ],
+      [
+       0.0905998929,
+       0.0,
+       -0.0610787379
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_rijk_geomopt_631gd",
+   "input": "tests/inputs/regression/ri/water_rks_pbe_rijk_geomopt_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 geometric GAU_TIGHT on dft.RKS(...).density_fit(), optimizing with grid response on (the Gradients object is passed to optimize), PBE, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590 (tests/pyscf/ri_jk_dft_references.py): E_opt -76.3225206089. Planck matches every printed digit. geomopt_grad_tol 1.5e-5 is GAU_TIGHT's max force.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Geometry Optimization :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "geomopt_final_energy",
+     "expected": -76.3225206089,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_rijk_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/ri/water_rks_pbe_rijk_spherical_gradient_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "ri",
+    "dft",
+    "spherical"
+   ],
+   "_pyscf_reference": "PySCF 2.15.0 dft.RKS(...).density_fit().nuc_grad_method() with grid response, cart=False, PBE, 6-31G* and def2-universal-JKFIT from Planck's GBS, unpruned 150 x 590 (tests/pyscf/ri_jk_dft_references.py). Planck matches every component to ~1e-12. Spherical KS RI-JK gradient (docs/RI_JK_ROUTINE.md step 16). Was water_rks_pbe_rijk_spherical_gradient_rejected (step 15).",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3107746348,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.0961294035
+      ],
+      [
+       -0.0518437078,
+       0.0,
+       -0.0480647018
+      ],
+      [
+       0.0518437078,
+       0.0,
+       -0.0480647018
+      ]
+     ],
+     "atol": 2e-08
     }
    ]
   },
@@ -1600,6 +2836,90 @@
    "_note": "Gap 3 (docs/HPC_MPI.md): 16 waters, 6-31G, nb=208, direct SCF with the default engine. Large enough for a partition defect to show; serial, 2 and 4 ranks must agree on every printed digit."
   },
   {
+   "id": "water_rhf_rijk_631gd_mpi_smoke",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_631gd.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "3", "--atol", "2e-10", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI (docs/RI_MPI_SCOPE.md M1): 3c build, pair factors, RI-J and RI-K split across ranks. Serial vs 2 and 3 ranks. Not bitwise: the partial sums reassociate, so the energy may move in its last printed digit."
+  },
+  {
+   "id": "water_cation_uhf_rijk_gradient_631gd_mpi_smoke",
+   "input": "tests/inputs/regression/ri/water_cation_uhf_rijk_gradient_631gd.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "3", "--atol", "2e-8", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI: UHF RI-JK SCF plus the RI-JK gradient (gamma3 over owned Q, derivative loops over owned aux shells). Gradient rows print 8 decimals, hence 2e-8."
+  },
+  {
+   "id": "water_rks_b3lyp_rijk_631gd_mpi_smoke",
+   "input": "tests/inputs/regression/ri/water_rks_b3lyp_rijk_631gd.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "3", "--atol", "2e-10", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI: KS assembly with the split RI-J and RI-K (global hybrid)."
+  },
+  {
+   "id": "water_rhf_rijk_soscf_stability_631gd_mpi_smoke",
+   "input": "tests/inputs/regression/ri/water_rhf_rijk_soscf_stability_631gd.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "--atol", "2e-10", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI: SOSCF orbital-Hessian products through the split RI-J/K, and stability through transform_eri_ri (fitted_gram over owned Q)."
+  },
+  {
+   "id": "water_cation_rimp2_ccpvdz_mpi_smoke",
+   "input": "tests/inputs/regression/ri/water_cation_rimp2_ccpvdz.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "3", "--atol", "2e-10", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI: UMP2 energy. build_ri_mo_block over owned AO pairs, the ovov/ovOV Gram over owned Q. The MP2 total energy is compared too."
+  },
+  {
+   "id": "water_ri_rmp2_gradient_631gd_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water_ri_rmp2_gradient_631gd_mpi.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "3", "--atol", "2e-8", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI: RI-RMP2 gradient (OVOV tile stream, imat and gamma3 from pair blocks over owned Q, derivative loops over owned aux shells)."
+  },
+  {
+   "id": "water_casscf_ri_ccpvdz_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water_casscf_ri_ccpvdz_mpi.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "args": ["--ranks", "2", "--atol", "2e-10", "--timeout", "30"],
+   "expected_exit_code": 0,
+   "_note": "RI under MPI: RI CASSCF (fitted core/active Fock through build_ri_fock_rhf, active integrals through transform_eri_ri). The final Total Energy line is compared."
+  },
+  {
    "id": "h2_rmp2_gradient_smoke",
    "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
    "tags": [
@@ -1695,6 +3015,7 @@
    "id": "water_ri_rmp2_gradient_fd",
    "input": "tests/inputs/regression/post_hf/water_ri_rmp2_gradient_sto3g.hfinp",
    "executable": "tests/rmp2_gradient_fd.py",
+   "args": ["--atol", "3e-7"],
    "tags": [
     "extended"
    ],
@@ -1706,14 +3027,50 @@
    ]
   },
   {
+   "id": "water_ri_rmp2_gradient_631gd_fd",
+   "input": "tests/inputs/regression/post_hf/water_ri_rmp2_gradient_631gd.hfinp",
+   "executable": "tests/rmp2_gradient_fd.py",
+   "args": ["--atol", "3e-7"],
+   "tags": [
+    "extended",
+    "ri"
+   ],
+   "_note": "docs/RI_MP2_GRADIENT_RESPONSE.md: RI-RMP2 gradient vs FD of its own energy, 6-31G*/cc-pVDZ-RIFIT. 1.3e-7 with the exact-operator response; the fitted CPHF/veff gave 3.9e-6.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Analytic gradient (Ha/Bohr):",
+    "Finite-difference gradient (Ha/Bohr):",
+    "PASS"
+   ]
+  },
+  {
+   "id": "water_cation_ri_ump2_gradient_631gd_fd",
+   "input": "tests/inputs/regression/open_shell/water_cation_ri_ump2_gradient_631gd.hfinp",
+   "executable": "tests/rmp2_gradient_fd.py",
+   "args": ["--atol", "3e-7"],
+   "tags": [
+    "extended",
+    "ri",
+    "open_shell"
+   ],
+   "_note": "docs/RI_MP2_GRADIENT_RESPONSE.md: RI-UMP2 gradient vs FD of its own energy, 6-31G*/cc-pVDZ-RIFIT. 1.2e-7 with the exact-operator response; the fitted CPHF/veff gave 1.6e-6.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Analytic gradient (Ha/Bohr):",
+    "Finite-difference gradient (Ha/Bohr):",
+    "PASS"
+   ]
+  },
+  {
    "id": "water_radical_cation_ri_ump2_gradient_fd",
    "input": "tests/inputs/regression/open_shell/water_radical_cation_ri_ump2_gradient_sto3g.hfinp",
    "executable": "tests/rmp2_gradient_fd.py",
+   "args": ["--atol", "3e-7"],
    "tags": [
     "extended",
     "open_shell"
    ],
-   "_note": "RG4 load-bearing gate. Full RI-consistent UMP2 analytic gradient (2e-term + RI UHF CPHF + RI Lagrangians Imata/Imatb + RI veff, all via build_ri_fock_uhf / build_ri_imat / build_ri_two_electron_gradient) vs a finite difference of the RI-UMP2 ENERGY. max |dg| = 1.9e-7 Ha/Bohr (tol 3e-4). Bisecting the four RI surfaces isolated a factor-of-2 in the 2e-term: build_ri_two_electron_gradient reproduces the RHF dense convention (2.0*dm2buf), while the UMP2 dense term contracts dm2a+dm2b with no factor 2 -- RI/dense measured exactly 2.0000 on every non-zero component. Hence the 0.5 in mp2_gradient.cpp.",
+   "_note": "RG4 load-bearing gate. Full RI-consistent UMP2 analytic gradient (2e-term + RI UHF CPHF + RI Lagrangians Imata/Imatb + RI veff, all via build_ri_fock_uhf / build_ri_imat / build_ri_two_electron_gradient) vs a finite difference of the RI-UMP2 ENERGY. max |dg| = 1.9e-7 Ha/Bohr (tol 3e-4; 3e-7 since 2026-11-16, 1.6e-7 with the exact-operator response of docs/SCF_ORBITAL_HESSIAN_OPERATOR.md). Bisecting the four RI surfaces isolated a factor-of-2 in the 2e-term: build_ri_two_electron_gradient reproduces the RHF dense convention (2.0*dm2buf), while the UMP2 dense term contracts dm2a+dm2b with no factor 2 -- RI/dense measured exactly 2.0000 on every non-zero component. Hence the 0.5 in mp2_gradient.cpp.",
    "expected_exit_code": 0,
    "contains": [
     "Analytic gradient (Ha/Bohr):",
@@ -1812,15 +3169,96 @@
    ]
   },
   {
-   "id": "water_ri_rmp2_freq_rejected",
-   "input": "tests/inputs/regression/post_hf/water_ri_rmp2_freq_rejected.hfinp",
+   "id": "water_ri_rmp2_freq_sto3g",
+   "input": "tests/inputs/regression/post_hf/water_ri_rmp2_freq_sto3g.hfinp",
    "tags": [
     "extended"
    ],
-   "_note": "Boundary marker, pins guard ORDERING. RI + frequency must fall through the RI-MP2 workflow gate and be rejected by the correlated-frequency guard instead, because that is the accurate reason: the semi-numerical Hessian differentiates the SCF gradient, not the MP2 gradient -- a limitation of every MP2, dense or RI, not something RI-specific. If the RI gate ever swallows freq workflows again the user gets a misleading 'RI does not support frequency' message. Asserts the frequency guard's text, not the RI gate's.",
+   "timeout_s": 300,
+   "_pyscf_reference": "PySCF 2.15.0 has no DF-MP2 gradient, so tests/pyscf/ri_mp2_frequency_references.py builds the gradient as a fourth-order FD (1e-3 Bohr) of the RI-MP2 energy (dense SCF + DF-MP2, cc-pVDZ-RIFIT from Planck's GBS), then central differences at Planck's h = 5e-3 Bohr and thermo.harmonic_analysis. Independent of Planck's RI-MP2 gradient, its per-geometry RI cache invalidation and its Hessian loop. RI-RMP2/STO-3G water: 1480.60/5000.85/5418.23 cm-1, E -74.9767723887; Planck matches every printed digit. Was water_ri_rmp2_freq_rejected (docs/RI_JK_ROUTINE.md step 8).",
+   "expected_exit_code": 0,
+   "contains": [
+    "Vibrational Frequencies",
+    "Total MP2 Energy                    -74.9767723"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1480.6,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 5000.85,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 5418.23,
+     "atol": 0.05
+    }
+   ]
+  },
+  {
+   "id": "water_radical_cation_ri_ump2_freq_sto3g",
+   "input": "tests/inputs/regression/open_shell/water_radical_cation_ri_ump2_freq_sto3g.hfinp",
+   "tags": [
+    "extended",
+    "open_shell"
+   ],
+   "timeout_s": 300,
+   "_pyscf_reference": "PySCF 2.15.0 has no DF-MP2 gradient, so tests/pyscf/ri_mp2_frequency_references.py builds the gradient as a fourth-order FD (1e-3 Bohr) of the RI-MP2 energy (dense SCF + DF-MP2, cc-pVDZ-RIFIT from Planck's GBS), then central differences at Planck's h = 5e-3 Bohr and thermo.harmonic_analysis. Independent of Planck's RI-MP2 gradient, its per-geometry RI cache invalidation and its Hessian loop. RI-UMP2/STO-3G water cation: 1347.72/4689.10/4868.83 cm-1, E -74.6833315533; Planck prints 1347.73 (last-digit rounding), the rest identical.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Vibrational Frequencies",
+    "Total MP2 Energy                    -74.6833315"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1347.72,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 4689.1,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 4868.83,
+     "atol": 0.05
+    }
+   ]
+  },
+  {
+   "id": "water_rmp2_frozen_gradient_rejected",
+   "input": "tests/inputs/regression/post_hf/water_rmp2_frozen_gradient_rejected.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "_note": "Boundary marker: the MP2 gradient builders have no frozen-core terms (docs/SPHERICAL_MP2_GRADIENTS.md), so mp2_frozen + gradient is refused by name.",
    "expected_exit_code": 1,
    "contains": [
-    "Correlated (MP2) frequencies are not implemented"
+    "frozen-orbital gradients are not implemented"
+   ]
+  },
+  {
+   "id": "water_radical_cation_ump2_frozen_gradient_rejected",
+   "input": "tests/inputs/regression/open_shell/water_radical_cation_ump2_frozen_gradient_rejected.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "_note": "Boundary marker, UMP2: before 2026-11-11 this ran and printed a gradient 4.5e-2 Ha/Bohr off the frozen-core energy FD (O z analytic -0.1647 vs FD -0.1201) with no warning. Now refused by name, as RMP2 always was.",
+   "expected_exit_code": 1,
+   "contains": [
+    "frozen-orbital gradients are not implemented"
    ]
   },
   {
@@ -1918,16 +3356,73 @@
    ]
   },
   {
-   "id": "water_radical_cation_ump2_freq_rejected",
-   "input": "tests/inputs/regression/open_shell/water_radical_cation_ump2_freq_rejected.hfinp",
+   "id": "water_radical_cation_ump2_freq_sto3g",
+   "input": "tests/inputs/regression/open_shell/water_radical_cation_ump2_freq_sto3g.hfinp",
    "tags": [
     "extended",
     "open_shell"
    ],
-   "_note": "Boundary marker. freq/hessian.cpp finite-differences the SCF gradient (compute_{rhf,uhf,rohf}_gradient) and never calls the MP2 gradient, so correlation rmp2/ump2 + frequency|geomoptfreq|imaginaryfollow would silently report HF frequencies. hf_driver.cpp rejects the combination; this pins that. Remove once the MP2 gradient is wired into the Hessian dispatch.",
-   "expected_exit_code": 1,
+   "timeout_s": 300,
+   "_pyscf_reference": "Cartesian UMP2/STO-3G frequencies, water cation doublet at the input geometry. PySCF 2.15.0 central differences of the analytic UMP2 gradient (h = 5e-3 Bohr, Planck's default) + thermo.harmonic_analysis (tests/pyscf/mp2_frequency_references.py): 1347.71/4689.09/4868.83 cm-1, E(UMP2) -74.6833354374. Planck matches every printed digit. Was water_radical_cation_ump2_freq_rejected until the Hessian loop shared geomopt's per-geometry SCF+MP2+gradient step (Opt::run_scf_gradient).",
+   "expected_exit_code": 0,
    "contains": [
-    "Correlated (MP2) frequencies are not implemented"
+    "Vibrational Frequencies",
+    "Total MP2 Energy                    -74.6833354"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1347.71,
+     "atol": 0.1
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 4689.09,
+     "atol": 0.1
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 4868.83,
+     "atol": 0.1
+    }
+   ]
+  },
+  {
+   "id": "water_rmp2_spherical_freq_631gd",
+   "input": "tests/inputs/regression/spherical/water_rmp2_spherical_freq_631gd.hfinp",
+   "tags": [
+    "extended",
+    "spherical"
+   ],
+   "timeout_s": 300,
+   "_pyscf_reference": "Spherical RMP2/6-31G* frequencies, water at the input geometry. PySCF 2.15.0 cart=False central differences of the analytic RMP2 gradient (h = 5e-3 Bohr) + thermo.harmonic_analysis (tests/pyscf/mp2_frequency_references.py): 1703.73/3919.24/4064.72 cm-1, E(RMP2) -76.1953214676. Planck matches every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Vibrational Frequencies",
+    "Total MP2 Energy                    -76.1953214"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1703.73,
+     "atol": 0.1
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 3919.24,
+     "atol": 0.1
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 4064.72,
+     "atol": 0.1
+    }
    ]
   },
   {
@@ -4372,13 +5867,13 @@
     {
      "type": "metric_close",
      "metric": "fciqmc_shift_energy",
-     "expected": -109.3621938886,
+     "expected": -108.9703898222,
      "atol": 0.0
     },
     {
      "type": "metric_close",
      "metric": "fciqmc_projected_energy",
-     "expected": -107.6491160356,
+     "expected": -107.5753149721,
      "atol": 0.0
     }
    ]
@@ -4806,17 +6301,222 @@
    ]
   },
   {
-   "id": "water_rmp2_spherical_gradient_rejected",
-   "input": "tests/inputs/regression/spherical/water_rmp2_spherical_gradient_rejected.hfinp",
+   "id": "water_ri_rmp2_spherical_gradient_631gd_fd",
+   "input": "tests/inputs/regression/spherical/water_ri_rmp2_spherical_gradient_631gd.hfinp",
+   "executable": "tests/rmp2_gradient_fd.py",
+   "args": ["--atol", "3e-7"],
    "tags": [
-    "smoke",
-    "core",
+    "extended",
+    "ri",
     "spherical"
    ],
-   "expected_exit_code": 1,
+   "_note": "docs/RI_MP2_GRADIENT_RESPONSE.md: spherical RI-RMP2 gradient vs FD of its own energy (6-31G*/cc-pVDZ-RIFIT). Was refused until the response became exact (docs/SCF_ORBITAL_HESSIAN_OPERATOR.md); the fitted response missed by 3.5e-6.",
+   "expected_exit_code": 0,
    "contains": [
-    "Spherical Basis :",
-    "MP2 analytic gradient is not yet supported"
+    "Analytic gradient (Ha/Bohr):",
+    "Finite-difference gradient (Ha/Bohr):",
+    "PASS"
+   ]
+  },
+  {
+   "id": "water_cation_ri_ump2_spherical_gradient_631gd_fd",
+   "input": "tests/inputs/regression/spherical/water_cation_ri_ump2_spherical_gradient_631gd.hfinp",
+   "executable": "tests/rmp2_gradient_fd.py",
+   "args": ["--atol", "3e-7"],
+   "tags": [
+    "extended",
+    "ri",
+    "spherical",
+    "open_shell"
+   ],
+   "_note": "docs/RI_MP2_GRADIENT_RESPONSE.md: spherical RI-UMP2 gradient vs FD of its own energy (6-31G*/cc-pVDZ-RIFIT); the fitted response missed by 1.6e-6.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Analytic gradient (Ha/Bohr):",
+    "Finite-difference gradient (Ha/Bohr):",
+    "PASS"
+   ]
+  },
+  {
+   "id": "water_rmp2_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/spherical/water_rmp2_spherical_gradient_631gd.hfinp",
+   "tags": [
+    "extended",
+    "spherical",
+    "gradient"
+   ],
+   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENTS.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 1.4e-8 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "mp2_total_energy",
+     "expected": -76.1953214676,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       -0.0140942276
+      ],
+      [
+       0.0,
+       -0.0091562463,
+       0.0070471135
+      ],
+      [
+       0.0,
+       0.0091562462,
+       0.0070471135
+      ]
+     ],
+     "atol": 3e-08
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rmp2_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_rmp2_spherical_gradient_631gd.hfinp",
+   "tags": [
+    "extended",
+    "spherical",
+    "gradient"
+   ],
+   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENTS.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 1.1e-7 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "mp2_total_energy",
+     "expected": -151.1215293078,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.0271111608,
+       -0.0304275753,
+       -0.0212403143
+      ],
+      [
+       0.0208861491,
+       0.0463196231,
+       -0.0224604543
+      ],
+      [
+       0.0293527053,
+       0.0021735566,
+       0.0165583316
+      ],
+      [
+       -0.0231276934,
+       -0.0180656046,
+       0.0271424367
+      ]
+     ],
+     "atol": 3e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_ump2_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/spherical/water_cation_ump2_spherical_gradient_631gd.hfinp",
+   "tags": [
+    "extended",
+    "spherical",
+    "gradient"
+   ],
+   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENTS.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 1.7e-7 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "mp2_total_energy",
+     "expected": -75.747266995,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       -0.0474273543
+      ],
+      [
+       0.0,
+       -0.0477917627,
+       0.0237136768
+      ],
+      [
+       0.0,
+       0.0477917627,
+       0.0237136768
+      ]
+     ],
+     "atol": 3e-08
+    }
+   ]
+  },
+  {
+   "id": "ch3_radical_ump2_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/spherical/ch3_radical_ump2_spherical_gradient_631gd.hfinp",
+   "tags": [
+    "extended",
+    "spherical",
+    "gradient"
+   ],
+   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENTS.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 4.2e-7 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "mp2_total_energy",
+     "expected": -39.6577191473,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0277778758,
+       -0.0255476034,
+       -0.0392421526
+      ],
+      [
+       -0.0254002936,
+       0.0136413853,
+       0.0078848025
+      ],
+      [
+       0.0060737413,
+       0.0005245889,
+       0.0161230292
+      ],
+      [
+       -0.0084513234,
+       0.0113816294,
+       0.015234321
+      ]
+     ],
+     "atol": 3e-08
+    }
    ]
   },
   {
@@ -4964,17 +6664,30 @@
    ]
   },
   {
-   "id": "water_rmp2_spherical_geomopt_rejected",
-   "input": "tests/inputs/regression/spherical/water_rmp2_spherical_geomopt_rejected.hfinp",
+   "id": "water_rmp2_spherical_geomopt_631gd",
+   "input": "tests/inputs/regression/spherical/water_rmp2_spherical_geomopt_631gd.hfinp",
    "tags": [
-    "smoke",
-    "core",
-    "spherical"
+    "extended",
+    "spherical",
+    "geomopt"
    ],
-   "expected_exit_code": 1,
+   "_note": "Spherical RMP2 geometry optimization gate (docs/SPHERICAL_MP2_GRADIENTS.md), replacing the boundary marker water_rmp2_spherical_geomopt_rejected. Reference: PySCF 2.13.0 geometric GAU_TIGHT minimum, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py): E_opt -76.1955706453, matched to every printed digit. geomopt_grad_tol 1.5e-5 is PySCF's GAU_TIGHT max force.",
+   "expected_exit_code": 0,
    "contains": [
-    "Spherical Basis :",
-    "MP2 analytic gradient is not yet supported"
+    "Geometry Optimization :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "geomopt_final_energy",
+     "expected": -76.1955706453,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    }
    ]
   },
   {
@@ -7050,13 +8763,13 @@
     {
      "type": "metric_close",
      "metric": "gradient_max",
-     "expected": 3.0433018574e-03,
+     "expected": 0.0030433018574,
      "atol": 1e-07
     },
     {
      "type": "metric_close",
      "metric": "gradient_rms",
-     "expected": 1.7570511466e-03,
+     "expected": 0.0017570511466,
      "atol": 1e-07
     }
    ]
@@ -7077,13 +8790,13 @@
     {
      "type": "metric_close",
      "metric": "gradient_max",
-     "expected": 4.8635659355e-02,
+     "expected": 0.048635659355,
      "atol": 1e-07
     },
     {
      "type": "metric_close",
      "metric": "gradient_rms",
-     "expected": 1.9234832752e-02,
+     "expected": 0.019234832752,
      "atol": 1e-07
     }
    ]
@@ -7159,7 +8872,7 @@
     {
      "type": "metric_close",
      "metric": "vib_freq_1",
-     "expected": 2421.80,
+     "expected": 2421.8,
      "atol": 1.0
     }
    ]
@@ -7181,13 +8894,13 @@
     {
      "type": "metric_close",
      "metric": "gradient_max",
-     "expected": 4.1303019051e-03,
+     "expected": 0.0041303019051,
      "atol": 1e-07
     },
     {
      "type": "metric_close",
      "metric": "gradient_rms",
-     "expected": 2.3846309167e-03,
+     "expected": 0.0023846309167,
      "atol": 1e-07
     }
    ]
@@ -7209,13 +8922,13 @@
     {
      "type": "metric_close",
      "metric": "gradient_max",
-     "expected": 3.9617395647e-03,
+     "expected": 0.0039617395647,
      "atol": 1e-07
     },
     {
      "type": "metric_close",
      "metric": "gradient_rms",
-     "expected": 2.2873114041e-03,
+     "expected": 0.0022873114041,
      "atol": 1e-07
     }
    ]
@@ -7270,7 +8983,7 @@
     {
      "type": "metric_close",
      "metric": "mp2_corr_energy",
-     "expected": -0.1434184970,
+     "expected": -0.143418497,
      "atol": 1e-08
     }
    ]
@@ -7612,6 +9325,27 @@
      "expected": -75.2899128207,
      "atol": 1e-08
     }
+   ],
+   "json_checks": [
+    {
+     "field": "dispersion_energy",
+     "expected": -0.00057366166775,
+     "atol": 1e-11
+    },
+    {
+     "field": "solvation_energy",
+     "expected": 0.0,
+     "atol": 0.0
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
    ]
   },
   {
@@ -7855,7 +9589,7 @@
   },
   {
    "id": "water_rhf_pcm_swig_631gd",
-   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
+   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1); its json_checks pin the results-JSON solvation_energy to PySCF G_pcm -0.0115156533. PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
    "input": "tests/inputs/regression/hf/water_rhf_pcm_swig_631gd.hfinp",
    "tags": [
     "extended"
@@ -7871,11 +9605,31 @@
      "expected": -76.0172764854,
      "atol": 1e-09
     }
+   ],
+   "json_checks": [
+    {
+     "field": "solvation_energy",
+     "expected": -0.0115156533,
+     "atol": 1e-10
+    },
+    {
+     "field": "dispersion_energy",
+     "expected": 0.0,
+     "atol": 0.0
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
    ]
   },
   {
    "id": "h2o2_rhf_pcm_swig_631gd",
-   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
+   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1); its json_checks pin the results-JSON solvation_energy to PySCF G_pcm -0.0115156533. PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
    "input": "tests/inputs/regression/hf/h2o2_rhf_pcm_swig_631gd.hfinp",
    "tags": [
     "extended"
@@ -7895,7 +9649,7 @@
   },
   {
    "id": "water_cation_uhf_pcm_swig_631gd",
-   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
+   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1); its json_checks pin the results-JSON solvation_energy to PySCF G_pcm -0.0115156533. PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
    "input": "tests/inputs/regression/hf/water_cation_uhf_pcm_swig_631gd.hfinp",
    "tags": [
     "extended"
@@ -7915,7 +9669,7 @@
   },
   {
    "id": "water_rks_pbe_pcm_swig_631gd",
-   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
+   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1); its json_checks pin the results-JSON solvation_energy to PySCF G_pcm -0.0115156533. PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
    "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_swig_631gd.hfinp",
    "executable": "planck-dft",
    "tags": [
@@ -8379,6 +10133,164 @@
    "checks": []
   },
   {
+   "id": "he2_rks_b3lyp_cp_ccpvdz",
+   "input": "tests/inputs/regression/dft/he2_rks_b3lyp_cp_ccpvdz.hfinp",
+   "executable": "planck-dft",
+   "_note": "DFT counterpoise gate (docs/DFT_COUNTERPOISE.md §1). PySCF 2.13.0 reference from tests/pyscf/cp_dft_references.py (cart=False, Planck's GBS and Bohr, 150 x 590 unpruned grid, ghost grids at the element's Z as in PySCF >= 2.14, hcore guess per sub-calculation). The isolated-He monomer from hcore stopped at a stalled DIIS step 6.2e-7 Eh high until the KS loops gated convergence on the DIIS residual; the BSSE here fails without that.",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Counterpoise / BSSE Report"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "cp_dimer_energy",
+     "expected": -5.8140775809,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "cp_bsse",
+     "expected": -3.24781e-05,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "cp_interaction_energy",
+     "expected": 6.30849e-05,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_dimer_rks_b3lyp_cp_ccpvdz",
+   "input": "tests/inputs/regression/dft/water_dimer_rks_b3lyp_cp_ccpvdz.hfinp",
+   "executable": "planck-dft",
+   "_note": "DFT counterpoise gate (docs/DFT_COUNTERPOISE.md §1). PySCF 2.13.0 reference from tests/pyscf/cp_dft_references.py (cart=False, Planck's GBS and Bohr, 150 x 590 unpruned grid, ghost grids at the element's Z as in PySCF >= 2.14, hcore guess per sub-calculation). ",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Counterpoise / BSSE Report"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "cp_dimer_energy",
+     "expected": -152.8537283534,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "cp_bsse",
+     "expected": -0.0056802748,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "cp_interaction_energy",
+     "expected": -0.0072000789,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_dimer_rks_b3lyp_d3bj_cp_ccpvdz",
+   "input": "tests/inputs/regression/dft/water_dimer_rks_b3lyp_d3bj_cp_ccpvdz.hfinp",
+   "executable": "planck-dft",
+   "_note": "DFT counterpoise with D3(BJ) (docs/DFT_COUNTERPOISE.md §1): ghosts carry no D3, so the BSSE equals water_dimer_rks_b3lyp_cp_ccpvdz's PySCF value exactly. Dimer and interaction energies pinned to Planck (D3 itself is gated in the *d3* cases).",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Counterpoise / BSSE Report"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "cp_dimer_energy",
+     "expected": -152.8558944053,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "cp_bsse",
+     "expected": -0.0056802748,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "cp_interaction_energy",
+     "expected": -0.008218379,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_dimer_ghost_rks_pbe_631gd",
+   "input": "tests/inputs/regression/dft/water_dimer_ghost_rks_pbe_631gd.hfinp",
+   "executable": "planck-dft",
+   "_note": "Ghost-atom RKS gate (docs/DFT_COUNTERPOISE.md §2). PySCF 2.13.0 reference from tests/pyscf/ghost_dft_references.py with the ghost grid built at the element's Z, as in PySCF >= 2.14 (#3302); PySCF 2.13's Z = 0 ghost grid gives -76.3224628463, 3.1e-8 off. use_symm is on to gate the ghost symmetry switch (He + Gh(He) was detected as Dinfh and diverged).",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Disabled because ghost atoms are present"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3224628775,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_dimer_ghost_rks_b3lyp_631gd",
+   "input": "tests/inputs/regression/dft/water_dimer_ghost_rks_b3lyp_631gd.hfinp",
+   "executable": "planck-dft",
+   "_note": "Ghost-atom RKS hybrid gate (docs/DFT_COUNTERPOISE.md §2). PySCF 2.13.0 b3lypg reference from tests/pyscf/ghost_dft_references.py, ghost grid at the element's Z (#3302).",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4092354283,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_dimer_ghost_cation_uks_pbe_631gd",
+   "input": "tests/inputs/regression/dft/water_dimer_ghost_cation_uks_pbe_631gd.hfinp",
+   "executable": "planck-dft",
+   "_note": "Ghost-atom UKS gate (docs/DFT_COUNTERPOISE.md §2): water cation doublet with a ghosted water, SAD guess (PySCF minao). PySCF 2.13.0 reference from tests/pyscf/ghost_dft_references.py, ghost grid at the element's Z (#3302).",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.8685845992,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "h2o2_cation_uks_b2plyp_v4_gradient_sto3g",
    "input": "tests/inputs/regression/dft/h2o2_cation_uks_b2plyp_v4_gradient_sto3g.hfinp",
    "executable": "planck-dft",
@@ -8425,6 +10337,423 @@
       ]
      ],
      "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "ho2_uks_b2plyp_v4_geomoptfreq_sto3g",
+   "input": "tests/inputs/regression/dft/ho2_uks_b2plyp_v4_geomoptfreq_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_note": "UKS double-hybrid geometry optimization + frequencies (docs/UKS_DH_GEOMOPT_FREQ.md). Pinned to Planck after tests/dh_workflow_audit.py passed on this input: callback Hessian vs 18 independent gradients 2.8e-9, energy FD vs gradient at the optimum 2.2e-9 Ha/Bohr. PySCF is not a valid double-hybrid gradient reference. ~6 min at 4 threads.",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 1200,
+   "expected_exit_code": 0,
+   "contains": [
+    "Starting L-BFGS optimizer with analytic double-hybrid gradients",
+    "via analytic double-hybrid gradients",
+    "Geometry Optimization :       Converged in"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "geomopt_final_energy",
+     "expected": -148.6568370557,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1331.76,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 1522.35,
+     "atol": 0.05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 3567.63,
+     "atol": 0.05
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_pbe_pcm_swig_gradient_631gd",
+   "_note": "UKS PCM analytic gradient (PBE, unpruned 150 x 590, SAD guess). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (docs/PCM_GATING.md), with grid response; Planck agrees to 6e-12. G_pcm -0.1471609990.",
+   "input": "tests/inputs/regression/dft/water_cation_uks_pbe_pcm_swig_gradient_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with"
+   ],
+   "checks": [
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.134161221198
+      ],
+      [
+       -0.090838957793,
+       0.0,
+       -0.067080610599
+      ],
+      [
+       0.090838957793,
+       0.0,
+       -0.067080610599
+      ]
+     ],
+     "atol": 1e-09
+    }
+   ],
+   "json_checks": [
+    {
+     "field": "solvation_energy",
+     "expected": -0.147160999,
+     "atol": 1e-09
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_pcm_swig_gradient_spherical_631gd",
+   "_note": "Spherical RKS PCM analytic gradient (PBE, cart=False). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (docs/PCM_GATING.md), with grid response; Planck agrees to 3.6e-11. G_pcm -0.0102173958.",
+   "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_swig_gradient_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with"
+   ],
+   "checks": [
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.100335391585
+      ],
+      [
+       -0.052850862411,
+       0.0,
+       -0.050167695792
+      ],
+      [
+       0.052850862411,
+       0.0,
+       -0.050167695792
+      ]
+     ],
+     "atol": 1e-09
+    }
+   ],
+   "json_checks": [
+    {
+     "field": "solvation_energy",
+     "expected": -0.0102173958,
+     "atol": 1e-09
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uhf_pcm_swig_geomoptfreq_631gd",
+   "_note": "Optimized with geomopt_grad_tol 1.5e-5 (PySCF gau_tight max force); the JSON solvation_energy check is 5e-7 because PySCF's own gau_tight geometry leaves ~1e-7 in G_pcm (UHF: Planck stops at 5.9e-6 Ha/Bohr, energies agree to 1e-10). Exact G_pcm agreement is gated at fixed geometry by the *_pcm_swig_gradient_* cases. UHF PCM geomopt + frequencies (SAD guess). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (docs/PCM_GATING.md): gau_tight optimum -75.7624343663 (Planck 5.3e-9 above), analytic PCM Hessian frequencies 1599.81 / 3624.39 / 3659.78 (Planck 1599.65 / 3625.12 / 3660.56). The energy metric is named rhf_total_energy for UHF too.",
+   "input": "tests/inputs/regression/hf/water_cation_uhf_pcm_swig_geomoptfreq_631gd.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 900,
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with",
+    "Final Energy",
+    "Vibrational Frequencies"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.7624343663,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1599.81,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 3624.39,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 3659.78,
+     "atol": 1.0
+    }
+   ],
+   "json_checks": [
+    {
+     "field": "total_energy",
+     "expected": -75.7624343663,
+     "atol": 1e-08
+    },
+    {
+     "field": "solvation_energy",
+     "expected": -0.1480744166,
+     "atol": 5e-07
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_pcm_swig_spherical_geomoptfreq_631gd",
+   "_note": "Optimized with geomopt_grad_tol 1.5e-5 (PySCF gau_tight max force); the JSON solvation_energy check is 5e-7 because PySCF's own gau_tight geometry leaves ~1e-7 in G_pcm (UHF: Planck stops at 5.9e-6 Ha/Bohr, energies agree to 1e-10). Exact G_pcm agreement is gated at fixed geometry by the *_pcm_swig_gradient_* cases. Spherical RHF PCM geomopt + frequencies (cart=False). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (docs/PCM_GATING.md): optimum -76.0207714671 (Planck 7e-10 above), frequencies 1790.26 / 4028.95 / 4127.09 (Planck 1790.19 / 4029.19 / 4127.32).",
+   "input": "tests/inputs/regression/hf/water_rhf_pcm_swig_spherical_geomoptfreq_631gd.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 900,
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with",
+    "Final Energy",
+    "Vibrational Frequencies"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0207714671,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1790.26,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 4028.95,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 4127.09,
+     "atol": 1.0
+    }
+   ],
+   "json_checks": [
+    {
+     "field": "total_energy",
+     "expected": -76.0207714671,
+     "atol": 1e-08
+    },
+    {
+     "field": "solvation_energy",
+     "expected": -0.0125887668,
+     "atol": 5e-07
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_pcm_swig_geomoptfreq_631gd",
+   "_note": "Optimized with geomopt_grad_tol 1.5e-5 (PySCF gau_tight max force); the JSON solvation_energy check is 5e-7 because PySCF's own gau_tight geometry leaves ~1e-7 in G_pcm (UHF: Planck stops at 5.9e-6 Ha/Bohr, energies agree to 1e-10). Exact G_pcm agreement is gated at fixed geometry by the *_pcm_swig_gradient_* cases. RKS PBE PCM geomopt + frequencies (unpruned 150 x 590). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (docs/PCM_GATING.md): optimum -76.3327063368 (Planck to every printed digit), frequencies 1657.97 / 3626.50 / 3729.76 (Planck 1657.88 / 3626.56 / 3729.82).",
+   "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_swig_geomoptfreq_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 900,
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with",
+    "Final Energy",
+    "Vibrational Frequencies"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3327063368,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1657.97,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 3626.5,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 3729.76,
+     "atol": 1.0
+    }
+   ],
+   "json_checks": [
+    {
+     "field": "total_energy",
+     "expected": -76.3327063368,
+     "atol": 1e-08
+    },
+    {
+     "field": "solvation_energy",
+     "expected": -0.0113870301,
+     "atol": 5e-07
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_pbe_pcm_swig_geomoptfreq_631gd",
+   "_note": "Optimized with geomopt_grad_tol 1.5e-5 (PySCF gau_tight max force); the JSON solvation_energy check is 5e-7 because PySCF's own gau_tight geometry leaves ~1e-7 in G_pcm (UHF: Planck stops at 5.9e-6 Ha/Bohr, energies agree to 1e-10). Exact G_pcm agreement is gated at fixed geometry by the *_pcm_swig_gradient_* cases. UKS PBE PCM geomopt + frequencies (SAD guess, unpruned 150 x 590). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (docs/PCM_GATING.md): optimum -76.0208889251 (Planck to every printed digit at geomopt_grad_tol 1.5e-5; 1.2e-8 above at the default 3e-4, with G_pcm 1.5e-6 off), frequencies 1508.68 / 3255.16 / 3290.77 (Planck 1508.96 / 3254.44 / 3289.84).",
+   "input": "tests/inputs/regression/dft/water_cation_uks_pbe_pcm_swig_geomoptfreq_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 900,
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with",
+    "Final Energy",
+    "Vibrational Frequencies"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.0208889251,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1508.68,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 3255.16,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 3290.77,
+     "atol": 1.0
+    }
+   ],
+   "json_checks": [
+    {
+     "field": "total_energy",
+     "expected": -76.0208889251,
+     "atol": 1e-08
+    },
+    {
+     "field": "solvation_energy",
+     "expected": -0.1470295303,
+     "atol": 5e-07
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
     }
    ]
   }

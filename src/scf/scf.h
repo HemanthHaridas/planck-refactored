@@ -79,10 +79,33 @@ namespace HartreeFock
             double previous_total_energy,
             double total_energy);
 
+        // Coulomb two-electron Fock G[P] (J - ½K for RHF; {J - K_α, J - K_β}
+        // for UHF) of a density in the WORKING basis, returned in the working
+        // basis: the SCF's own two-electron operator, fitted when the SCF ran
+        // RI-JK (scf_ri_jk), exact otherwise. The one place response and
+        // gradient code chooses between them. The integral builders are Cartesian: P is lifted with
+        // to_cartesian and G brought back with to_working, both the identity
+        // in Cartesian mode. For response and gradient code; the SCF's own
+        // direct build adds incremental-Fock state on top of the same steps.
+        std::expected<Eigen::MatrixXd, std::string> two_electron_fock(
+            const HartreeFock::Calculator &calculator,
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &density);
+        std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string> two_electron_fock_uhf(
+            const HartreeFock::Calculator &calculator,
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &density_alpha,
+            const Eigen::MatrixXd &density_beta);
+
+        // diis_stall_floor: the DIIS residual below which a step is never
+        // treated as stalled (see scf.cpp). 1e-10 for HF; the KS loops pass a
+        // higher value, since their residual floor sits higher (XC grid noise,
+        // and the SOSCF deadband stops at |g| ~ 2e-9).
         bool is_converged(
             const HartreeFock::OptionsSCF &scf_options,
             const IterationMetrics &metrics,
-            unsigned int iteration) noexcept;
+            unsigned int iteration,
+            double diis_stall_floor = 1E-10) noexcept;
 
         void store_restricted_iteration(
             HartreeFock::Calculator &calculator,

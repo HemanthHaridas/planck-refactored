@@ -34,7 +34,7 @@ with system size.
 - `src/post_hf/mp2_gradient.cpp` — RMP2/UMP2 gradient, RI branches
 - `src/post_hf/{rhf,uhf}_response.cpp` — RI-consistent CPHF
 - `src/hf_driver.cpp` — the workflow gate (`ri_workflow_ok`)
-- `src/freq/hessian.cpp` — where correlated frequencies are rejected (not RI-specific)
+- `src/opt/geomopt.cpp` — `Opt::run_scf_gradient`, the per-geometry SCF → MP2 → gradient step geometry optimization and the semi-numerical Hessian share
 - `tests/rmp2_gradient_fd.py` — the FD self-consistency harness
 
 ## What invariants matter
@@ -266,8 +266,9 @@ primary regex ever failed. The fallback has been removed.
   python3 tests/run_regressions.py --suite all --case water_ri_rmp2_geomopt_stationary_fd
   python3 tests/run_regressions.py --suite all --case water_radical_cation_ri_ump2_geomopt_stationary_fd
 
-  # Guard ordering: RI + frequency must hit the FREQUENCY guard, not the RI gate
-  python3 tests/run_regressions.py --suite all --case water_ri_rmp2_freq_rejected
+  # RI-MP2 frequencies against a PySCF FD-of-RI-energy reference
+  python3 tests/run_regressions.py --suite all --case water_ri_rmp2_freq_sto3g
+  python3 tests/run_regressions.py --suite all --case water_radical_cation_ri_ump2_freq_sto3g
   ```
 
   To confirm the cache-invalidation fix (invariant 2) is load-bearing, make

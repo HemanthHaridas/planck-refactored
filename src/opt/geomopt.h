@@ -14,6 +14,13 @@ namespace HartreeFock
     {
         using GradientRunner = std::function<std::expected<Eigen::VectorXd, std::string>(HartreeFock::Calculator &)>;
 
+        // SCF (+ MP2 when requested) and analytic gradient at the geometry in
+        // calc._molecule._standard: rebuilds basis, working state and PCM cavity.
+        // Returns natoms × 3 (Ha/Bohr) and stores it in calc._gradient.
+        // warm_start seeds the SCF with the previous converged density.
+        std::expected<Eigen::MatrixXd, std::string> run_scf_gradient(HartreeFock::Calculator &calc,
+                                                                     bool warm_start);
+
         struct GeomOptResult
         {
             bool converged = false;

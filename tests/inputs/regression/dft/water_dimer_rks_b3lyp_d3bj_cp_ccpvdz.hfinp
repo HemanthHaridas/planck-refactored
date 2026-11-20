@@ -1,0 +1,48 @@
+# DFT counterpoise gate (docs/DFT_COUNTERPOISE.md §1).
+# Reference: tests/pyscf/cp_dft_references.py.
+%begin_control
+    basis       cc-pvdz
+    calculation energy
+    verbosity   normal
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type        rhf
+    max_cycles      100
+    tol_energy      1.0e-10
+    tol_density     1.0e-10
+%end_scf
+
+%begin_dft
+    grid                fine
+    grid_radial_points  150
+    grid_angular_points 590
+    exchange            b3lyp
+    correlation         lyp
+    dispersion          d3bj
+%end_dft
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+6
+0   1
+O        -1.551007    -0.114520     0.000000
+H        -1.934259     0.762503     0.000000
+H        -0.599677     0.040712     0.000000
+O         1.350625     0.111469     0.000000
+H         1.680398    -0.373741    -0.758561
+H         1.680398    -0.373741     0.758561
+%end_coords
+
+%begin_bsse
+    fragment      1 2 3
+    fragment      4 5 6
+    charge        0 0
+    multiplicity  1 1
+%end_bsse

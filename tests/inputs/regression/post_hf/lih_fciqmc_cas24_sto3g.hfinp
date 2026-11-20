@@ -21,7 +21,7 @@
     fciqmc_granularity     1.0
     fciqmc_initiator       0.0
     fciqmc_equilibration   20000
-    fciqmc_steps           30000
+    fciqmc_steps           240000
     fciqmc_spawn_attempts  1
     fciqmc_seed            20250901
 

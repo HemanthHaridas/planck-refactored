@@ -350,7 +350,7 @@
 <tr><td>Eigen 3.4.0</td><td><code>FetchContent</code></td><td>Header-only. <code>EIGEN_DONT_PARALLELIZE</code> is defined globally: Planck owns its OpenMP parallelism, and Eigen&#x27;s own thread pool nested against it (measured ~26 % slower on 8-thread conventional RHF)</td></tr>
 <tr><td>libmsym</td><td><code>ExternalProject_Add</code>, pinned commit</td><td>Point-group detection</td></tr>
 <tr><td>libxc</td><td><code>ExternalProject_Add</code>, pinned commit</td><td>XC functionals; <code>planck-dft</code> and <code>planck-mpi</code> only. Built without <code>-march=native</code> unless <code>LIBXC_ENABLE_XHOST=ON</code> (portability)</td></tr>
-<tr><td>libecpint</td><td><code>ExternalProject_Add</code>, pinned commit</td><td>ECP integrals, linked into every target (<code>src/integrals/ecp.cpp</code> is in the shared integral sources). Built with Planck&#x27;s C++ compiler (its API passes <code>std::vector</code>). Pinned to the head of unmerged upstream PR #81 (fork <code>loriab/libecpint</code>), which fixes kernel constants and derivative accuracy; repin to upstream when it merges</td></tr>
+<tr><td>libecpint</td><td><code>ExternalProject_Add</code>, pinned commit</td><td>ECP integrals, linked into every target (<code>src/integrals/ecp.cpp</code> is in the shared integral sources). Built with Planck&#x27;s C++ compiler (its API passes <code>std::vector</code>). Pinned to upstream <code>master</code> <code>436d9c48</code>, which carries PR #81 (kernel constants and derivative accuracy). Since upstream #78 an <code>ECPIntegral</code> is not safe to share between threads, so Planck builds one per thread (robashaw/libecpint#82)</td></tr>
 <tr><td>OpenSSL (Crypto)</td><td><code>find_package</code></td><td>Licence-signature verification and decryption for the Boys library loader</td></tr>
 <tr><td>Boys-function core</td><td>fetched at run time</td><td>Encrypted, licence-gated shared library; see <code>src/lookup/loader/</code> below</td></tr>
 <tr><td>OpenMP</td><td><code>find_package</code>, <code>USE_OPENMP=ON</code> default</td><td>Defines <code>USE_OPENMP</code></td></tr>
@@ -365,7 +365,7 @@
 <p><code>src/io/logging.h</code> is a header-only logger with a global mutex and a <code>thread_local</code> silence depth. The <code>ScopedSilence</code> RAII guard mutes all output while an inner calculation runs (finite-difference Hessian points, SAD atoms, counterpoise sub-calculations, geometry-optimization inner SCFs). <code>map_enum&lt;T&gt;</code> turns enums into printable names.</p>
 <hr>
 <h2 id="central-type-system-src-base">Central Type System (<code>src/base/</code>)</h2>
-<p><code>types.h</code> (~1700 lines) is the one header every module includes: options structs, data structs, enums, and a few shared helpers (the SCF DIIS containers and their coefficient solve). <code>tables.h</code> holds constants, <code>sphere.h</code> the Lebedev/sphere point tables used by PCM and ESP, <code>mpi_env.h</code> the whole MPI surface (below), and <code>basis.h.in</code> the basis path template.</p>
+<p><code>types.h</code> (~1700 lines) is the one header every module includes: options structs, data structs, enums, and a few shared helpers (the SCF DIIS containers and their coefficient solve). <code>tables.h</code> holds constants, <code>sphere.h</code> the Fibonacci sphere points used by the ESP shells, <code>mpi_env.h</code> the whole MPI surface (below), and <code>basis.h.in</code> the basis path template.</p>
 <h3 id="enumerations">Enumerations</h3>
 <div class="table-wrap"><table>
 <thead><tr>
@@ -498,11 +498,11 @@
 <th>Role</th>
 </tr></thead>
 <tbody>
-<tr><td><code>src/solvation/pcm.{h,cpp}</code></td><td>C-PCM: tessellated cavity, apparent surface charges, reaction field added to the Fock matrix each iteration; shared by HF and DFT single points</td></tr>
+<tr><td><code>src/solvation/pcm.{h,cpp}</code></td><td>C-PCM on a SWIG cavity (Lebedev points, smooth switching function, Gaussian surface charges), apparent surface charges, reaction field added to the Fock matrix each iteration; shared by HF and DFT single points</td></tr>
 <tr><td><code>src/populations/</code></td><td>Mulliken, Löwdin, Mayer bond orders, multipoles, ESP and CHELPG charges</td></tr>
 <tr><td><code>src/bsse/counterpoise.{h,cpp}</code></td><td>Two-fragment Boys-Bernardi counterpoise: five silenced sub-SCFs with ghost atoms, per-fragment charge and multiplicity</td></tr>
 </tbody></table></div>
-<p><strong>Mayer bond order density convention:</strong> the closed-shell branch contracts the total density with no prefactor (H₂ gives 1); the open-shell branch contracts per-spin densities and needs an explicit factor 2 to agree. PCM is single-point only; its cavity hard-prunes buried points, so the energy is not smooth in the geometry (see <code>docs/PCM_GEOMETRY.md</code>).</p>
+<p><strong>Mayer bond order density convention:</strong> the closed-shell branch contracts the total density with no prefactor (H₂ gives 1); the open-shell branch contracts per-spin densities and needs an explicit factor 2 to agree. C-PCM supports energies, analytic gradients, geometry optimization and frequencies; its SWIG cavity is smooth in the geometry, which is what makes the gradient possible (see <code>docs/PCM_GEOMETRY.md</code>).</p>
 <hr>
 <h2 id="post-hf-correlation-src-post-hf">Post-HF Correlation (<code>src/post_hf/</code>)</h2>
 <h3 id="integral-transforms-and-ri-integrals-h-cpp-ri">Integral transforms and RI (<code>integrals.{h,cpp}</code>, <code>ri/</code>)</h3>
@@ -516,7 +516,8 @@
 <tbody>
 <tr><td><code>mp2.h</code>, <code>mp2_rmp2.cpp</code>, <code>mp2_ump2.cpp</code>, <code>mp2_internal.{h,cpp}</code>, <code>mp2_t2_storage.cpp</code></td><td><code>rmp2_kernel</code> / <code>ump2_kernel</code> (energies, frozen core), <code>rmp2_make_natural_orbitals</code>; layouts mirror PySCF&#x27;s <code>_ChemistsERIs</code></td></tr>
 <tr><td><code>mp2_gradient.{h,cpp}</code></td><td>RMP2 and UMP2 relaxed densities and gradient intermediates</td></tr>
-<tr><td><code>rhf_response.{h,cpp}</code>, <code>uhf_response.{h,cpp}</code></td><td>CPHF / Z-vector machinery and orbital Hessians (<code>build_rhf_cphf_matrix</code>, <code>build_uhf_cphf_matrix</code>), shared with SOSCF and stability; the UHF Z-vector is matrix-free GMRES</td></tr>
+<tr><td><code>orbital_hessian.{h,cpp}</code></td><td><code>OrbitalHessian</code>: the matrix-free RHF/UHF orbital Hessian, one <code>SCF::two_electron_fock{,_uhf}</code> call per action (fitted under <code>scf_ri_jk</code>, exact otherwise); used by the Z-vector solves and HF SOSCF</td></tr>
+<tr><td><code>rhf_response.{h,cpp}</code>, <code>uhf_response.{h,cpp}</code></td><td>CPHF / Z-vector solves (<code>solve_rhf_cphf</code>, <code>solve_uhf_cphf</code>): GMRES on <code>OrbitalHessian</code> with the orbital-gap diagonal preconditioner</td></tr>
 </tbody></table></div>
 <h3 id="ci-engine-fci-and-fciqmc-ci-fci-h-cpp-fciqmc-driver-h-cpp">CI engine, FCI and FCIQMC (<code>ci/</code>, <code>fci.{h,cpp}</code>, <code>fciqmc_driver.{h,cpp}</code>)</h3>
 <p><code>ci/strings.{h,cpp}</code> enumerates determinants as packed <code>uint64_t</code> bit strings (up to 31 spatial orbitals per spin packed together); <code>ci/ci.{h,cpp}</code> holds the determinant space, Slater-Condon elements, a dense Hamiltonian below 500 determinants and an iterative sigma build with Davidson above. The sigma build is a scatter into 64 fixed bins by ket index, <code>schedule(static, bin_size)</code>, summed in bin order (bitwise thread-count invariant). <code>ci/rdm.{h,cpp}</code> builds 1- and 2-RDMs (and the bilinear 2-RDM for CI response) with the same binned, fixed-order reduction.</p>

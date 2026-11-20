@@ -99,7 +99,22 @@ namespace DFT
 
     std::expected<DensityOnGrid, std::string>
     evaluate_density_on_grid(
+        const ScreenedAOGrid &ao_grid,
+        const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
+        Eigen::Index slice_begin = 0,
+        Eigen::Index slice_end = -1);
+
+    std::expected<DensityOnGrid, std::string>
+    evaluate_density_on_grid(
         const AOGridEvaluation &ao_grid,
+        const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
+        const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
+        Eigen::Index slice_begin = 0,
+        Eigen::Index slice_end = -1);
+
+    std::expected<DensityOnGrid, std::string>
+    evaluate_density_on_grid(
+        const ScreenedAOGrid &ao_grid,
         const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
         const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
         Eigen::Index slice_begin = 0,
@@ -125,7 +140,28 @@ namespace DFT
     std::expected<XCGridEvaluation, std::string>
     evaluate_xc_on_grid(
         const MolecularGrid &molecular_grid,
+        const ScreenedAOGrid &ao_grid,
+        const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
+        const XC::Functional &exchange_functional,
+        const XC::Functional &correlation_functional,
+        Eigen::Index slice_begin = 0,
+        Eigen::Index slice_end = -1);
+
+    std::expected<XCGridEvaluation, std::string>
+    evaluate_xc_on_grid(
+        const MolecularGrid &molecular_grid,
         const AOGridEvaluation &ao_grid,
+        const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
+        const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
+        const XC::Functional &exchange_functional,
+        const XC::Functional &correlation_functional,
+        Eigen::Index slice_begin = 0,
+        Eigen::Index slice_end = -1);
+
+    std::expected<XCGridEvaluation, std::string>
+    evaluate_xc_on_grid(
+        const MolecularGrid &molecular_grid,
+        const ScreenedAOGrid &ao_grid,
         const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
         const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
         const XC::Functional &exchange_functional,

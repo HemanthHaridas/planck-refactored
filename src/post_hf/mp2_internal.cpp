@@ -36,7 +36,7 @@ namespace
 
     std::vector<double> ov_block_to_ovov(const Eigen::MatrixXd &b_ov, int nocc, int nvirt)
     {
-        const Eigen::MatrixXd gram = b_ov * b_ov.transpose();
+        const Eigen::MatrixXd gram = HartreeFock::Correlation::RI::fitted_gram(b_ov, b_ov);
         const int nov = nocc * nvirt;
         std::vector<double> ovov(static_cast<std::size_t>(nov) * nov);
         for (int i = 0; i < nocc; ++i)
@@ -57,7 +57,7 @@ namespace
         int left_nvirt,
         int right_nvirt)
     {
-        const Eigen::MatrixXd gram = left_b_ov * right_b_ov.transpose();
+        const Eigen::MatrixXd gram = HartreeFock::Correlation::RI::fitted_gram(left_b_ov, right_b_ov);
         const int left_nov = left_nocc * left_nvirt;
         const int right_nov = right_nocc * right_nvirt;
 
@@ -202,7 +202,7 @@ namespace HartreeFock::Correlation::detail
             if (!calculator._ri_metric_factor)
                 return std::unexpected("make_eris_rmp2: RI metric factorization is missing.");
 
-            const Eigen::MatrixXd pair_factors =
+            const Eigen::MatrixXd &pair_factors =
                 HartreeFock::Correlation::RI::build_ri_pair_factors(calculator);
             const Eigen::MatrixXd b_ov =
                 HartreeFock::Correlation::RI::build_ri_mo_block(pair_factors, C_occ, C_virt);
@@ -241,7 +241,7 @@ namespace HartreeFock::Correlation::detail
                 return std::unexpected("RMP2 direct OVOV producer: " + ri_ready.error());
             if (!calculator._ri_metric_factor)
                 return std::unexpected("RMP2 direct OVOV producer: RI metric factorization is missing.");
-            const Eigen::MatrixXd pair_factors=
+            const Eigen::MatrixXd &pair_factors =
                 HartreeFock::Correlation::RI::build_ri_pair_factors(calculator);
             const Eigen::MatrixXd b_ov=
                 HartreeFock::Correlation::RI::build_ri_mo_block(pair_factors,c_occ,c_virt);
@@ -305,7 +305,7 @@ namespace HartreeFock::Correlation::detail
             if (!calculator._ri_metric_factor)
                 return std::unexpected("make_eris_ump2: RI metric factorization is missing.");
 
-            const Eigen::MatrixXd pair_factors =
+            const Eigen::MatrixXd &pair_factors =
                 HartreeFock::Correlation::RI::build_ri_pair_factors(calculator);
 
             // The fitted AO-pair factors are spin-independent; the unrestricted

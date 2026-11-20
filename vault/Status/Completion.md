@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-11-10
+Last updated: 2026-11-16
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -47,8 +47,8 @@ historical design context, but they are no longer the source of truth for
   genuinely open-shell (UHF/UKS) or closed-shell (RHF/RKS) systems, with
   superlinear gradient shrinkage.
   - **RHF/UHF** (`docs/SOSCF.md`, `docs/SOSCF_UHF.md`):
-    reuse `build_rhf_cphf_matrix` / `build_uhf_cphf_matrix` unchanged
-    (`build_uhf_cphf_matrix` split out of `solve_uhf_cphf` for this). UHF
+    reuse the MP2 Z-vector's orbital Hessian unchanged (since 2026-11-16
+    the matrix-free `OrbitalHessian`; it was first dense builders). UHF
     is FD-verified `g_true=2·g_used`, `H_true=2·Amat`; per-spin Cayley
     rotation + semicanonicalization; mutually exclusive with an active
     level shift.
@@ -375,7 +375,8 @@ historical design context, but they are no longer the source of truth for
   nonlinear `get_veff` on a non-idempotent trial density). Validation is
   Planck's gradient against Planck's own energy FD.
 - **UKS global double-hybrid analytic gradient** (`73ce3866`, promoted with the
-  grid in `039bd2df`), `calculation gradient` only. Same Lagrangian with
+  grid in `039bd2df`); geometry optimization and frequencies since
+  2026-11-12 (`docs/UKS_DH_GEOMOPT_FREQ.md`). Same Lagrangian with
   per-spin densities, three amplitude blocks (c, 2c, c), alpha/beta coupling
   only through J and the cross-spin XC kernel, and a joint alpha-then-beta
   Z-vector (`src/dft/udh_*.cpp`). Partly dense (see Open Work).
@@ -427,8 +428,337 @@ historical design context, but they are no longer the source of truth for
 - Automated two-fragment SCF-level Boys-Bernardi counterpoise driver
 - Per-fragment charge and multiplicity handling
 - PySCF-validated He2/cc-pVDZ counterpoise decomposition
+- **DFT ghost atoms and counterpoise (2026-11-11, `docs/DFT_COUNTERPOISE.md`).**
+  `run_counterpoise` takes the sub-calculation runner as a parameter, and
+  `planck-dft` passes its KS single point, so HF and KS share one driver.
+  Before this, `planck-dft` silently ignored `%begin_bsse`. PCM with
+  counterpoise is now refused in both binaries (it used to be dropped
+  silently). Other changes:
+  - **Ghost grids** use the element's Z, as in PySCF ≥ 2.14 (#3302).
+  - **Symmetry** is now turned off when ghosts are present; He + Gh(He) had
+    been detected as D∞h and the SCF did not converge.
+  - **KS convergence:** both KS loops now feed the DIIS residual into
+    `is_converged`, with a KS stall floor of 1e-8 (HF keeps 1e-10). A lone He
+    from `hcore` had stopped at a stalled step 6.2e-7 Eh high. The floor must
+    stay above the SOSCF deadband residual (4.1e-10,
+    `water_rks_pbe_soscf_puredeadband_631g`).
+
+  Gates, all matching PySCF to every printed digit:
+  - `water_dimer_ghost_{rks_pbe,rks_b3lyp,cation_uks_pbe}_631gd`
+  - `{he2,water_dimer}_rks_b3lyp_cp_ccpvdz`
+  - `water_dimer_rks_b3lyp_d3bj_cp_ccpvdz`: its BSSE equals the D3-free
+    value, because ghosts carry no D3.
 
 ### Recent fixes now considered landed
+
+- **DFT AO arrays screened per point block (S7 stage 1, 2026-11-19,
+  `docs/DFT_DEFAULT_GRID_SCOPE.md`).** The SCF kept four npts × nb AO
+  arrays (91 % of a naphthalene gradient's peak). `ScreenedAOGrid` keeps,
+  per 128-point block, only the AOs whose value or gradient exceeds 1e-12
+  there, in one contiguous buffer. Density, XC matrix and XC nuclear
+  gradient are each one template over a block view that both the screened
+  and the dense storage provide; the S2b fixed-bin summation is unchanged.
+  The SOSCF/stability/TDDFT/DH consumers get dense arrays built from the
+  blocks on first use (porting them is S7b). Water12 B3LYP/6-31G\*
+  `legacy@fine` gradient 48.5 s / 4.8 GB → 15.5 s / 1.37 GB with the same
+  printed energy and gradient as a no-screening build;
+  `pyscf-nwchem@fine` on water12, which did not fit before, runs in
+  28.9 s / 2.67 GB. `planck-dft-xc-gradient-threads` gained a separated
+  water-cation dimer (49 % kept at 1e-4): screened vs dense with the same
+  AOs ≤ 5e-16, bitwise at 1–8 threads, three index-map mutations caught.
+  All 114 DFT regression cases pass.
+
+- **KS XC nuclear gradient: block GEMMs, AO Hessian per block (X1–X2,
+  2026-11-18, `docs/DFT_XC_GRADIENT_PERFORMANCE.md`).** The point
+  loop allocated three nb × nb matrices per grid point, and the gradient
+  stored ten npts × nb AO arrays (six zeroed ones even for LDA). One driver
+  now serves RKS and both UKS spins: per 128-point block, `G_qᵀA + A_qᵀΦ`
+  and row dots against `A·P`, `Φ·P`, with the GGA AO Hessian evaluated per
+  block. Benzene B3LYP/6-31G* V4 gradient 117 s / 8.1 GB → 27.5 s /
+  3.6 GB. Gradients equal the old code at all printed digits on RKS/UKS ×
+  LDA/GGA/global/range-separated inputs; two mutations fail by 0.2–0.35
+  Ha/Bohr; 28/28 DFT derivative regression cases pass. The XC phase still
+  runs on one thread (X3 open).
+
+- **RI work split across MPI ranks (M0–M1, 2026-11-17,
+  `docs/RI_MPI_SCOPE.md`).** Before, every `planck-mpi` rank ran the whole
+  RI calculation (2 ranks slower than 1). Now the 3c build, the fitted
+  factors, RI-J, RI-K, the RI-MP2 `B_pq` and Gram products, the RMP2 tile
+  stream, and the RI gradient loops each take the indices this rank owns
+  (`Mpi::Stripe`) and one allreduce completes them; data stay replicated,
+  and only owned `B_Q` are unpacked. Serial output is byte-identical on all
+  45 RI inputs. Seven `*_mpi_smoke` gates (RHF/UHF/RKS RI-JK, gradient,
+  SOSCF + stability, UMP2, RMP2 gradient, RI CASSCF) match serial exactly at
+  2 and 3 ranks. 16 H2O / 6-31G / JKFIT: 31.8 / 19.6 / 16.5 s at 1/2/4
+  ranks. A dropped reduce shows as a deadlock, not a wrong energy, so
+  `tests/mpi_smoke_compare.py` gained a per-run timeout; the mutation fails
+  in 31 s with no ranks left.
+
+- **RI-K from a low-rank factor of the density (B2, 2026-11-17,
+  `docs/ERI_FOCK_BLAS_SCOPE.md`).** `build_ri_k(D)` factors
+  `D = X s Xᵀ` over its nonzero eigenvalues and contracts `B_Q X` instead
+  of `B_Q D`, so an SCF density costs rank n_occ, not nb. It stays exact for
+  any symmetric D (SAD guess, CASSCF, response trials), so no caller changed;
+  the planned `C_occ` overload would have needed a fallback at five SCF/KS
+  call sites. All 45 RI regression inputs equal a fresh HEAD build to every
+  printed digit; 16 H2O / 6-31G / JKFIT RHF 42.0 → 26.2 s at 4 threads;
+  nine `planck-ri-*` gates pass.
+
+- **libecpint repinned to upstream; one ECP engine per thread (2026-11-16,
+  `docs/DEF2_ECP.md`).** PR #81 merged upstream as a squash on top of #78 and
+  the fork branch Planck pinned was deleted, so a fresh clone could not
+  build. Now pinned to `robashaw/libecpint` `436d9c48`. #78 made a shared
+  `const ECPIntegral` race (mutable scratch in `RadialIntegral`): 26/31 ECP
+  cases failed at four threads. `_compute_ecp` and `_compute_ecp_gradient`
+  now build one engine per thread. A standalone reproducer (8.7e2 / 1.7e4
+  max differences at four threads on `436d9c48`, 0 before #78) went upstream
+  as robashaw/libecpint#82. All 31 ECP cases pass; `planck-ecp-gradient-fd`
+  passes at 1, 4 and 8 threads; energies and gradients are identical to the
+  old pin to every printed digit.
+
+- **RI-MP2 gradient without the nao⁴ AO pair density (2026-11-16,
+  `docs/GRADIENT_INTEGRAL_PERFORMANCE.md`).** The RI-MP2 gradient built the
+  full AO pair density (UMP2 two), then fitted it, so RI saved time but not
+  memory. The density is now kept factored (`RI::PairDensityBlock`: RMP2
+  one block, UMP2 αα/αβ/ββ), and γ³ and the Lagrangian come from ov-sized
+  intermediates and one GEMM per block. Benzene 6-31G\*/cc-pVDZ-RIFIT,
+  direct SCF: peak footprint 2137 → 332 MiB, 26.9 → 20.3 s; gradients equal
+  to every printed digit. `planck-ri-imat` checks both contractions against
+  the dense pair density to 1e-12; 57/57 RI cases pass.
+
+- **RI integral and derivative loops threaded (G6, 2026-11-16,
+  `docs/GRADIENT_INTEGRAL_PERFORMANCE.md`).** Measured first on benzene
+  6-31G\* at 4 threads: the gradient was 23.1 of 27.4 s (RI-JK, JKFIT) and
+  41.7 of 51.1 s (RI-MP2, RIFIT), held by serial 3c/2c loops, a heap vector
+  per primitive call (~20 % of the loop) and two RI-MP2 matrix-vector loops
+  over aux functions (7.2 s and 7.4 s).
+  - The 3c/2c integral and derivative loops run over aux shells in parallel.
+    The gradient keeps one partial per aux shell, summed in shell order, so
+    it is identical at 1, 3 and 4 threads.
+  - The VRR scratch is a thread-local grow-only buffer (still zero-filled).
+  - `build_ri_gamma3_from_ao_dm2` and `build_ri_imat` are one GEMM each.
+  - Benzene RI-JK gradient run 27.4 → 7.9 s, RI-MP2 51.1 → 28.4 s;
+    gradients and energies equal to every printed digit.
+
+- **One matrix-free HF orbital Hessian; RI-MP2 gradients fixed and run
+  spherical (2026-11-16, `9e9c2623`; `docs/SCF_ORBITAL_HESSIAN_OPERATOR.md`,
+  `docs/RI_MP2_GRADIENT_RESPONSE.md`).**
+  - **One operator.** `Correlation::OrbitalHessian` applies the RHF or UHF
+    orbital Hessian with one `SCF::two_electron_fock{,_uhf}` call. The RHF
+    and UHF Z-vectors are GMRES on it, and RHF/UHF SOSCF pass it as `h_op`.
+    Deleted: `build_rhf_cphf_matrix`, `build_rhf_cphf_matrix_ri`,
+    `build_uhf_cphf_matrix`, `UHFOrbitalHessian`, `RI::fitted_response`.
+  - **One fitted/exact choice.** `two_electron_fock` is fitted only when the
+    SCF ran RI-JK. Before, CPHF and the MP2 `veff` were fitted under
+    `mp2_use_ri` too, for an exact SCF.
+  - **RI-MP2 gradients** now meet their own energy FD on water
+    6-31G*/cc-pVDZ-RIFIT. Cartesian: RMP2 1.3e-7 (was 3.9e-6), UMP2⁺ 1.2e-7
+    (was 1.6e-6). Spherical: 1.1e-7 / 1.5e-7, so spherical RI-MP2 gradients
+    are no longer refused. Four `*_ri_*mp2_*gradient_631gd_fd` gates at
+    3e-7 replace `water_ri_rmp2_spherical_gradient_rejected`, and the STO-3G
+    RI-MP2 FD gates are tightened from 3e-4 to 3e-7.
+  - **Cost** (4 threads). 4 H2O/cc-pVDZ direct: RHF SOSCF 17.5 → 2.45 s,
+    RMP2 gradient 16.8 → 13.6 s. The old RHF path built the full AO tensor
+    inside a direct run. Small conventional cases lose ≤ 40 ms (water/6-31G*);
+    no cached-tensor path was added.
+  - Energies and gradients are unchanged to printed digits elsewhere; core
+    174/174.
+
+- **RI-JK SCF gated against PySCF (2026-11-12, `docs/RI_JK_ROUTINE.md`
+  step 0).** `scf_ri_jk` had no regression case. Water, water⁺, C1 H2O2 and
+  H2O2⁺ (RHF/UHF, Cartesian 6-31G*, cc-pVDZ-RIFIT) now equal PySCF
+  `density_fit` to every printed digit, with both bases read from Planck's GBS
+  files (`tests/pyscf/ri_jk_references.py`); `*_rijk_631gd`, tagged core. No
+  code changed. The MP2 fitting set costs 1.0–1.7e-3 Eh against the exact
+  energy. Step 1 added `def2-universal-JKFIT` and `cc-pVTZ-JKFIT` (the first
+  contracted auxiliary sets), also equal to PySCF on all four: fitting error
+  ≤ 8.9e-5 / 5.9e-5 Eh. Gated by `*_rijk_jkfit_631gd`. No separate
+  `scf_ri_basis` keyword: RI-JK and RI-MP2 share one fitting cache. Step 2
+  lifted the spherical refusal: the fitted factors were already in the
+  working basis, so no code was needed; `*_rijk_spherical_631gd`.
+  Then the fitted aux was made to follow `basis_type`, as in PySCF
+  (`docs/RI_SPHERICAL_AUX.md`): a per-shell transform on the metric and the
+  3-center tensor, 14–20 % fewer fitted functions, and spherical RI-JK and
+  RI-MP2 equal plain PySCF density fitting to every printed digit (before,
+  a Cartesian aux put them 1e-5..2e-4 Eh off every other code). Cartesian
+  RI results unchanged. Step 3: `scf_ri_jk` now refuses gradient, geomopt
+  and frequency workflows; before, they ran with the exact-integral gradient
+  at RI orbitals, 9.9e-6 Ha/Bohr off the RI energy (water, JKFIT), silently
+  (`water_rhf_rijk_gradient_rejected`).
+  Step 5: RI-JK ROHF (one branch: ROHF builds the UHF (Ga, Gb)); water⁺
+  equals PySCF ROHF density fitting, Cartesian and spherical.
+  Step 8a: AgCl/def2-SVP with ECP and def2-universal-JKFIT (two l = 6 aux
+  shells on Ag) equals PySCF to every printed digit; no code changed.
+  Step 4: SOSCF and stability use the fitted operator under `scf_ri_jk`
+  (RI-MP2's CPHF route and `transform_eri_ri`); before, SOSCF rebuilt the AO
+  tensor every step and stability used the exact Hessian. Eigenvalues equal
+  PySCF stability on a density-fitted SCF (RHF and UHF).
+- **Spherical RI gradients (2026-11-16, `docs/RI_JK_ROUTINE.md`
+  step 16; that scope is now answered).** `build_ri_two_electron_gradient`
+  lifts the working-basis three-index density to the Cartesian derivative
+  loops (orbital Cᵀ G C per aux column, aux × T_aux, metric T_auxᵀ γ T_aux).
+  Spherical water RHF, C1 H2O2⁺ UHF and water RKS PBE gradients equal PySCF
+  density fitting to every printed digit.
+  - **Found:** the RI-MP2 gradient missed its own energy FD by ~4e-6
+    Ha/Bohr, Cartesian too, so spherical RI-MP2 gradients were refused.
+    Fixed the same day (orbital-Hessian entry above).
+
+- **RI-JK in `planck-dft` for pure and global-hybrid single points
+  (2026-11-16, `docs/RI_JK_ROUTINE.md` steps 12–13).** The KS assembly
+  adds the fitted J and K in the working basis after projecting the other
+  terms. Water RKS/UKS PBE, spherical water RKS PBE, and water RKS, water⁺
+  UKS and C1 H2O2 RKS B3LYP equal PySCF `density_fit()` to every printed
+  digit (6-31G*, def2-universal-JKFIT). KS SOSCF and stability use the
+  fitted operator (step 14): stability eigenvalues equal PySCF on
+  `density_fit()` to all seven digits; the exact-integral Hessian was up to
+  6.7e-6 off. Cartesian RKS/UKS gradients and geomopt (step 15) equal
+  PySCF's density-fitted gradient with grid response to ≤ 7e-11 Ha/Bohr and
+  E_opt to every digit. Range-separated functionals, spherical derivatives,
+  TDDFT, PCM and counterpoise with `scf_ri_jk` are refused by name.
+
+- **RI pair factors cached per geometry (2026-11-16, B0;
+  `docs/RI_JK_ROUTINE.md` step 11).** B = J V^{-1/2} is built once by
+  `ensure_ri_3c_ready` into `_ri_pair_factors` and reset with `_ri_j3c`,
+  instead of re-solved on every J/K call. Benzene 6-31G*/JKFIT RI-JK energy
+  1.5× faster end to end, energies bitwise identical.
+  - **`planck-ri-3c-eri` fixed (test side).** It had failed since K1
+    (2026-10-25): its PySCF export parsed the raw cc-pVDZ GBS while
+    `read_gbs_basis` drops redundant primitives, so it compared different
+    contracted functions (same span, so no energy gate noticed). The export
+    script now mirrors `drop_redundant_primitives`; passes at 1e-10. The
+    script was also untracked (`scripts/*` is ignored); it is now allowlisted
+    in `.gitignore`.
+
+- **RI-JK HF gradient, geometry optimization and frequencies (2026-11-16,
+  `docs/RI_JK_ROUTINE.md` steps 9–10).** One helper,
+  `build_ri_scf_two_electron_gradient`, gives the fitted 2e term for the Γ
+  RHF, UHF, ROHF and RKS share; the three SCF gradients call it under
+  `scf_ri_jk`. Cartesian RHF is gated: water and C1 H2O2 gradients, water
+  geomopt (E_opt −76.0107180372) and frequencies equal PySCF density fitting
+  to every printed digit (6-31G*, def2-universal-JKFIT).
+  - **Found.** X = J V⁻¹ was built from an explicit V⁻¹. The Cartesian JKFIT
+    metric has cond 8e11, which put the gradient 2.1e-6 Ha/Bohr off its own
+    energy FD; two triangular solves fix it. The RI-MP2 gradient shares the
+    function; it had been gated only with the better-conditioned RIFIT sets.
+  - **Memory.** Benzene 6-31G*/JKFIT peaks at 243 MiB; the stored derivative
+    tensors alone would have been 1.04 GiB.
+  - **UHF and ROHF (step 10, same day).** Already wired through the same
+    helper; gated on water⁺ UHF/ROHF and C1 H2O2⁺ UHF, every printed digit
+    against PySCF.
+  - **Still refused:** spherical (16), correlated and PCM RI-JK derivatives.
+
+- **RI-MP2 frequencies, and a streamed RI derivative contraction
+  (2026-11-16, `docs/RI_JK_ROUTINE.md` steps 6–8).**
+  - **Frequencies.** RI-RMP2/UMP2 `frequency`, `geomoptfreq` and
+    `imaginaryfollow` run; no new code, only the refusal removed. PySCF has
+    no DF-MP2 gradient, so the reference is a fourth-order FD of PySCF's
+    RI-MP2 energy, central-differenced at Planck's 5e-3 Bohr step: water
+    1480.60/5000.85/5418.23 cm⁻¹ and water⁺ 1347.72/4689.10/4868.83, equal
+    to every printed digit (one last-digit rounding). Gated by
+    `water_ri_rmp2_freq_sto3g` and `water_radical_cation_ri_ump2_freq_sto3g`;
+    disabling the RI cache invalidation fails both by up to 41 cm⁻¹.
+  - **Streamed contraction.** The RI 2e gradient term contracted
+    3·natoms stored npair × naux derivative tensors (≈ 32 GB at 20 atoms,
+    nb = 300, JKFIT). One loop per class (`for_each_3c_deriv`,
+    `for_each_2c_deriv`) now feeds it element by element; equal to the
+    stored-tensor formula to 1.4e-14, RI-MP2 results unchanged.
+  - **`planck-dft` refuses `scf_ri_jk`.** It parsed the keyword and ran
+    exact integrals silently (`water_rks_pbe_rijk_rejected`).
+
+- **HF frequency SCFs warm-start from the reference density (2026-11-12,
+  `docs/ANALYTIC_HESSIAN_SCOPE.md` lever 1).** 19–20 → 14 iterations per
+  displaced SCF, but only 1.04× on C1 cyclohexane/6-31G (SCF is 14 % of the
+  run) and 1.14× on the 12 HF frequency cases; frequencies unchanged. HF
+  frequency cost is gradient cost.
+
+- **UKS double-hybrid geometry optimization and frequencies (2026-11-12,
+  `docs/UKS_DH_GEOMOPT_FREQ.md`).**
+  - **One gradient for every caller.** The UKS DH assembly moved out of the
+    `Gradient` case into `compute_analytic_udh_gradient`, which the
+    per-geometry callback (optimizer and semi-numerical Hessian) now calls
+    too. Widening the gate alone would have run UKS through the RKS DH path.
+  - **Gates.** `tests/dh_workflow_audit.py` (now RKS or UKS; its UKS-refusal
+    assertion was removed) on HO2 B2PLYP/STO-3G, V4 grid: Hessian vs 18
+    independent gradients 2.8e-9; energy FD vs gradient at the optimum
+    2.2e-9 Ha/Bohr. Water RKS and `scf_type uhf` frequencies agree to every
+    printed digit. Regression `ho2_uks_b2plyp_v4_geomoptfreq_sto3g`
+    (extended, ~6 min) pins E_opt and the three frequencies.
+  - **Found.** OH is a poor fixture: its β hole in a degenerate π pair is a
+    zero mode (λ_min −2.4e-8), and one SCF drifted along it for 168
+    iterations at fixed energy. A property of the molecule, not a
+    convergence defect; HO2 has no such pair.
+
+- **RMP2/UMP2 frequencies, Cartesian and spherical (2026-11-12,
+  `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md` step 5).**
+  - **One per-geometry routine.** Geometry optimization and the
+    semi-numerical Hessian each had their own SCF → gradient step, and only
+    the geomopt one ran MP2. Both now call `Opt::run_scf_gradient`
+    (`src/opt/geomopt.cpp`). Geomopt warm-starts it; the Hessian runs it
+    cold. `frequency`, `geomoptfreq` and `imaginaryfollow` work with
+    `correlation rmp2|ump2`.
+  - **Gates.** Both match PySCF 2.15.0 to every printed digit: central
+    differences of its analytic MP2 gradient at h = 5e-3 Bohr.
+    - `water_radical_cation_ump2_freq_sto3g` (Cartesian UMP2; was the
+      `_rejected` case)
+    - `water_rmp2_spherical_freq_631gd` (spherical RMP2)
+  - **Then refused.** RI-MP2 frequencies (`water_ri_rmp2_freq_rejected`);
+    lifted 2026-11-16 (entry above).
+
+- **Spherical RMP2/UMP2 gradients and geometry optimization (2026-11-11,
+  `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md` steps 1–4).**
+  - **Design.** The MP2 Lagrangian stays in the working basis. Everything
+    the Cartesian derivative kernels contract is lifted once:
+    - the 1e density, the overlap-term matrices and the separable-Γ factors
+      directly;
+    - the pair densities by rebuilding them from Tᵀ C.
+  - **Shared helpers.** One working-basis Fock helper
+    (`SCF::two_electron_fock{,_uhf}`) and one MO lift
+    (`BasisFunctions::mos_to_cartesian`), each replacing copies.
+  - **Gates** (6-31G* spherical): water and C1 H2O2 RMP2, water⁺ and C1
+    CH3 UMP2 gradients against a fourth-order FD of PySCF's MP2 energy
+    (≤ 1e-8, every component). Water RMP2 geomopt E_opt −76.1955706453
+    equals PySCF `geometric` GAU_TIGHT to every printed digit.
+  - **Refusals.** Spherical RI-MP2 gradients were refused here; enabled
+    2026-11-16 (orbital-Hessian entry above). MP2 frequencies stay
+    refused in every basis (step 5).
+  - **Found.** PySCF < 2.15's analytic `mp2.Gradients` misses its own
+    energy FD by up to 4.2e-7 Ha/Bohr on C1 fixtures, so it was not used as
+    the reference. That is a Krylov/CPHF early-termination bug, fixed in
+    2.15.0 (pyscf/pyscf#3334); 2.14.0 still has it.
+
+- **Frozen-core UMP2 gradients are refused (2026-11-11).** With
+  `mp2_frozen`, the UMP2 gradient used to run and print a gradient
+  4.5e-2 Ha/Bohr off the energy FD, with no warning (water cation STO-3G,
+  O z: −0.1647 vs −0.1201). The builders have no frozen-core terms: no
+  frozen–active relaxation blocks, and they see only the active orbitals
+  (`docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`). RMP2 already refused it.
+  - **One shared check.** All three builders now call
+    `has_frozen_orbitals`, which compares the active count with the SCF MO
+    count. RMP2's old comparison with `nbasis()` would have refused every
+    spherical gradient.
+  - **Gates.** `water_rmp2_frozen_gradient_rejected` and
+    `water_radical_cation_ump2_frozen_gradient_rejected`.
+
+- **Every PCM workflow gated against PySCF; three defects fixed on the way
+  (2026-11-10, `docs/PCM_GATING.md`).** Six new water/6-31G* cases: UKS and
+  spherical RKS gradients (≤ 3.6e-11 Ha/Bohr), and UHF, spherical RHF, RKS
+  and UKS geomopt + frequencies (energies ≤ 1e-9 Eh, frequencies ≤ 0.9
+  cm⁻¹ against PySCF's analytic PCM Hessian). Removing the PCM gradient term
+  fails all six. Fixed: `compute_hessian` now rebuilds the reference state
+  (HF frequency runs had published the last displaced geometry to the results
+  JSON); the KS SCF stores the D3/PCM energies so DFT geomopt no longer writes
+  `solvation_energy` 0; and the geometry-optimization force threshold is the
+  new `%begin_geom` keyword `geomopt_grad_tol` (default 3e-4 unchanged).
+
+- **Results JSON reports D3 and PCM energies separately (2026-11-10,
+  `docs/RESULTS_JSON_ENERGY_TERMS.md`).** `electronic_energy` had silently
+  included the D3 energy. It now excludes D3 and still includes PCM, and
+  `dispersion_energy` and `solvation_energy` are their own fields (0 when
+  off), carried on the `Calculator` so both binaries write them. The runner
+  gained `json_checks` (it runs the binary with `--json`). The PCM case pins
+  `solvation_energy` to PySCF's G_pcm to every printed digit, and the D3 case
+  pins `dispersion_energy` to the PySCF D3 reference. Both cases also check
+  that the energy terms add up to the total.
 
 - **UKS double-hybrid gradient: one architecture with RKS, accepted
   (2026-11-10, `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md`, now an answer).**
@@ -692,7 +1022,7 @@ historical design context, but they are no longer the source of truth for
   re-pinned after the 2026-11-01 Å→Bohr fix (the one-centre element did not
   move); `planck-population-analysis` linked `spherical.cpp`. Planck ctest
   (`-R ^planck`): 94 tests, failures only the four known RCCSDT routing
-  cases. Open: the libecpint repin when PR #81 merges.
+  cases. The libecpint repin followed on 2026-11-16 (entry above).
 
 - **HF RHF → UHF stability channel fixed (2026-11-05,
   `docs/KS_STABILITY.md` R0).** The "external triplet" channel built
@@ -861,8 +1191,8 @@ historical design context, but they are no longer the source of truth for
   with the density; `one_electron_gradient` adds it inside `core()`, so
   RHF/UHF/ROHF (and the RKS/UKS/MP2/DH paths once those accept ECPs) inherit
   it with no per-caller code. Stock libecpint's derivatives miss FD by 4.6e-5
-  relative on HI/def2-QZVP; libecpint is pinned to unmerged upstream PR #81,
-  which passes (see Open Work for the repin). PySCF gates: HI and C1 AuH·H2O
+  relative on HI/def2-QZVP; PR #81 fixes them (pinned at the time as the
+  PR head; upstream `master` since 2026-11-16). PySCF gates: HI and C1 AuH·H2O
   RHF gradients (≤3e-8 Ha/Bohr), HI⁺ UHF/ROHF (every printed digit), HI
   geomopt (E_opt 1.6e-9 Eh) and frequency (0.03 cm⁻¹); plus
   `planck-ecp-gradient-fd` (ctest) and an AuH·H2O energy-FD case. Found on

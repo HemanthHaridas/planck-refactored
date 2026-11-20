@@ -1,10 +1,11 @@
-// RI-MP2 gradient: RI-fitted RHF CPHF orbital Hessian (Step RG3.1).
-//
-// build_rhf_cphf_matrix_ri assembles A_{bj,ai} = (e_a-e_i)δ +
-// [4(ai|jb)-(ab|ji)-(aj|bi)] from the RI 3-center factors instead of the nao⁴
-// MO ERI tensor. Gate: RI A vs a dense A built from transform_eri, to fitting
-// accuracy, on a fixed geometry. Synthetic C/eps — the identity is independent
-// of whether they come from a real SCF.
+// The HF orbital Hessian operator (Correlation::OrbitalHessian,
+// docs/SCF_ORBITAL_HESSIAN_OPERATOR.md) against an independent dense
+// A_{bj,ai} = (e_a-e_i)δ + [4(ai|jb)-(ab|ji)-(aj|bi)] built here from
+// transform_eri:
+//   - exact operator (the SCF ran without RI-JK): equal to roundoff;
+//   - fitted operator (scf_ri_jk): equal to it to fitting accuracy;
+//   - UHF operator on a closed shell, [x, x]: equal to the RHF operator.
+// Synthetic C/eps; the identities do not depend on a real SCF.
 
 #include <Eigen/Dense>
 #include <cmath>
@@ -20,7 +21,7 @@
 #include "integrals/base.h"
 #include "integrals/shellpair.h"
 #include "post_hf/integrals.h"
-#include "post_hf/rhf_response.h"
+#include "post_hf/orbital_hessian.h"
 #include "post_hf/ri/ri_eri.h"
 #include "require_boys_library.h"
 
@@ -46,7 +47,7 @@ int main()
 
     using HartreeFock::BasisFunctions::read_gbs_basis;
     using HartreeFock::BasisFunctions::read_ri_basis;
-    using HartreeFock::Correlation::build_rhf_cphf_matrix_ri;
+    using HartreeFock::Correlation::OrbitalHessian;
     using HartreeFock::Correlation::transform_eri;
     using namespace HartreeFock::Correlation::RI;
 
@@ -69,6 +70,7 @@ int main()
     calc._mp2.ri_basis_name = "cc-pVDZ-RIFIT";
     calc._mp2.ri_basis_path = (root / "basis-sets").string();
     calc._mp2.ri_lindep = 1e-7;
+    calc._integral._tol_eri = 1e-14; // the exact comparison is to roundoff
 
     auto basis_res = read_gbs_basis((root / "basis-sets" / "sto-3g").string(),
                                     mol, HartreeFock::BasisType::Cartesian);
@@ -94,10 +96,8 @@ int main()
     for (int p = 0; p < nb; ++p)
         eps(p) = -1.0 + 0.4 * p; // ascending, occ below virt
 
-    // RI A.
-    auto A_ri_res = build_rhf_cphf_matrix_ri(calc, C, eps, nocc, nvirt);
-    if (!A_ri_res) { fail("build_rhf_cphf_matrix_ri: " + A_ri_res.error()); return 1; }
-    const Eigen::MatrixXd &A_ri = *A_ri_res;
+    const auto shell_pairs = build_shellpairs(calc._shells);
+
 
     // Dense reference A from transform_eri (full MO ERI).
     const std::vector<double> eri_ao = _compute_2e(
@@ -128,13 +128,43 @@ int main()
                 }
         }
 
-    const double rel =
-        (A_ri - A_dense).norm() / std::max(A_dense.norm(), 1e-300);
-    std::cout << "RI CPHF A vs dense A: ‖Δ‖/‖ref‖ = " << rel << '\n';
+    const double ref = std::max(A_dense.norm(), 1e-300);
+
+    // Exact operator: the SCF ran without RI-JK.
+    calc._scf._ri_jk = false;
+    const Eigen::MatrixXd A_exact = OrbitalHessian::rhf(calc, shell_pairs, C, eps, nocc).materialize();
+    const double rel_exact = (A_exact - A_dense).norm() / ref;
+    std::cout << "exact operator vs dense A: ‖Δ‖/‖ref‖ = " << rel_exact << '\n';
+    if (!(rel_exact < 1e-12))
+        fail("exact orbital-Hessian operator differs from the dense A");
+
+    // Fitted operator: the SCF ran RI-JK.
+    calc._scf._ri_jk = true;
+    const Eigen::MatrixXd A_fit = OrbitalHessian::rhf(calc, shell_pairs, C, eps, nocc).materialize();
+    const double rel_fit = (A_fit - A_dense).norm() / ref;
+    std::cout << "fitted operator vs dense A: ‖Δ‖/‖ref‖ = " << rel_fit << '\n';
     // Fitting accuracy on STO-3G / cc-pVDZ-RIFIT. A wrong block/formula is O(1)
     // relative; genuine RI fitting error is ~1e-3.
-    if (rel > 1e-2)
-        fail("RI CPHF A disagrees with dense beyond fitting accuracy (>1e-2)");
+    if (!(rel_fit < 1e-2) || !(rel_fit > 1e-8))
+        fail("fitted operator is not a fit of the dense A (expect 1e-8 < rel < 1e-2)");
+
+    // UHF on a closed shell: [x, x] gives the RHF action in each spin block.
+    calc._scf._ri_jk = false;
+    {
+        const OrbitalHessian r = OrbitalHessian::rhf(calc, shell_pairs, C, eps, nocc);
+        const OrbitalHessian u = OrbitalHessian::uhf(calc, shell_pairs, C, C, eps, eps, nocc, nocc);
+        Eigen::VectorXd x(nvirt * nocc);
+        for (Eigen::Index k = 0; k < x.size(); ++k)
+            x(k) = std::cos(0.7 * static_cast<double>(k) + 0.1);
+        Eigen::VectorXd xx(2 * x.size());
+        xx << x, x;
+        const Eigen::VectorXd yr = r(x), yu = u(xx);
+        const double d = std::max((yu.head(x.size()) - yr).cwiseAbs().maxCoeff(),
+                                  (yu.tail(x.size()) - yr).cwiseAbs().maxCoeff());
+        std::cout << "UHF [x,x] vs RHF x: max|Δ| = " << d << '\n';
+        if (!(d < 1e-12 * std::max(1.0, yr.cwiseAbs().maxCoeff())))
+            fail("UHF operator on a closed shell differs from the RHF operator");
+    }
 
     if (g_ok)
         std::cout << "PASS: ri_cphf_matrix\n";

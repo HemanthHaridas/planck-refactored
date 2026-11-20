@@ -138,57 +138,79 @@ namespace HartreeFock::Correlation::RI
     //   E2(atom,q) = Σ_{(μν),P} w·gamma3·dJ_{(μν),P}  −  ½ Σ_{PQ} γ_{PQ}·dV_{PQ}
     // with γ_{PQ} = Σ_{(μν)} w·x_proj_{(μν),P}·gamma3_{(μν),Q} — the metric-
     // derivative correction that has no dense analog (it exists only because RI
-    // factors through V). dJ = compute_3c_eri_deriv, dV = compute_2c_eri_deriv,
-    // both natoms*3 packed derivative tensors. Returns natoms×3.
+    // factors through V). The derivative integrals dJ and dV are streamed:
+    // each element is contracted as it is computed, so the 3·natoms × npair ×
+    // naux tensor compute_3c_eri_deriv returns is never stored. Cartesian
+    // orbital and aux bases only. Returns natoms×3.
     // bra_prefolded: false (default) — gamma3's bra is a single μ≥ν ordering and
     // off-diagonal pairs are doubled internally (bra-symmetric density, RG2.2
     // synthetic gate). true — gamma3 already sums both (μν)+(νμ) orderings
     // (general non-bra-symmetric dm2buf, RG3.4), so no internal doubling.
-    Eigen::MatrixXd build_ri_two_electron_gradient(
+    std::expected<Eigen::MatrixXd, std::string> build_ri_two_electron_gradient(
+        const HartreeFock::Calculator &calculator,
         const Eigen::MatrixXd &gamma3,
         const Eigen::MatrixXd &x_proj,
-        const std::vector<Eigen::MatrixXd> &dJ,
-        const std::vector<Eigen::MatrixXd> &dV,
-        std::size_t natoms,
-        std::size_t nb,
         bool bra_prefolded = false);
 
-    // Packed 3-index density and raw X factors for the RI 2e-gradient term
-    // (Step RG3.4), built from the AO separable density dm2buf[μ,ν,r,s] (the
-    // transitional nao⁴ buffer, row-major). Returns:
-    //   gamma3[(μν),Q] = Σ_{rs} dm2buf[μ,ν,r,s]·X[Q](r,s)   (packed μ≥ν × aux)
-    //   x_proj[(μν),Q] = X[(μν),Q]                          (raw J V^{-1} factors)
-    // both feeding build_ri_two_electron_gradient. X = J V^{-1} (build_ri_pair
-    // _factors then one more V^{-1/2}); dm2buf's bra μν is packed on the way out.
-    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_ri_gamma3_from_ao_dm2(
+    // Two-electron term of an RI-JK SCF gradient (docs/RI_JK_ROUTINE.md
+    // step 9): ¼ Σ Γ_μνλσ d(μν|λσ)_fit/dR with the SCF Γ every reference
+    // shares, Γ = 2 Pt⊗Pt − 2k (Pa·Pa + Pb·Pb) (Pt = Pa + Pb; RHF passes
+    // Pa = Pb = P/2; k = 1 for HF, the exact-exchange fraction for a global
+    // hybrid). The same quantity two_electron_gradient computes with
+    // exact integrals, so it replaces it one for one. Working-basis densities
+    // (spherical when the run is; the derivative contraction lifts to
+    // Cartesian); needs the RI cache primed at the current geometry.
+    std::expected<Eigen::MatrixXd, std::string> build_ri_scf_two_electron_gradient(
         const HartreeFock::Calculator &calculator,
-        const std::vector<double> &dm2buf,
-        int nao);
+        const Eigen::MatrixXd &Pa,
+        const Eigen::MatrixXd &Pb,
+        double exchange_coefficient = 1.0);
 
-    // RI Lagrangian imat for the RMP2 gradient (Step RG3.3):
-    //   imat(q,v) = Σ_{p,r,s} (pq|rs) · dm2buf[p,v,r,s]
-    // factored through the fitted ERI (pq|rs) = Σ_Q B[Q](p,q) B[Q](r,s):
-    //   W[Q](p,v) = Σ_{rs} B[Q](r,s) · dm2buf[p,v,r,s]
-    //   imat(q,v) = Σ_Q Σ_p B[Q](p,q) · W[Q](p,v)  =  Σ_Q (B[Q]ᵀ W[Q])(q,v)
-    // dm2buf is the (transitional) dense nao⁴ separable density, laid out
-    // row-major [p][v][r][s]. Uses the unpacked per-aux factors
-    // (build_ri_3index_unpacked); intermediate is nao²·naux, never nao⁴ ERI.
-    // Matches the dense imat (before the −1 sign flip the caller applies) to
-    // fitting accuracy. Requires a ready RI cache.
-    Eigen::MatrixXd build_ri_imat(
+    // One block of an MP2 AO pair density, kept in factored form:
+    //   B[p,q,r,s] = Σ L_o(p,i) L_v(q,a) t[(ia),(jb)] R_v(r,b) R_o(s,j)
+    // (t rows i*n_a+a, columns j*n_b+b). The pair density is
+    //   dm2[p,q,r,s] = Σ_blocks weight · (B[p,q,r,s] + B[q,p,r,s]),
+    // the p<->q image always included. It is only ever contracted over its
+    // ket (r,s) with a symmetric factor, so an r<->s image is a factor 2 in
+    // weight, and a block read bra<->ket is the block with L and R swapped and
+    // t transposed. RMP2: one block, t = 4T - 2T^T, weight 1. UMP2: αα, ββ
+    // (½(T - T^T)) and αβ, weight 2 (mp2_gradient.cpp).
+    struct PairDensityBlock
+    {
+        Eigen::MatrixXd bra_occ, bra_virt; // L_o (nao × n_i), L_v (nao × n_a)
+        Eigen::MatrixXd ket_occ, ket_virt; // R_o (nao × n_j), R_v (nao × n_b)
+        Eigen::MatrixXd t;                 // (n_i·n_a) × (n_j·n_b)
+        double weight = 1.0;
+    };
+
+    // Packed 3-index density and raw X factors for the RI 2e-gradient term,
+    // from the factored pair density (never the nao⁴ AO buffer):
+    //   gamma3[(μν),Q] = Σ_{rs} (dm2[μ,ν,r,s] + dm2[ν,μ,r,s]) X[Q](r,s)  (μ≥ν packed)
+    //   x_proj[(μν),Q] = X[(μν),Q]                                       (J V^{-1})
+    // both feeding build_ri_two_electron_gradient with bra_prefolded = true.
+    // Working memory is ov·naux and npair·naux.
+    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_ri_gamma3_from_pair_blocks(
         const HartreeFock::Calculator &calculator,
-        const std::vector<double> &dm2buf,
-        int nao);
+        const std::vector<PairDensityBlock> &blocks);
+
+    // RI Lagrangian for the MP2 gradients, from the same factored density:
+    //   imat(q,v) = Σ_{p,r,s} (pq|rs)_fit · dm2[p,v,r,s] = Σ_Q (B[Q]^T W[Q])(q,v),
+    //   W[Q](p,v) = Σ_{rs} B[Q](r,s) dm2[p,v,r,s],
+    // with B the fitted factors (pq|rs)_fit = Σ_Q B[Q](p,q) B[Q](r,s). Before
+    // the caller's sign flip. Requires a ready RI cache.
+    Eigen::MatrixXd build_ri_imat_from_pair_blocks(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<PairDensityBlock> &blocks);
 
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator);
 
-    // Fitted AO-pair factors B_{(μν),Q} from the cached 3-center tensor and the
-    // 2-center metric factorization: applies V^{-1/2} (Cholesky solve or the
-    // eigen-pruned transform) to _ri_j3c. Rows index the packed AO pair (μ≥ν),
-    // columns index the fitting-metric space. Requires ensure_ri_3c_ready and a
-    // populated _ri_metric_factor on the Calculator.
-    Eigen::MatrixXd build_ri_pair_factors(const HartreeFock::Calculator &calculator);
+    // Fitted AO-pair factors B_{(μν),Q} = _ri_j3c with V^{-1/2} applied
+    // (Cholesky solve or the eigen-pruned transform). Rows index the packed AO
+    // pair (μ≥ν), columns the fitting-metric space. Built once per geometry by
+    // ensure_ri_3c_ready and cached on the Calculator (_ri_pair_factors); this
+    // returns that cache, so it needs ensure_ri_3c_ready first.
+    const Eigen::MatrixXd &build_ri_pair_factors(const HartreeFock::Calculator &calculator);
 
     // Contract the packed-pair fitted factors into an MO block B_{(pq),Q},
     // rows indexed p*ncol_q + q over the columns of C_row / C_col. The AO-pair
@@ -198,6 +220,11 @@ namespace HartreeFock::Correlation::RI
         const Eigen::MatrixXd &pair_factors,
         const Eigen::MatrixXd &C_row,
         const Eigen::MatrixXd &C_col);
+
+    // (pq|rs) from two fitted blocks: left · rightᵀ = Σ_Q left[:,Q] right[:,Q]ᵀ.
+    // Under MPI each rank takes its own Q and the result is summed over ranks
+    // (docs/RI_MPI_SCOPE.md); serial is the plain product.
+    Eigen::MatrixXd fitted_gram(const Eigen::MatrixXd &left, const Eigen::MatrixXd &right);
 
     // RI Coulomb matrix J_{μν} = Σ_Q B_{(μν),Q} c_Q, with the fitted charge
     // c_Q = Σ_{λσ} B_{(λσ),Q} D_{λσ}. Both use the packed (μ≥ν) pair factors, so

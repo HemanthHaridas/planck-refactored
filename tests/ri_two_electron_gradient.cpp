@@ -153,8 +153,29 @@ int main()
     auto dV_res = compute_2c_eri_deriv(calc);
     if (!dV_res) { fail("compute_2c_eri_deriv: " + dV_res.error()); return 1; }
 
-    const Eigen::MatrixXd ri_two_e = build_ri_two_electron_gradient(
-        gamma3, x_proj, *dJ_res, *dV_res, natoms, nb);
+    auto ri_res = build_ri_two_electron_gradient(calc, gamma3, x_proj);
+    if (!ri_res) { fail("build_ri_two_electron_gradient: " + ri_res.error()); return 1; }
+    const Eigen::MatrixXd ri_two_e = *ri_res;
+
+    // Oracle for the streamed contraction: the same formula over the stored
+    // derivative tensors, Σ w·gamma3·dJ − ½ Σ γ_PQ·dV. Must agree to roundoff
+    // (only the summation order differs).
+    {
+        Eigen::VectorXd wb(static_cast<Eigen::Index>(nb * (nb + 1) / 2));
+        for (std::size_t mu = 0, row = 0; mu < nb; ++mu)
+            for (std::size_t nu = 0; nu <= mu; ++nu, ++row)
+                wb(static_cast<Eigen::Index>(row)) = (mu == nu) ? 1.0 : 2.0;
+        const Eigen::MatrixXd wg = wb.asDiagonal() * gamma3;
+        const Eigen::MatrixXd gpq = (wb.asDiagonal() * x_proj).transpose() * gamma3;
+        Eigen::MatrixXd stored = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(natoms), 3);
+        for (std::size_t a = 0; a < natoms * 3; ++a)
+            stored(static_cast<Eigen::Index>(a / 3), static_cast<Eigen::Index>(a % 3)) =
+                wg.cwiseProduct((*dJ_res)[a]).sum() - 0.5 * gpq.cwiseProduct((*dV_res)[a]).sum();
+        const double d = (ri_two_e - stored).cwiseAbs().maxCoeff();
+        std::cout << "streamed vs stored-tensor contraction: max|Δ| = " << d << '\n';
+        if (d > 1e-12 * std::max(1.0, stored.cwiseAbs().maxCoeff()))
+            fail("streamed RI gradient contraction differs from the stored-tensor oracle");
+    }
 
     // Dense reference: contract the SAME synthetic Γ against 4-center AO
     // derivatives. Γ_full[p,q,r,s] = Gp[packed(p,q)][packed(r,s)] (symmetric in

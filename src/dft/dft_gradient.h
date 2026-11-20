@@ -66,13 +66,22 @@ namespace DFT::Gradient
 
     // Nuclear XC contribution ∂E_xc/∂R for semilocal and global-hybrid KS-DFT,
     // including the moving-grid (Becke partition + point-translation) response.
+    // GGA AO Hessians are evaluated per block of grid points, never stored.
     [[nodiscard]] std::expected<Eigen::MatrixXd, std::string>
     compute_xc_nuclear_gradient_rks(
         const HartreeFock::Molecule &mol,
         const HartreeFock::Basis &basis,
         const MolecularGrid &grid,
         const AOGridEvaluation &ao,
-        const AOGridHessian &hess,
+        const XCGridEvaluation &xc,
+        const Eigen::Ref<const Eigen::MatrixXd> &density_restricted);
+
+    [[nodiscard]] std::expected<Eigen::MatrixXd, std::string>
+    compute_xc_nuclear_gradient_rks(
+        const HartreeFock::Molecule &mol,
+        const HartreeFock::Basis &basis,
+        const MolecularGrid &grid,
+        const ScreenedAOGrid &ao,
         const XCGridEvaluation &xc,
         const Eigen::Ref<const Eigen::MatrixXd> &density_restricted);
 
@@ -82,7 +91,16 @@ namespace DFT::Gradient
         const HartreeFock::Basis &basis,
         const MolecularGrid &grid,
         const AOGridEvaluation &ao,
-        const AOGridHessian &hess,
+        const XCGridEvaluation &xc,
+        const Eigen::Ref<const Eigen::MatrixXd> &density_alpha,
+        const Eigen::Ref<const Eigen::MatrixXd> &density_beta);
+
+    [[nodiscard]] std::expected<Eigen::MatrixXd, std::string>
+    compute_xc_nuclear_gradient_uks(
+        const HartreeFock::Molecule &mol,
+        const HartreeFock::Basis &basis,
+        const MolecularGrid &grid,
+        const ScreenedAOGrid &ao,
         const XCGridEvaluation &xc,
         const Eigen::Ref<const Eigen::MatrixXd> &density_alpha,
         const Eigen::Ref<const Eigen::MatrixXd> &density_beta);

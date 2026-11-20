@@ -248,8 +248,9 @@ namespace HartreeFock::Correlation
         //     projected error bar ran ~20x the shift's) and biases the ratio;
         //   - <N_I>/<N_0> normalises by it, and the true reference carried 14.2x
         //     the weight of the one being used as the unit.
-        // The SHIFT energy never touches it, which is exactly why the shift looked
-        // healthy throughout and hid the defect.
+        // The shift energy does not anchor on it, which is why the shift looked
+        // healthy and hid the defect -- but it is also the starting population,
+        // so a bad choice still cost the shift equilibration time.
         //
         // Minimising ops.diagonal rather than reading SCF MO energies is
         // deliberate: it uses the SAME slater_condon_element the propagator uses,
@@ -389,9 +390,12 @@ namespace HartreeFock::Correlation
                             opt.initiator_threshold));
         logging(LogLevel::Info, tag + " :",
                 std::format("{} equilibration + {} sampling steps, {} spawn "
-                            "attempts per occupied determinant",
+                            "attempts per {} determinant",
                             opt.equilibration_steps, opt.sampling_steps,
-                            opt.spawn_attempts));
+                            opt.spawn_attempts,
+                            opt.sample_low_weight_parents ? "selected" : "occupied"));
+        if (opt.sample_low_weight_parents)
+            logging(LogLevel::Info, tag + " :", "probabilistic spawning from low-weight parents enabled");
 
         // ── Propagate ──────────────────────────────────────────────────────────
         CanonicalWalkerPopulation pop;
@@ -409,11 +413,24 @@ namespace HartreeFock::Correlation
         double proj_numerator_sum = 0.0;
         double proj_denominator_sum = 0.0;
         int proj_n = 0;
+        int weak_reference_steps = 0;
+        const double min_reference_weight = 3.0 * std::max(1.0, opt.walker_granularity);
         double ref_weight_sum = 0.0;
         double ref_weight_min = std::numeric_limits<double>::infinity();
         int ref_weight_n = 0;
         std::vector<double> shift_samples;
-        std::vector<double> projected_samples;
+        // Per-step numerator sum_j H_0j c_j and denominator c_0, for EVERY
+        // sampling step. Their joint series gives the ratio-of-sums error bar.
+        std::vector<double> projected_numerators;
+        std::vector<double> projected_denominators;
+        // Signed weights summed over the last `anchor_window` equilibration
+        // steps; the projection reference is chosen from these, not from the
+        // single step at which equilibration ends (finding 5).
+        // ponytail: hash-map accumulation, O(occupied) per window step. Fine at
+        // 1000 steps x 1e5 determinants; merge into the canonical population if
+        // the window or population grows.
+        const int anchor_window = std::min(1000, opt.equilibration_steps / 4);
+        std::unordered_map<DetKey, double, DetKeyHash> anchor_weights;
         // Running sum of SIGNED weight per determinant over the sampling phase.
         //
         // Signed, and summed over steps rather than snapshotted: an instantaneous
@@ -484,7 +501,7 @@ namespace HartreeFock::Correlation
                                  ctl.shift, rng, opt.spawn_attempts,
                                  opt.walker_granularity,
                                  opt.initiator_threshold, spawn_ws, next_pop,
-                                 step_profile);
+                                 step_profile, opt.sample_low_weight_parents);
             if (opt.profile)
                 peak_population_bytes = std::max(
                     peak_population_bytes, pop.retained_bytes() + next_pop.retained_bytes());
@@ -499,7 +516,20 @@ namespace HartreeFock::Correlation
             std::chrono::steady_clock::time_point compress_start;
             if (opt.profile)
                 compress_start = std::chrono::steady_clock::now();
-            const double n = pop.compress_with_l1_norm(1e-12).l1_norm;
+            // Occupation rounding of the surviving population (finding 1): one
+            // raw draw per step roots the per-determinant streams, independent of
+            // the spawn streams propagate_stochastic derived from its own draw.
+            // Skipped at zero granularity, which keeps continuous weights and the
+            // pre-fix trajectory.
+            double n = 0.0;
+            if (opt.walker_granularity > 0.0)
+            {
+                const RandomSource rounding_root(rng.raw64());
+                n = pop.compress_with_l1_norm(1e-12, opt.walker_granularity,
+                                              &rounding_root).l1_norm;
+            }
+            else
+                n = pop.compress_with_l1_norm(1e-12).l1_norm;
             if (opt.profile)
                 step_work.compress_seconds += std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - compress_start).count();
@@ -517,6 +547,11 @@ namespace HartreeFock::Correlation
                     "above the stability bound.", tag, step, n, opt.target_walkers));
 
             ctl.update(n, opt.timestep);
+
+            if (step < opt.equilibration_steps
+                && step >= opt.equilibration_steps - anchor_window)
+                for (const auto &[det, w] : pop)
+                    anchor_weights[det] += w;
 
             // RE-ANCHOR THE PROJECTION REFERENCE ONCE, AT THE END OF EQUILIBRATION.
             //
@@ -558,17 +593,34 @@ namespace HartreeFock::Correlation
             // Done ONCE rather than per step: a reference that moves during
             // sampling would change what the accumulated ratio-of-sums means
             // partway through, which is worse than a slightly suboptimal anchor.
+            //
+            // CHOSEN FROM AVERAGED WEIGHTS, WITH A MARGIN (code review finding 5,
+            // 2026-11-17). The first version took the largest |w| on this single
+            // step and switched on any margin. At the 5-13 walkers per
+            // determinant of Cr2 CAS(12,18) that choice was sampling noise: the
+            // replacement determinant differed between populations at one seed,
+            // and runs that switched kept fewer usable projections. The weights
+            // are now signed sums over the last `anchor_window` equilibration
+            // steps (|sum| also penalizes a determinant whose sign oscillates),
+            // and the anchor moves only when the seeded reference is overtaken
+            // by more than 2x -- the same margin as the drift warning.
             if (step == opt.equilibration_steps)
             {
                 const DetKey seeded = reference;
-                double best_w = std::abs(pop.weight_at(reference));
+                const auto weight_of = [&](const DetKey &det) {
+                    if (anchor_window == 0)
+                        return std::abs(pop.weight_at(det));
+                    const auto it = anchor_weights.find(det);
+                    return it == anchor_weights.end()
+                               ? 0.0
+                               : std::abs(it->second) / anchor_window;
+                };
+                double best_w = weight_of(reference);
                 DetKey best = reference;
-                // Deterministic scan: the population is a hash map, so ties must
-                // break on the bitstrings or the anchor depends on iteration order
-                // and the run stops being reproducible at fixed seed.
-                for (const auto &[det, w] : pop)
-                {
-                    const double aw = std::abs(w);
+                // Ties break on the bitstrings: anchor_weights is a hash map,
+                // so without a total order the anchor would depend on iteration
+                // order and the run would stop being reproducible at fixed seed.
+                const auto consider = [&](const DetKey &det, double aw) {
                     if (aw > best_w
                         || (aw == best_w
                             && (det.alpha < best.alpha
@@ -577,28 +629,35 @@ namespace HartreeFock::Correlation
                         best_w = aw;
                         best = det;
                     }
-                }
-
-                const double seeded_w = std::abs(pop.weight_at(seeded));
+                };
+                if (anchor_window == 0)
+                    for (const auto &[det, w] : pop)
+                        consider(det, std::abs(w));
+                else
+                    for (const auto &[det, w] : anchor_weights)
+                        consider(det, std::abs(w) / anchor_window);
+                const double seeded_w = weight_of(seeded);
+                anchor_weights = {};
+                const bool overtaken = best_w > 2.0 * seeded_w;
                 // Warn whenever the seeded reference has been overtaken by a
-                // margin, whether or not re-anchoring fixes it -- a large drift
-                // says the state is degenerate or near-degenerate, which the user
-                // should know regardless.
-                if (seeded_w > 0.0 && best_w > 2.0 * seeded_w)
+                // margin -- a large drift says the state is degenerate or
+                // near-degenerate, which the user should know regardless.
+                if (overtaken && seeded_w > 0.0)
                     logging(LogLevel::Warning, tag + " :",
                             std::format("REFERENCE DRIFT: determinant "
-                                        "{:#018x}/{:#018x} now carries {:.2f} walkers "
-                                        "against the seeded reference's {:.2f} "
-                                        "({:.1f}x). This is the signature of a "
-                                        "degenerate or near-degenerate ground state, "
-                                        "in which the population drifts freely "
-                                        "between partners. Re-anchoring the "
+                                        "{:#018x}/{:#018x} carries {:.2f} walkers "
+                                        "(averaged over {} steps) against the seeded "
+                                        "reference's {:.2f} ({:.1f}x). This is the "
+                                        "signature of a degenerate or near-degenerate "
+                                        "ground state, in which the population drifts "
+                                        "freely between partners. Re-anchoring the "
                                         "projection; the shift energy is unaffected.",
                                         static_cast<unsigned long long>(best.alpha),
                                         static_cast<unsigned long long>(best.beta),
-                                        best_w, seeded_w, best_w / seeded_w));
+                                        best_w, std::max(anchor_window, 1), seeded_w,
+                                        best_w / seeded_w));
 
-                if (!(best == reference))
+                if (overtaken)
                 {
                     reference = best;
                     logging(LogLevel::Info, tag + " :",
@@ -619,52 +678,39 @@ namespace HartreeFock::Correlation
                 if (want_coefficient_ratios)
                     for (const auto &[det, w] : pop)
                         signed_population[det] += w;
-                // THE REFERENCE WEIGHT THRESHOLD IS NOT 1e-12 HERE.
+                // RATIO OF SUMS, not mean of ratios. Accumulate the numerator
+                // and denominator separately and divide once at the end:
                 //
-                // projected_energy defaults to rejecting only c_0 == 0, which is
-                // enough to avoid dividing by zero but NOT enough for the ratio to
-                // be statistically meaningful. At c_0 = 1 walker, 1/c_0 swings by
-                // a factor of several between consecutive steps and E[1/X] !=
-                // 1/E[X] -- measured on N2/STO-3G, the projected energy came out
-                // at -99.19 +/- 6.63 against an exact -107.65 while the shift
-                // energy was correct to 0.14 sigma.
+                //   E = H_00 + (sum_t sum_j H_0j c_j) / (sum_t c_0)
                 //
-                // Requiring several walkers on the reference makes the estimator
-                // usable or honestly absent. A run whose reference is chronically
-                // underpopulated reports no projected energy at all, which is the
-                // correct outcome: the shift energy is still valid, and a missing
-                // number is better than a wrong one.
-                const double min_ref = 3.0 * std::max(1.0, opt.walker_granularity);
-                const auto pe = projected_energy(pop, reference, setup->n_act, ops,
-                                                 min_ref);
-                if (pe.valid)
-                {
-                    // RATIO OF SUMS, not mean of ratios. Accumulate the numerator
-                    // and denominator separately and divide once at the end:
-                    //
-                    //   E = H_00 + (sum_t sum_j H_0j c_j) / (sum_t c_0)
-                    //
-                    // Averaging the per-step ratios instead is the E[A/B] vs
-                    // E[A]/E[B] error this project has now hit three times (F2.5's
-                    // acceptance-rate correction, F3.4's documented bias, and
-                    // here). The per-step ratio distribution is heavy-tailed --
-                    // rare small c_0 produce huge 1/c_0 spikes -- so its mean is
-                    // set by outliers. Measured on N2/STO-3G: changing only the
-                    // reference-weight threshold moved the mean-of-ratios by
-                    // 7.5 Eh (-99.19 to -106.64) at identical configuration and
-                    // seed, which no well-behaved estimator does.
-                    proj_numerator_sum += pe.numerator;
-                    proj_denominator_sum += pe.reference_weight;
-                    ++proj_n;
-
-                    // The per-step ratios are still collected, but ONLY to give
-                    // the ratio-of-sums an error bar via their scatter. They are
-                    // not the estimator.
-                    projected_samples.push_back(pe.energy);
-                    ref_weight_sum += std::abs(pe.reference_weight);
-                    ref_weight_min = std::min(ref_weight_min, std::abs(pe.reference_weight));
-                    ++ref_weight_n;
-                }
+                // Averaging the per-step ratios instead is the E[A/B] vs
+                // E[A]/E[B] error this project has now hit three times (F2.5's
+                // acceptance-rate correction, F3.4's documented bias, and here).
+                // The per-step ratio distribution is heavy-tailed -- rare small
+                // c_0 produce huge 1/c_0 spikes -- so its mean is set by
+                // outliers. Measured on N2/STO-3G: the mean of ratios was
+                // -99.19 +/- 6.63 against an exact -107.65.
+                //
+                // EVERY STEP ENTERS BOTH SUMS (code review finding 4,
+                // 2026-11-17). A |c_0| >= 3 walker threshold once protected the
+                // per-step division. The ratio of sums divides once, so the
+                // threshold protected nothing and instead conditioned the average
+                // on steps where the reference was well occupied -- a selection
+                // correlated with the numerator. On Cr2 CAS(12,18) it discarded
+                // up to 56 % of steps. The threshold survives only as the
+                // usability diagnostic below: a reference that is weak on most
+                // steps still suppresses the projected energy.
+                const auto pe = projected_energy(pop, reference, setup->n_act, ops, 0.0);
+                proj_numerator_sum += pe.numerator;
+                proj_denominator_sum += pe.reference_weight;
+                ++proj_n;
+                projected_numerators.push_back(pe.numerator);
+                projected_denominators.push_back(pe.reference_weight);
+                if (std::abs(pe.reference_weight) < min_reference_weight)
+                    ++weak_reference_steps;
+                ref_weight_sum += std::abs(pe.reference_weight);
+                ref_weight_min = std::min(ref_weight_min, std::abs(pe.reference_weight));
+                ++ref_weight_n;
                 if (opt.profile)
                     step_work.estimator_seconds += std::chrono::duration<double>(
                         std::chrono::steady_clock::now() - estimator_start).count();
@@ -696,7 +742,8 @@ namespace HartreeFock::Correlation
                                 std::max(equilibration_profile.peak_merge_output_bytes,
                                          sampling_profile.peak_merge_output_bytes),
                                 diag_cache->size(), sizeof(double) *
-                                    (shift_samples.capacity() + projected_samples.capacity()),
+                                    (shift_samples.capacity() + projected_numerators.capacity()
+                                     + projected_denominators.capacity()),
                                 signed_population.size()));
             // Sample-series and endpoint check, outside the step timings. The
             // canonical population already iterates in determinant order.
@@ -704,9 +751,12 @@ namespace HartreeFock::Correlation
             result.word(shift_samples.size());
             for (double v : shift_samples)
                 result.real(v);
-            result.word(projected_samples.size());
-            for (double v : projected_samples)
-                result.real(v);
+            result.word(projected_numerators.size());
+            for (std::size_t t = 0; t < projected_numerators.size(); ++t)
+            {
+                result.real(projected_numerators[t]);
+                result.real(projected_denominators[t]);
+            }
             result.real(proj_numerator_sum);
             result.real(proj_denominator_sum);
             result.word(reference.alpha);
@@ -734,11 +784,25 @@ namespace HartreeFock::Correlation
         };
 
         const double e_shift = mean_of(shift_samples) + energy_offset;
-        const double shift_err = blocked_standard_error(shift_samples);
+        const auto shift_blocking = blocking_analysis(shift_samples);
+        const double shift_err = shift_blocking.error;
 
+        // An unconverged blocking curve means the correlation time is comparable
+        // to the sampling window and the error bar is too small (finding 3). The
+        // flag follows the number on the same line, so parsers that read
+        // "<energy> +/- <error>" are unaffected.
+        const auto blocking_flag = [](const BlockingResult &b) {
+            return b.converged ? "" : "  [ERROR BAR UNCONVERGED]";
+        };
         logging(LogLevel::Info, tag + " :",
-                std::format("Shift energy     {:.10f} +/- {:.2e}  ({} samples)",
-                            e_shift, shift_err, shift_samples.size()));
+                std::format("Shift energy     {:.10f} +/- {:.2e}  ({} samples){}",
+                            e_shift, shift_err, shift_samples.size(),
+                            blocking_flag(shift_blocking)));
+        if (!shift_blocking.converged)
+            logging(LogLevel::Warning, tag + " :",
+                    "the shift error bar did not reach a blocking plateau: the "
+                    "correlation time is comparable to the sampling window, so the "
+                    "error is underestimated. Raise fciqmc_steps.");
 
         // THE SIGN OF THE DENOMINATOR IS A TIMESTEP-STABILITY DIAGNOSTIC, and it
         // is cheaper and sharper than either energy.
@@ -786,30 +850,50 @@ namespace HartreeFock::Correlation
                     std::format("reference weight: mean {:.2f}, min {:.2f} walkers",
                                 ref_weight_sum / ref_weight_n, ref_weight_min));
 
-        // Report the projected energy only if it was usable often enough to mean
-        // something. A handful of samples out of thousands is not an estimator.
+        // Report the projected energy only if the reference was well occupied on
+        // most steps. This is a usability diagnostic only: every step is in the
+        // sums regardless (finding 4). With the reference weak on most steps the
+        // ratio of sums carries an O(1/c_0) bias the error bar does not show.
+        const int strong_reference_steps = proj_n - weak_reference_steps;
         const bool projected_usable =
-            projected_samples.size() >= static_cast<std::size_t>(shift_samples.size() / 4);
-        if (!projected_samples.empty() && !projected_usable)
+            proj_denominator_sum != 0.0
+            && strong_reference_steps >= static_cast<int>(shift_samples.size() / 4);
+        if (proj_n > 0 && !projected_usable)
             logging(LogLevel::Warning, tag + " :",
                     std::format("projected energy suppressed: the reference held "
                                 "enough walkers on only {} of {} steps. Raise "
                                 "fciqmc_walkers.",
-                                projected_samples.size(), shift_samples.size()));
+                                strong_reference_steps, shift_samples.size()));
 
         if (projected_usable)
         {
-            const double e_proj = ops.diagonal(reference)
-                                  + proj_numerator_sum / proj_denominator_sum
-                                  + energy_offset;
-            // Error bar from a blocking analysis of the per-step ratios. This
-            // OVERSTATES the uncertainty on the ratio-of-sums (which averages the
-            // tails away), so it is conservative -- an overestimate fails a gate
-            // loudly, an underestimate passes one silently.
-            const double proj_err = blocked_standard_error(projected_samples);
+            const double ratio = proj_numerator_sum / proj_denominator_sum;
+            const double e_proj = ops.diagonal(reference) + ratio + energy_offset;
+            // ERROR BAR OF THE RATIO OF SUMS (finding 2, 2026-11-17). The old bar
+            // blocked the per-step ratios num_t / c0_t, a different random
+            // variable; on five fresh Cr2 CAS(12,10) seeds it understated the
+            // spread across seeds about 4x. The ratio's first-order (delta-method)
+            // error is the standard error of the mean of
+            //   y_t = (num_t - R c0_t) / mean(c0),
+            // whose mean is exactly zero at R = sum num / sum c0, so blocking y_t
+            // propagates the numerator-denominator covariance with every
+            // autocorrelation the blocking resolves.
+            const double mean_c0 = proj_denominator_sum / proj_n;
+            std::vector<double> linearized(projected_numerators.size());
+            for (std::size_t t = 0; t < linearized.size(); ++t)
+                linearized[t] = (projected_numerators[t]
+                                 - ratio * projected_denominators[t]) / mean_c0;
+            const auto proj_blocking = blocking_analysis(linearized);
+            const double proj_err = proj_blocking.error;
             logging(LogLevel::Info, tag + " :",
-                    std::format("Projected energy {:.10f} +/- {:.2e}  ({} samples)",
-                                e_proj, proj_err, projected_samples.size()));
+                    std::format("Projected energy {:.10f} +/- {:.2e}  ({} samples, "
+                                "{} with |c_0| < {:g}){}",
+                                e_proj, proj_err, proj_n, weak_reference_steps,
+                                min_reference_weight, blocking_flag(proj_blocking)));
+            if (!proj_blocking.converged)
+                logging(LogLevel::Warning, tag + " :",
+                        "the projected error bar did not reach a blocking plateau: "
+                        "the error is underestimated. Raise fciqmc_steps.");
             // The two share no arithmetic, so a large gap between them is a
             // symptom worth surfacing rather than averaging away.
             const double gap = std::abs(e_proj - e_shift);

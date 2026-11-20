@@ -425,3 +425,11 @@ HartreeFock::BasisFunctions::to_working(const HartreeFock::Basis &basis, const E
                                " Cartesian columns");
     return Eigen::MatrixXd(C * M_cart * C.transpose());
 }
+
+Eigen::MatrixXd
+HartreeFock::BasisFunctions::mos_to_cartesian(const HartreeFock::Basis &basis, const Eigen::MatrixXd &C_mo)
+{
+    if (!basis._spherical)
+        return C_mo;
+    return basis._cart_to_sph.transpose() * C_mo;
+}

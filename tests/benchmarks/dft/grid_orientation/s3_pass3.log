@@ -1,0 +1,8 @@
+case                   policy@grid                   max|dg| Ha/Bohr  max|dE| Eh    points pts/atom   wall s  peak GB
+h2o2_pbe               pyscf-nwchem-2.13@fine              5.038e-07   2.954e-08    133036    33259     0.45     0.23
+h2o2_b3lyp             pyscf-nwchem-2.13@fine              3.424e-07   5.350e-09    133036    33259     0.47     0.23
+h2o2_hse06             pyscf-nwchem-2.13@fine              9.381e-07   2.679e-07    133036    33259     1.83     0.23
+h2o2_cation_uks_pbe    pyscf-nwchem-2.13@fine              5.180e-07   3.206e-08    133036    33259     0.78     0.25
+benzene_b3lyp          pyscf-nwchem-2.13@fine              1.528e-06   4.037e-08    399108    33259     6.07     1.51
+water4_b3lyp           pyscf-nwchem-2.13@fine              2.254e-07   1.757e-07    360232    30019     2.76     1.06
+water_dimer_b3lyp      pyscf-nwchem-2.13@fine              4.787e-07   1.513e-08    180116    30019     0.65     0.33

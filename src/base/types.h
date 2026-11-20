@@ -837,6 +837,7 @@ namespace HartreeFock
         // evolution nor the estimator; it only records work and wall-time
         // counters around the existing fixed-order propagation phases.
         bool profile = false;
+        bool sample_low_weight_parents = false;
 
         // The seed is USER-VISIBLE on purpose. The reproducibility contract --
         // same seed reproduces the trajectory bitwise -- is worthless if the seed
@@ -1553,6 +1554,11 @@ namespace HartreeFock
         std::shared_ptr<AuxBasis> _ri_aux_basis;
         Eigen::MatrixXd _ri_j2c; // raw 2-center Coulomb metric (P|Q)
         Eigen::MatrixXd _ri_j3c; // packed 3-center tensor (AO-pair × aux), in working AO basis
+        // Fitted pair factors B = J V^{-1/2} (packed AO pair × fitting mode),
+        // built from _ri_j3c by ensure_ri_3c_ready and cleared with it. They do
+        // not depend on the density, so the RI-JK Fock build reads them every
+        // iteration instead of re-solving (docs/RI_JK_ROUTINE.md step 11).
+        Eigen::MatrixXd _ri_pair_factors;
         std::shared_ptr<Correlation::RI::MetricFactorization> _ri_metric_factor;
         // Geometry (_molecule._standard) the RI caches above were built against.
         // The aux basis / 2-center metric / 3-center tensor all sit on the atom
@@ -1604,6 +1610,8 @@ namespace HartreeFock
 
         double _total_energy = 0;                        // Total Energy (SCF + Nuclear Repulsion)
         double _nuclear_repulsion = 0;                   // Nuclear Repulsion Energy (Bohr)
+        double _dispersion_energy = 0.0;                 // D3 energy, included in _total_energy (0 when off)
+        double _solvation_energy = 0.0;                  // PCM solvation energy, included in _total_energy (0 when off)
         double _correlated_total_energy = 0.0;           // Correlated total energy when post-HF augments the SCF reference
         double _correlation_energy = 0.0;                // Post-HF correlation energy (0 if not computed)
         double _ccsd_reference_correlation_energy = 0.0; // CCSD correlation energy cached during CCSDT runs

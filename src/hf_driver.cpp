@@ -491,7 +491,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                        "(basis_type spherical); currently single-point RHF/UHF/ROHF "
                        "energies (Conventional or Direct), with MP2, CASSCF/RASSCF, "
                        "FCI, or coupled cluster (RCCSD/UCCSD/RCCSDT/UCCSDT/RCCSDTQ), "
-                       "RHF/UHF/ROHF analytic gradients, geometry optimization, "
+                       "RHF/UHF/ROHF and dense RMP2/UMP2 analytic gradients, geometry optimization, "
                        "frequencies, geomopt+freq, and imaginary-mode following, "
                        "and point-group symmetry / SAO blocking are available. Use "
                        "basis_type cartesian for this calculation.");
@@ -515,27 +515,10 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             calculator._scf._scf != HartreeFock::SCFType::UHF &&
             calculator._scf._scf != HartreeFock::SCFType::ROHF)
             return reject("SCF type " + map_enum(calculator._scf._scf));
-        // Every gradient-consuming workflow inherits the gradient-side
-        // restrictions: ROHF analytic gradients are unimplemented Cartesian-side
-        // too, and RMP2/UMP2 gradients still need the response-machinery audit
-        // before the spherical lift is wired in (Phase 2). Reject those
-        // combinations explicitly so a user that asks for `correlation rmp2 /
-        // calculation geomopt` in spherical mode gets a clear message instead
-        // of a wrong number.
-        const bool needs_gradient =
-            calculator._calculation == HartreeFock::CalculationType::Gradient ||
-            calculator._calculation == HartreeFock::CalculationType::GeomOpt ||
-            calculator._calculation == HartreeFock::CalculationType::Frequency ||
-            calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency ||
-            calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow;
-        if (needs_gradient)
-        {
-            // ROHF spherical gradients: enabled (compute_rohf_gradient builds W
-            // in the spherical basis then lifts once — see gradient.cpp).
-            if (calculator._correlation == HartreeFock::PostHF::RMP2 ||
-                calculator._correlation == HartreeFock::PostHF::UMP2)
-                return reject("MP2 analytic gradient");
-        }
+        // ROHF, dense and RI RMP2/UMP2 gradients all run in the spherical basis:
+        // the MP2 Lagrangian stays in the working basis and the derivative-kernel
+        // inputs are lifted once (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md,
+        // docs/RI_JK_ROUTINE.md step 16).
         // Post-HF energy paths consume only the SCF's spherical AO ERI and spherical
         // MO coefficients: the AO→MO transform is self-consistent in the spherical
         // basis (no C needed), and every AO/MO dimension keys off working_nbasis().
@@ -569,7 +552,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         // for cross-basis density projection in the spherical working basis.
     }
 
-    // ── RI-MP2 workflow gate: single point, RHF gradient, RHF geomopt ────────────
+    // ── RI-MP2 workflow gate: RHF/UHF single point, gradient, geomopt, frequencies
     // The RI front-end caches the auxiliary basis, the 2-center Coulomb metric,
     // and the packed 3-center tensor on the Calculator (_ri_aux_basis / _ri_j2c /
     // _ri_j3c). The caches self-invalidate on a geometry change (G1:
@@ -590,57 +573,75 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     //     water_radical_cation_ri_ump2_geomopt_sto3g, each with a stationary-point
     //     FD check against its own RI surface.
     //
-    // Frequency / GeomOptFreq / ImaginaryFollow are deliberately NOT rejected
-    // here — they fall through to the correlated-frequency guard below, which
-    // gives the accurate reason (the semi-numerical Hessian differentiates the
-    // SCF gradient, not the MP2 one; a limitation of every MP2, dense or RI, not
-    // something RI-specific). ROHF is excluded: there is no ROHF-MP2 gradient at
-    // all, dense or RI. Basis-agnostic.
-    const bool ri_freq_workflow =
-        calculator._calculation == HartreeFock::CalculationType::Frequency ||
-        calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency ||
-        calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow;
+    //   * Frequency / GeomOptFreq / ImaginaryFollow — the semi-numerical Hessian
+    //     differences the same per-geometry SCF + MP2 + gradient step
+    //     (Opt::run_scf_gradient), G1 again handling the caches. Gated against a
+    //     PySCF Hessian from second differences of the RI-MP2 energy
+    //     (water_ri_rmp2_freq_sto3g, water_radical_cation_ri_ump2_freq_sto3g).
+    //
+    // ROHF is excluded: there is no ROHF-MP2 gradient at all, dense or RI.
+    // Basis-agnostic.
     const bool ri_workflow_ok =
         (calculator._scf._scf == HartreeFock::SCFType::RHF ||
          calculator._scf._scf == HartreeFock::SCFType::UHF) &&
         (calculator._calculation == HartreeFock::CalculationType::Gradient ||
-         calculator._calculation == HartreeFock::CalculationType::GeomOpt);
+         calculator._calculation == HartreeFock::CalculationType::GeomOpt ||
+         calculator._calculation == HartreeFock::CalculationType::Frequency ||
+         calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency ||
+         calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow);
     if (calculator._mp2.use_ri &&
         calculator._calculation != HartreeFock::CalculationType::SinglePoint &&
-        !ri_workflow_ok && !ri_freq_workflow)
+        !ri_workflow_ok)
     {
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Error, "RI-MP2 :",
-            "RI-MP2 (mp2_use_ri) supports single-point energies plus the RHF/UHF "
-            "analytic gradient and RHF/UHF geometry optimization. Set calculation "
-            "singlepoint, gradient or geomopt, or disable RI (mp2_use_ri false) "
+            "RI-MP2 (mp2_use_ri) supports single-point energies plus RHF/UHF "
+            "gradients, geometry optimization and frequencies. Use an RHF or UHF "
+            "reference, or disable RI (mp2_use_ri false) "
             "for " + map_enum(calculator._calculation) + ".");
         return EXIT_FAILURE;
     }
 
     // ── RI-JK SCF boundary ───────────────────────────────────────────────────────
-    // The RI J/K builders work on a plain AO density in the working basis. They
-    // have no spherical back-projection, no symmetry-orbit folding, and ROHF's
-    // Roothaan effective Fock is assembled after the (Ga, Gb) build that RI-JK
-    // replaces -- none of which is wired. Reject rather than silently returning a
-    // dense (or wrong) answer; each rejection names the specific reason.
+    // The RI J/K builders take and return working-basis matrices (the fitted
+    // 3-center tensor is already in the working basis, spherical included).
+    // RHF, UHF and ROHF (whose Roothaan Fock is assembled from the same
+    // (Ga, Gb)) are wired. They have no symmetry-orbit folding.
+    // Derivative workflows: the RI-JK gradient (build_ri_scf_two_electron_
+    // gradient) is gated for RHF, UHF and ROHF, Cartesian and spherical
+    // (docs/RI_JK_ROUTINE.md steps 9-10, 16). Everything else stays
+    // refused, because the exact-integral gradient at RI orbitals is
+    // inconsistent with the RI energy (water/def2-universal-JKFIT: 9.9e-6
+    // Ha/Bohr off its FD, inside the geomopt threshold): a correlated gradient
+    // (its reference terms assume exact integrals), and PCM (not gated).
+    // Reject rather than silently returning a wrong answer; each names its reason.
     if (calculator._scf._ri_jk)
     {
-        const char *reason =
-            (calculator._scf._scf == HartreeFock::SCFType::ROHF)
-                ? "ROHF (the Roothaan effective Fock is not wired through the RI builders)"
-            : calculator._shells._spherical
-                ? "the spherical basis (the RI J/K builders have no spherical path)"
-            : calculator._use_full_symmetry
-                ? "full point-group symmetry (RI J/K does not fold symmetry orbits)"
+        const auto calc = calculator._calculation;
+        const bool derivative_workflow =
+            calc == HartreeFock::CalculationType::Gradient ||
+            calc == HartreeFock::CalculationType::GeomOpt ||
+            calc == HartreeFock::CalculationType::Frequency ||
+            calc == HartreeFock::CalculationType::GeomOptFrequency ||
+            calc == HartreeFock::CalculationType::ImaginaryFollow;
+        const char *derivative_gap =
+            calculator._correlation != HartreeFock::PostHF::None
+                ? "correlated gradient"
+            : calculator._solvation._model != HartreeFock::SolvationModel::None
+                ? "PCM"
                 : nullptr;
-        if (reason != nullptr)
+        std::string reason;
+        if (calculator._use_full_symmetry)
+            reason = "full point-group symmetry (RI J/K does not fold symmetry orbits)";
+        else if (derivative_workflow && derivative_gap != nullptr)
+            reason = std::string("gradients, geometry optimization or frequencies with a ") +
+                     derivative_gap + " (the RI-JK gradient covers HF references without correlation or PCM)";
+        if (!reason.empty())
         {
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Error, "RI-JK :",
                 std::string("RI-JK SCF (scf_ri_jk) does not support ") + reason +
-                    ". Use RHF or UHF in a Cartesian basis without full symmetry, "
-                    "or disable RI-JK (scf_ri_jk false).");
+                    ". Use a supported combination, or disable RI-JK (scf_ri_jk false).");
             return EXIT_FAILURE;
         }
         if (calculator._mp2.ri_basis_name.empty())
@@ -649,36 +650,6 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                 HartreeFock::LogLevel::Error, "RI-JK :",
                 "RI-JK SCF (scf_ri_jk) needs an auxiliary basis: set mp2_ri_basis "
                 "(the same fitting basis RI-MP2 uses).");
-            return EXIT_FAILURE;
-        }
-    }
-
-    // ── Correlated frequencies are not implemented ───────────────────────────────
-    // src/freq/hessian.cpp finite-differences the SCF gradient, dispatching on the
-    // reference type only (compute_{rhf,uhf,rohf}_gradient); it never calls the
-    // MP2 gradient. So `correlation rmp2|ump2` + `frequency`/`geomoptfreq`/
-    // `imaginaryfollow` would print the MP2 correlation energy and then report
-    // frequencies built from an *HF* Hessian — a silently wrong answer. Reject it
-    // explicitly until the MP2 gradient is wired into the Hessian dispatch.
-    // (`gradient` and `geomopt` are fine: both call compute_{r,u}mp2_gradient.)
-    {
-        const bool freq_workflow =
-            calculator._calculation == HartreeFock::CalculationType::Frequency ||
-            calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency ||
-            calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow;
-        const bool correlated =
-            calculator._correlation == HartreeFock::PostHF::RMP2 ||
-            calculator._correlation == HartreeFock::PostHF::UMP2;
-        if (freq_workflow && correlated)
-        {
-            HartreeFock::Logger::logging(
-                HartreeFock::LogLevel::Error, "Frequency :",
-                "Correlated (MP2) frequencies are not implemented: the "
-                "semi-numerical Hessian finite-differences the SCF gradient, not "
-                "the MP2 gradient, so " + map_enum(calculator._calculation) +
-                " with correlation rmp2/ump2 would report HF frequencies. Use "
-                "calculation gradient or geomopt for MP2, or drop the correlation "
-                "keyword for HF frequencies.");
             return EXIT_FAILURE;
         }
     }

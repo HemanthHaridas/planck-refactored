@@ -333,20 +333,21 @@ externalproject_add(
 )
 
 # libecpint (MIT): ECP integrals and derivatives (docs/DEF2_ECP.md).
-# ponytail: pinned to the head of UNMERGED upstream PR #81 (loriab's fork), which
-# sits on upstream HEAD 95203c68 and fixes seven type-2/quadrature defects,
-# including the 6-digit kernel constants Planck used to patch. Stock derivatives
-# miss finite differences by 4.6e-5 on HI/def2-QZVP (planck-ecp-gradient-fd).
-# When robashaw/libecpint#81 merges, repin to the upstream merge commit and
-# rerun planck-ecp-gradient-fd plus the *_ecp regression cases.
+# Pinned to upstream master 436d9c48 (2026-11-12): PR #81 (seven type-2 and
+# quadrature fixes, including the 6-digit kernel constants Planck used to
+# patch) squashed on top of #78 (efficiency, shell-pair screening). Older
+# releases miss finite differences by 4.6e-5 on HI/def2-QZVP
+# (planck-ecp-gradient-fd). Pin a commit on a branch of the cloned URL: the
+# earlier pin was the head of the fork's PR branch, which upstream deleted on
+# merge, and a fresh clone could not fetch it.
 # Built with Planck's own C++ compiler because its API passes std::vector across
 # the boundary (libc++ vs libstdc++ would not link).
-set(LIBECPINT_GIT_TAG 4e8767fc8d74fd2f23f70d75ae2af2ddf4a01dec)
+set(LIBECPINT_GIT_TAG 436d9c4877aecbbe27e730b5aeec2b0ce4dc53dd)
 set(LIBECPINT_INSTALL_DIR ${SRC_DIR}/external/libecpint/install)
 externalproject_add(
     libecpint_ep
     PREFIX ${SRC_DIR}/external/libecpint
-    GIT_REPOSITORY https://github.com/loriab/libecpint.git
+    GIT_REPOSITORY https://github.com/robashaw/libecpint.git
     GIT_TAG ${LIBECPINT_GIT_TAG}
     UPDATE_DISCONNECTED TRUE
     CMAKE_ARGS
@@ -550,6 +551,8 @@ set(POSTHF_DFT_SRC
     ${SRC_DIR}/post_hf/rhf_response.cpp
     ${SRC_DIR}/post_hf/uhf_response.h
     ${SRC_DIR}/post_hf/uhf_response.cpp
+    ${SRC_DIR}/post_hf/orbital_hessian.h
+    ${SRC_DIR}/post_hf/orbital_hessian.cpp
     ${SRC_DIR}/post_hf/casscf/orbital.h
     ${SRC_DIR}/post_hf/casscf/orbital.cpp
     ${SRC_DIR}/post_hf/casscf/aug-hessian.h
@@ -724,6 +727,7 @@ add_executable(planck-dft
     ${IO_SRC}
     ${SCF_SRC}
     ${SOLVATION_SRC}
+    ${BSSE_SRC}
     ${POPULATIONS_SRC}
     ${POSTHF_DFT_SRC}
     ${GRADIENT_SRC}
@@ -993,7 +997,7 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/udh_gradient_main.cpp
         ${BASE_SRC} ${DFT_LIB_SRC} ${LOOKUP_SRC} ${SYMM_SRC} ${BASIS_SRC}
         ${INT_SRC} ${IO_SRC} ${SCF_SRC} ${SOLVATION_SRC} ${POPULATIONS_SRC}
-        ${POSTHF_DFT_SRC} ${GRADIENT_SRC} ${OPT_SRC} ${FREQ_SRC})
+        ${POSTHF_DFT_SRC} ${GRADIENT_SRC} ${OPT_SRC} ${FREQ_SRC} ${BSSE_SRC})
     target_include_directories(planck-udh-validation PRIVATE ${SRC_DIR} ${CMAKE_BINARY_DIR}
         ${MSYM_INSTALL_DIR}/include ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
     target_link_libraries(planck-udh-validation ${MSYM_INSTALL_DIR}/lib/libmsym.a ${LIBXC_INSTALL_DIR}/lib/libxc.a)
@@ -1575,6 +1579,31 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME planck-udh-xc-ii-lda COMMAND planck-udh-xc-ii-lda)
 
+    # X3: the KS XC nuclear gradient is bitwise identical at any thread count.
+    add_executable(planck-dft-xc-gradient-threads
+        ${CMAKE_SOURCE_DIR}/tests/dft_xc_gradient_threads.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/ks_matrix.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-dft-xc-gradient-threads PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-dft-xc-gradient-threads ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-dft-xc-gradient-threads libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-dft-xc-gradient-threads OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dft-xc-gradient-threads PRIVATE USE_OPENMP)
+        add_test(NAME planck-dft-xc-gradient-threads COMMAND planck-dft-xc-gradient-threads)
+    endif()
+
     # U8b detached complete polarized GGA XC-II and Hessian-bearing oracles.
     add_executable(planck-udh-xc-ii-gga
         ${CMAKE_SOURCE_DIR}/tests/udh_xc_ii_gga.cpp
@@ -1929,6 +1958,10 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/rifit.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/basis.cpp
+        # ri_eri.cpp builds the spherical aux map (cart_to_sph_block; L = 6 via
+        # the recurrence), docs/RI_SPHERICAL_AUX.md.
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${SRC_DIR}/integrals/os.cpp
         ${SRC_DIR}/integrals/hgp.cpp
         ${SRC_DIR}/integrals/rys.cpp
@@ -2025,22 +2058,9 @@ if(BUILD_TESTING)
     # RG3.1: RI-fitted RHF CPHF orbital Hessian vs dense A.
     add_executable(planck-ri-cphf-matrix
         ${CMAKE_SOURCE_DIR}/tests/ri_cphf_matrix.cpp
-        ${SRC_DIR}/post_hf/rhf_response.cpp
-        ${SRC_DIR}/post_hf/integrals.cpp
-        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
-        ${SRC_DIR}/basis/gaussian.cpp
-        ${SRC_DIR}/basis/rifit.cpp
-        ${SRC_DIR}/basis/gbs_parser.cpp
-        ${SRC_DIR}/basis/basis.cpp
-        ${SRC_DIR}/basis/spherical.cpp
-        ${SRC_DIR}/basis/spherical_recurrence.cpp
-        ${SRC_DIR}/integrals/os.cpp
-        ${SRC_DIR}/integrals/hgp.cpp
-        ${SRC_DIR}/integrals/rys.cpp
-        ${SRC_DIR}/integrals/rys_roots.cpp
-        ${SRC_DIR}/integrals/screening.cpp
-        ${SRC_DIR}/integrals/shellpair.cpp
-        ${LOOKUP_SRC}
+        ${BASE_SRC} ${DFT_LIB_SRC} ${LOOKUP_SRC} ${SYMM_SRC} ${BASIS_SRC}
+        ${INT_SRC} ${IO_SRC} ${SCF_SRC} ${SOLVATION_SRC} ${POPULATIONS_SRC} ${BSSE_SRC}
+        ${POSTHF_DFT_SRC} ${GRADIENT_SRC} ${OPT_SRC} ${FREQ_SRC}
         ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
@@ -2513,10 +2533,16 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
-    target_include_directories(planck-ri-cphf-matrix PRIVATE
-        ${SRC_DIR}
-        ${eigen_SOURCE_DIR}
-    )
+    # Full stack: the orbital-Hessian operator goes through SCF::two_electron_fock.
+    target_include_directories(planck-ri-cphf-matrix PRIVATE ${SRC_DIR} ${CMAKE_BINARY_DIR}
+        ${MSYM_INSTALL_DIR}/include ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-ri-cphf-matrix ${MSYM_INSTALL_DIR}/lib/libmsym.a ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-ri-cphf-matrix libmsym libxc)
+    target_compile_definitions(planck-ri-cphf-matrix PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER}
+        PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower} PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-ri-cphf-matrix OpenMP::OpenMP_CXX)
+    endif()
 
     target_include_directories(planck-ri-two-electron-gradient PRIVATE
         ${SRC_DIR}

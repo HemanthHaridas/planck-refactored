@@ -1,0 +1,3 @@
+case                   policy@grid                   max|dg| Ha/Bohr  max|dE| Eh    points pts/atom   wall s  peak GB
+naphthalene_b3lyp      pyscf-nwchem-2.13@ultrafine         3.518e-07   8.553e-08   1266276    70348     9.41     2.62
+anthracene_b3lyp       pyscf-nwchem-2.13@ultrafine         3.140e-07   1.693e-07   1712580    71357    24.53     4.38

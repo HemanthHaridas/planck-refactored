@@ -14,6 +14,36 @@ namespace HartreeFock::SCF
 {
     namespace
     {
+        // MO integral blocks for the operator the SCF actually solved: fitted
+        // under scf_ri_jk (from the RI 3-center factors, no nb^4 AO tensor),
+        // exact otherwise. transform_eri_ri has transform_eri's layout, so the
+        // matrix assembly below is the same either way.
+        struct MOBlocks
+        {
+            HartreeFock::Calculator &calculator;
+            std::vector<double> eri_local;
+            const std::vector<double> *eri = nullptr;
+            std::size_t nb = 0;
+
+            MOBlocks(HartreeFock::Calculator &calc,
+                     const std::vector<HartreeFock::ShellPair> &shell_pairs)
+                : calculator(calc), nb(calc.working_nbasis())
+            {
+                if (!calc._scf._ri_jk)
+                    eri = &HartreeFock::Correlation::ensure_eri(
+                        calc, shell_pairs, eri_local, "Stability :");
+            }
+
+            std::expected<std::vector<double>, std::string> operator()(
+                const Eigen::MatrixXd &C1, const Eigen::MatrixXd &C2,
+                const Eigen::MatrixXd &C3, const Eigen::MatrixXd &C4)
+            {
+                if (eri == nullptr)
+                    return HartreeFock::Correlation::transform_eri_ri(calculator, C1, C2, C3, C4);
+                return HartreeFock::Correlation::transform_eri(*eri, nb, C1, C2, C3, C4);
+            }
+        };
+
         // ── Index helpers ──────────────────────────────────────────────────────
         //
         // All MO-basis ERI tensors below are stored row-major in the order in which
@@ -269,19 +299,19 @@ namespace HartreeFock::SCF
         const Eigen::MatrixXd &C = calculator._info._scf.alpha.mo_coefficients;
         const Eigen::VectorXd &eps = calculator._info._scf.alpha.mo_energies;
 
-        // Pull the AO ERI tensor (computed once) and transform two MO blocks
-        // shared across the three channels.
-        std::vector<double> eri_local;
-        const std::vector<double> &eri = HartreeFock::Correlation::ensure_eri(
-            calculator, shell_pairs, eri_local, "Stability :");
+        // Two MO blocks shared across the three channels (fitted under scf_ri_jk).
+        MOBlocks mo(calculator, shell_pairs);
 
         const Eigen::MatrixXd C_occ = C.leftCols(n_occ);
         const Eigen::MatrixXd C_virt = C.middleCols(n_occ, n_virt);
 
-        const auto mo_ai_bj = HartreeFock::Correlation::transform_eri(
-            eri, nb, C_virt, C_occ, C_virt, C_occ);
-        const auto mo_ab_ij = HartreeFock::Correlation::transform_eri(
-            eri, nb, C_virt, C_virt, C_occ, C_occ);
+        auto mo_ai_bj_r = mo(C_virt, C_occ, C_virt, C_occ);
+        auto mo_ab_ij_r = mo(C_virt, C_virt, C_occ, C_occ);
+        if (!mo_ai_bj_r || !mo_ab_ij_r)
+            return std::unexpected("analyze_rhf_stability: " +
+                                   (!mo_ai_bj_r ? mo_ai_bj_r.error() : mo_ab_ij_r.error()));
+        const std::vector<double> &mo_ai_bj = *mo_ai_bj_r;
+        const std::vector<double> &mo_ab_ij = *mo_ab_ij_r;
 
         StabilityReport report;
         report.channels.reserve(3);
@@ -366,9 +396,7 @@ namespace HartreeFock::SCF
         const Eigen::VectorXd &eps_a = calculator._info._scf.alpha.mo_energies;
         const Eigen::VectorXd &eps_b = calculator._info._scf.beta.mo_energies;
 
-        std::vector<double> eri_local;
-        const std::vector<double> &eri = HartreeFock::Correlation::ensure_eri(
-            calculator, shell_pairs, eri_local, "Stability :");
+        MOBlocks mo(calculator, shell_pairs); // fitted under scf_ri_jk
 
         const Eigen::MatrixXd Ca_occ = Ca.leftCols(n_alpha);
         const Eigen::MatrixXd Ca_virt = Ca.middleCols(n_alpha, nva);
@@ -376,18 +404,28 @@ namespace HartreeFock::SCF
         const Eigen::MatrixXd Cb_virt = Cb.middleCols(n_beta, nvb);
 
         // Same-spin (ai|bj) and (ab|ij) blocks.
-        const auto aibj_aa = HartreeFock::Correlation::transform_eri(
-            eri, nb, Ca_virt, Ca_occ, Ca_virt, Ca_occ);
-        const auto abij_aa = HartreeFock::Correlation::transform_eri(
-            eri, nb, Ca_virt, Ca_virt, Ca_occ, Ca_occ);
-        const auto aibj_bb = HartreeFock::Correlation::transform_eri(
-            eri, nb, Cb_virt, Cb_occ, Cb_virt, Cb_occ);
-        const auto abij_bb = HartreeFock::Correlation::transform_eri(
-            eri, nb, Cb_virt, Cb_virt, Cb_occ, Cb_occ);
+        auto aibj_aa_r = mo(Ca_virt, Ca_occ, Ca_virt, Ca_occ);
+        if (!aibj_aa_r)
+            return std::unexpected("analyze_uhf_stability: " + aibj_aa_r.error());
+        const std::vector<double> &aibj_aa = *aibj_aa_r;
+        auto abij_aa_r = mo(Ca_virt, Ca_virt, Ca_occ, Ca_occ);
+        if (!abij_aa_r)
+            return std::unexpected("analyze_uhf_stability: " + abij_aa_r.error());
+        const std::vector<double> &abij_aa = *abij_aa_r;
+        auto aibj_bb_r = mo(Cb_virt, Cb_occ, Cb_virt, Cb_occ);
+        if (!aibj_bb_r)
+            return std::unexpected("analyze_uhf_stability: " + aibj_bb_r.error());
+        const std::vector<double> &aibj_bb = *aibj_bb_r;
+        auto abij_bb_r = mo(Cb_virt, Cb_virt, Cb_occ, Cb_occ);
+        if (!abij_bb_r)
+            return std::unexpected("analyze_uhf_stability: " + abij_bb_r.error());
+        const std::vector<double> &abij_bb = *abij_bb_r;
 
         // Cross-spin Coulomb (ai_α | bj_β). No exchange in opposite-spin block.
-        const auto aibj_ab = HartreeFock::Correlation::transform_eri(
-            eri, nb, Ca_virt, Ca_occ, Cb_virt, Cb_occ);
+        auto aibj_ab_r = mo(Ca_virt, Ca_occ, Cb_virt, Cb_occ);
+        if (!aibj_ab_r)
+            return std::unexpected("analyze_uhf_stability: " + aibj_ab_r.error());
+        const std::vector<double> &aibj_ab = *aibj_ab_r;
 
         // Spin-conserving real (A + B) matrix in the αα ⊕ ββ basis: the Hessian
         // of a real UHF → UHF orbital rotation. Same spin:

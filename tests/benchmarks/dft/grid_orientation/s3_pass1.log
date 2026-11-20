@@ -1,0 +1,15 @@
+case                   policy@grid                   max|dg| Ha/Bohr  max|dE| Eh    points pts/atom   wall s  peak GB
+h2o2_pbe               legacy@normal                       5.462e-04   9.643e-05     35180     8795     0.52     0.08
+h2o2_pbe               legacy@fine                         2.660e-04   3.841e-05     78148    19537     0.32     0.14
+h2o2_pbe               legacy@ultrafine                    1.449e-05   1.968e-06    147396    36849     0.45     0.25
+h2o2_pbe               legacy-unpruned-max@normal          1.108e-05   2.658e-06     64700    16175     0.27     0.12
+h2o2_pbe               legacy-unpruned-max@fine            2.529e-06   3.365e-07    133420    33355     0.42     0.23
+h2o2_pbe               pyscf-nwchem-2.13@normal            1.122e-05   1.326e-06     47780    11945     0.24     0.10
+h2o2_pbe               g4-3-v4@normal                      2.028e-07   1.124e-08    322080    80520     0.79     0.51
+water4_b3lyp           legacy@normal                       1.315e-03   1.252e-03     90152     7512     1.14     0.29
+water4_b3lyp           legacy@fine                         8.305e-05   3.082e-05    203560    16963     1.79     0.62
+water4_b3lyp           legacy@ultrafine                    1.042e-05   6.669e-06    388056    32338     2.96     1.14
+water4_b3lyp           legacy-unpruned-max@normal          1.008e-05   9.060e-06    168200    14016     1.53     0.51
+water4_b3lyp           legacy-unpruned-max@fine            1.406e-06   2.008e-07    351400    29283     2.59     1.04
+water4_b3lyp           pyscf-nwchem-2.13@normal            9.054e-06   3.027e-06    134792    11232     1.37     0.43
+water4_b3lyp           g4-3-v4@normal                      1.038e-06   1.204e-06    964200    80350     8.60     2.80

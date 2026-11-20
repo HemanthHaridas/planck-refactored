@@ -17,7 +17,7 @@ This file answers a narrower architecture question:
 
 With `correlation fciqmc`, set both `nactele` and `nactorb` to sample a CAS in the converged RHF or ROHF orbitals. By default the first `(N − nactele)/2` spatial orbitals form the doubly occupied core and the next `nactorb` form the active block. Explicit `mo_permutation` or orbital irrep counts use the CASSCF orbital selector. The 31-orbital packed limit and `ci_max_dim` apply to the sampled space. Omitting the two dimensions uses all MOs.
 
-The active one-electron integrals include the inactive-core Coulomb and exchange terms. The reported shift and projected total energies both include the inactive electronic energy and nuclear repulsion. The diagonal printed for the reference determinant is in the active Hamiltonian. [Cr₂ pilot and fixed-orbital validation](FCIQMC_SCALING_INVESTIGATION.md#r3-fixed-orbital-cr2-pilot)
+The active one-electron integrals include the inactive-core Coulomb and exchange terms. The reported shift and projected total energies both include the inactive electronic energy and nuclear repulsion. The diagonal printed for the reference determinant is in the active Hamiltonian. [Cr₂ pilot and fixed-orbital validation](FCIQMC_SCALING_INVESTIGATION.md#the-cr2-target)
 
 ## Where the logic lives
 

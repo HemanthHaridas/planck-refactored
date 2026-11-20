@@ -1,0 +1,44 @@
+# UKS double-hybrid geomopt + frequencies (docs/UKS_DH_GEOMOPT_FREQ.md).
+# Pinned to Planck after tests/dh_workflow_audit.py passed on this geometry:
+# Hessian vs independent gradients 2.8e-9, optimized-gradient energy FD 2.2e-9.
+# HO2, not OH: OH has a degenerate-pi zero mode that stalls the SCF.
+%begin_control
+    basis       sto-3g
+    calculation geomoptfreq
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    uhf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    tol_eri     1.0e-14
+    guess       sad
+    max_cycles  200
+    tol_energy  1.0e-11
+    tol_density 1.0e-11
+%end_scf
+
+%begin_dft
+    grid_policy         g4-3-v4
+    grid_radial_points  135
+    exchange            b2plyp
+    correlation         pbe
+    print_grid_summary  .false.
+%end_dft
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0 2
+O -0.611 0.123 -0.087
+O 0.694 -0.051 0.134
+H 0.923 0.837 0.467
+%end_coords

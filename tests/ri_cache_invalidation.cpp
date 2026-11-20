@@ -140,6 +140,30 @@ int main()
         fail("RI 3-center tensor did NOT change after the geometry moved — the "
              "geometry-stale cache was returned (dimension-only guard).");
 
+    // The fitted pair factors are cached with the tensor (step 11 of
+    // docs/RI_JK_ROUTINE.md) and must follow it: after the move they must
+    // be B's tensor with the metric applied, not A's factors. (Comparing with a
+    // Calculator built fresh at B would not work: this test moves only
+    // _standard, so the orbital shells stay at A.)
+    {
+        Eigen::MatrixXd expect_t = calc._ri_j3c.transpose();
+        const auto &metric = *calc._ri_metric_factor;
+        if (metric.method == HartreeFock::Correlation::RI::MetricFactorization::Method::Eigen)
+            expect_t = metric.transform * expect_t;
+        else
+            metric.transform.triangularView<Eigen::Lower>().solveInPlace(expect_t);
+        const Eigen::MatrixXd &cached = calc._ri_pair_factors;
+        if (cached.rows() != expect_t.cols() || cached.cols() != expect_t.rows())
+            fail("pair factors missing or mis-sized after the geometry moved");
+        else
+        {
+            const double d = (cached - expect_t.transpose()).cwiseAbs().maxCoeff();
+            std::cout << "pair factors after move vs B's tensor: max|Δ| = " << d << '\n';
+            if (d > 1e-12)
+                fail("RI pair factors are stale after the geometry moved.");
+        }
+    }
+
     if (g_ok)
         std::cout << "PASS: ri_cache_invalidation\n";
     return g_ok ? 0 : 1;

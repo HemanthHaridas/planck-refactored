@@ -1,0 +1,162 @@
+{
+  "date": "2026-11-16",
+  "host": "Apple M3",
+  "provenance": {
+    "base_commit": "3285f9ae27585bef954af9fc02e324f95d4835e3",
+    "binary_sha256": "f34a423b407c7c6c0ea12b770a3f68611ff6d0f64d34c5677920c64b886b0e49",
+    "source_sha256": {
+      "src/base/types.h": "2d7d6053fbf6f37967da0a9c64c47305b526be60eec8686930ce2f2e7be3cce9",
+      "src/io/io.cpp": "768986e81aeedd74c125698687224fb6f981ed3982abe404697dc7a5b1579aab",
+      "src/post_hf/ci/fciqmc.cpp": "e4f405d8bb49dd9239bd5a05b629d16c93fbd487a6cc30d47b37482f8e12af2b",
+      "src/post_hf/ci/fciqmc.h": "fb443803b59b3d6b0eb9050937463c76047bf9f5165986256b615a6189050a0c",
+      "src/post_hf/fciqmc_driver.cpp": "b7ceb081db8f9edd48ae5a201f576e47a1c5665809c015c152611472a02d5eb9",
+      "src/hf_driver.cpp": "8c3312f9c3a5fb9e9865afbaa1237ea0a041485ff76a1ad804b9458a1cc6f9c5",
+      "src/post_hf/fci.cpp": "c6345deef74944e5be86c62301434b8dcb041d6869bc0e55ffcd91925e66c5c8",
+      "src/post_hf/ri/ri_eri.cpp": "68e22e8775dd12839bcf35db55a1e3d783cd7e523db1cd8929af75b41375afe6"
+    },
+    "tree_note": "Current working tree includes concurrent RI/gradient work and the opt-in FCIQMC experiment. Benchmarks use a frozen copy of its executable.",
+    "timing_status": "User reported another calculation using the host during the November 16 rerun. Stopped during opt-in calibration. These timings are excluded from speedup and equal-wall-time conclusions."
+  },
+  "option": "fciqmc_sample_low_weight_parents",
+  "default": false,
+  "control_archive": "cr2_cas12_10_initiator_m3_r3.json",
+  "prior_opt_in_check": "November 9 short-control result 3f157c4cc5a5706b reproduced.",
+  "timing_usable": false,
+  "qualification": {
+    "ctest_passed": [
+      "planck-fciqmc-walkers",
+      "planck-fciqmc-accumulator",
+      "planck-statistical-gate"
+    ],
+    "regressions_passed": [
+      "h2_fciqmc_sto3g",
+      "lih_fciqmc_cas24_sto3g",
+      "n2_fciqmc_s5_raw_thread_identity",
+      "n2_fciqmc_s5_threads1",
+      "n2_fciqmc_s5_threads4"
+    ],
+    "opt_in_thread_identity": "Thread identities match: hamiltonian=3d0ae86188394164 result=01bfd4be7b210dca (1/2/4/8)",
+    "zero_granularity_result_id": "33db4a3514977e23"
+  },
+  "diagnostic_runs": [
+    {
+      "label": "diagnostic-0",
+      "seed": 20250901,
+      "opt_in": false,
+      "profiled": true,
+      "equilibration_steps": 10000,
+      "sampling_steps": 2000,
+      "peak_rss_bytes": 56967168,
+      "input_sha256": "1f721baf6bd8bb965176f20116b914f19475c0ac80b392f43a54eaca5e0e1811",
+      "binary_sha256": "f34a423b407c7c6c0ea12b770a3f68611ff6d0f64d34c5677920c64b886b0e49",
+      "shift_Eh": -2064.5786728754,
+      "shift_se_Eh": 0.021,
+      "shift_samples": 2000,
+      "projected_Eh": -2064.475896792,
+      "projected_se_Eh": 0.000864,
+      "projected_samples": 2000,
+      "sampling_reference": "0x000000000000003f/0x000000000000003f",
+      "accepted_reference_abs_mean": 2459.54,
+      "hamiltonian_id": "339dffb09993d608",
+      "result_id": "c9fa8173d41b8f2a",
+      "equilibration": {
+        "parents": 43085232,
+        "attempts": 172340928,
+        "initiator_rejected": 0,
+        "rounded_zero": 172143153,
+        "records_raw": 43283007,
+        "below_granularity": {
+          "visits": 21921104,
+          "abs_weight": 10374851.77461,
+          "attempts": 87684416,
+          "nonzero_spawns": 11938
+        },
+        "at_or_above_granularity": {
+          "visits": 21164128,
+          "abs_weight": 239624674.2757,
+          "attempts": 84656512,
+          "nonzero_spawns": 185837
+        }
+      },
+      "sampling": {
+        "parents": 11103864,
+        "attempts": 44415456,
+        "initiator_rejected": 0,
+        "rounded_zero": 44365429,
+        "records_raw": 11153891,
+        "below_granularity": {
+          "visits": 5101377,
+          "abs_weight": 2258776.007546,
+          "attempts": 20405508,
+          "nonzero_spawns": 2440
+        },
+        "at_or_above_granularity": {
+          "visits": 6002487,
+          "abs_weight": 47741957.39319,
+          "attempts": 24009948,
+          "nonzero_spawns": 47587
+        }
+      }
+    },
+    {
+      "label": "diagnostic-1",
+      "seed": 20250901,
+      "opt_in": true,
+      "profiled": true,
+      "equilibration_steps": 10000,
+      "sampling_steps": 2000,
+      "peak_rss_bytes": 57655296,
+      "input_sha256": "1440a04f6e6c7c06e475392f2c153f87f1f9cec4ceb4e90e18ed08bfdee5894f",
+      "binary_sha256": "f34a423b407c7c6c0ea12b770a3f68611ff6d0f64d34c5677920c64b886b0e49",
+      "shift_Eh": -2064.5843313409,
+      "shift_se_Eh": 0.0213,
+      "shift_samples": 2000,
+      "projected_Eh": -2064.4759491426,
+      "projected_se_Eh": 0.000848,
+      "projected_samples": 2000,
+      "sampling_reference": "0x000000000000003f/0x000000000000003f",
+      "accepted_reference_abs_mean": 2465.23,
+      "hamiltonian_id": "339dffb09993d608",
+      "result_id": "3f157c4cc5a5706b",
+      "equilibration": {
+        "parents": 43337474,
+        "attempts": 127248724,
+        "initiator_rejected": 0,
+        "rounded_zero": 127050708,
+        "records_raw": 43535490,
+        "below_granularity": {
+          "visits": 22032024,
+          "abs_weight": 10506163.87214,
+          "attempts": 42026924,
+          "nonzero_spawns": 12016
+        },
+        "at_or_above_granularity": {
+          "visits": 21305450,
+          "abs_weight": 239492747.1219,
+          "attempts": 85221800,
+          "nonzero_spawns": 186000
+        }
+      },
+      "sampling": {
+        "parents": 11117552,
+        "attempts": 32919880,
+        "initiator_rejected": 0,
+        "rounded_zero": 32869819,
+        "records_raw": 11167613,
+        "below_granularity": {
+          "visits": 5172592,
+          "abs_weight": 2284696.210439,
+          "attempts": 9140040,
+          "nonzero_spawns": 2549
+        },
+        "at_or_above_granularity": {
+          "visits": 5944960,
+          "abs_weight": 47716360.28458,
+          "attempts": 23779840,
+          "nonzero_spawns": 47512
+        }
+      }
+    }
+  ],
+  "remaining": "Repeat timing calibration and all five matched seed pairs while the host is available. Keep profiling disabled for timing; compare shift and projected RMSE against exact CASCI before evaluating the CAS(12,18) cost pilot."
+}

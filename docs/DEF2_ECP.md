@@ -10,8 +10,8 @@ under Not done.
 gradients, geometry optimizations, frequencies, TDDFT and stability analysis,
 matching PySCF to ≤1e-9 Eh and ≤3e-8 Ha/Bohr.** H–Kr needed only basis files.
 From Rb onward the core electrons are replaced by the def2 effective core
-potentials (ECPs), computed by libecpint, pinned to unmerged upstream PR #81
-(see Findings). The ECP reaches every method through two things only: H_core
+potentials (ECPs), computed by libecpint, pinned to upstream `master`
+`436d9c48`, which carries PR #81 (see Findings). The ECP reaches every method through two things only: H_core
 (`_compute_potential` = V_ne + U) and the electron count (Z − n_core via
 `total_nuclear_charge()`), plus one gradient term.
 
@@ -173,12 +173,14 @@ around the ECP centre. That third answer located the libecpint bug below.
 The integrals and their derivatives are the risky part, and libecpint has
 them. This superseded an earlier `ECP_SUPPORT_SCOPE.md` plan for a native
 engine (merged here and deleted). Build details:
-- pinned to the head of open upstream PR #81 (`loriab/libecpint`
-  `4e8767fc`), which sits on upstream HEAD `95203c68` (itself past v1.0.7 for
-  fixes #71 and #72) and fixes seven type-2/quadrature defects, our 6-digit
-  constants among them. **Decision 2026-11-04: when PR #81 merges, repin to
-  the upstream merge commit and rerun `planck-ecp-gradient-fd` and the
-  `*_ecp` cases** (Findings, step 5a);
+- pinned to upstream `master` `436d9c48` (2026-11-12): PR #81, which fixes
+  seven type-2/quadrature defects, our 6-digit constants among them, squashed
+  on top of #78 (efficiency, shell-pair screening). Until then Planck pinned
+  the PR head on the fork (`loriab/libecpint` `4e8767fc`); upstream deleted
+  that branch on merge, so a fresh clone could not fetch it. The repin moved
+  no printed energy or gradient (Findings);
+- one `ECPIntegral` per OpenMP thread, because #78 made a shared one race
+  (Findings);
 - built with Planck's C++ compiler, because its API passes `std::vector` and
   a libc++ build would not link against libstdc++;
 - linked into every target, since `ecp.cpp` sits in the shared integral
@@ -297,9 +299,28 @@ A ~1e-10 step in U(R) remains for AuH·H2O at h = 5e-4. The maintainer
 acknowledged the PR on 2026-11-04 but warned review will be slow.
 **Decision (2026-11-04): pin `LIBECPINT_GIT_TAG` to the PR head on the fork**
 (`CMakeLists.txt`) and delete `cmake/patch_libecpint.cmake`, whose fix the PR
-carries. All ten `*_ecp` cases pass unchanged at their 1e-9/2e-9 pins. When
-the PR merges upstream, check the merged commit (the PR may change in review)
-and repin to it.
+carries. All ten `*_ecp` cases pass unchanged at their 1e-9/2e-9 pins.
+
+**The merge broke fresh clones, and its other half broke threading
+(2026-11-16).** #81 merged on 2026-11-12 as a squash on top of #78, and
+upstream deleted the fork branch, so a clean configure failed ("unable to
+read tree (4e8767fc…)"); only build trees with a fetched copy still worked.
+Repinned to `436d9c48` on `robashaw/libecpint`. With it, 26 of 31 ECP
+regression cases failed at four threads, energies included, while every case
+passed at one: #78 moved two `RadialIntegral` work vectors into `mutable`
+members written by `const` methods, and Planck shared one `const
+ECPIntegral` across its OpenMP shell-pair loops. A standalone reproducer
+(shared engine vs serial, 528 shell pairs) gives 8.7e2 / 1.7e4 maximum
+differences for integrals / derivatives at four threads on `436d9c48` and 0
+on `4e8767fc`. Fixed on Planck's side by constructing one engine per thread
+in `_compute_ecp` and `_compute_ecp_gradient`, and reported upstream with
+the reproducer (robashaw/libecpint#82). After it, all 31 ECP cases and
+`planck-ecp-gradient-fd` at 1, 4 and 8 threads pass, and HI/def2-SVP,
+HI/def2-TZVP, PdCO and AuH·H2O (energy and all 15 gradient components) are
+identical to the old pin to every printed digit: #78's screening changes
+moved nothing these gates can see. **A const method is a promise the library
+can withdraw; share a library object across threads only when its contract
+says so, and keep one test that runs the threaded path on a hard case.**
 
 **The CCSD gap was a Planck RCCSD bug, not the ECP.** HI/def2-SVP CCSD sat
 7.4e-8 from PySCF after both were converged tightly, and the all-electron
@@ -335,10 +356,10 @@ from PySCF, the only cases not matching every digit. At Planck's default
 
 ## Not done
 
-- **libecpint PR #81** was still open on 2026-11-06, head `4e8767fc`
-  (exactly Planck's pin). When it merges, repin `LIBECPINT_GIT_TAG` to the
-  merge commit (review may change it) and rerun `planck-ecp-gradient-fd` and
-  every `*_ecp` case.
+- **robashaw/libecpint#82** (filed 2026-11-16): a shared `ECPIntegral` is
+  not thread-safe since #78. Planck does not depend on the outcome (one
+  engine per thread); if upstream restores re-entrant `const` methods,
+  nothing needs to change here.
 - **PySCF's DFT gradient is wrong on ECP atoms**; reporting it upstream is
   `docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`. Planck's reference script
   corrects it at runtime.

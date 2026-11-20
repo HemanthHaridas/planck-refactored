@@ -32,7 +32,7 @@ CMake 3.5+, C++23, extensions off. Sources are gathered per directory with `file
 | Eigen 3.4.0 | `FetchContent` | Header-only. `EIGEN_DONT_PARALLELIZE` is defined globally: Planck owns its OpenMP parallelism, and Eigen's own thread pool nested against it (measured ~26 % slower on 8-thread conventional RHF) |
 | libmsym | `ExternalProject_Add`, pinned commit | Point-group detection |
 | libxc | `ExternalProject_Add`, pinned commit | XC functionals; `planck-dft` and `planck-mpi` only. Built without `-march=native` unless `LIBXC_ENABLE_XHOST=ON` (portability) |
-| libecpint | `ExternalProject_Add`, pinned commit | ECP integrals, linked into every target (`src/integrals/ecp.cpp` is in the shared integral sources). Built with Planck's C++ compiler (its API passes `std::vector`). Pinned to the head of unmerged upstream PR #81 (fork `loriab/libecpint`), which fixes kernel constants and derivative accuracy; repin to upstream when it merges |
+| libecpint | `ExternalProject_Add`, pinned commit | ECP integrals, linked into every target (`src/integrals/ecp.cpp` is in the shared integral sources). Built with Planck's C++ compiler (its API passes `std::vector`). Pinned to upstream `master` `436d9c48`, which carries PR #81 (kernel constants and derivative accuracy). Since upstream #78 an `ECPIntegral` is not safe to share between threads, so Planck builds one per thread (robashaw/libecpint#82) |
 | OpenSSL (Crypto) | `find_package` | Licence-signature verification and decryption for the Boys library loader |
 | Boys-function core | fetched at run time | Encrypted, licence-gated shared library; see `src/lookup/loader/` below |
 | OpenMP | `find_package`, `USE_OPENMP=ON` default | Defines `USE_OPENMP` |
@@ -295,7 +295,8 @@ The loop is standard: build G, F = H + G (RHF), α/β Fock (UHF), or the Roothaa
 |---|---|
 | `mp2.h`, `mp2_rmp2.cpp`, `mp2_ump2.cpp`, `mp2_internal.{h,cpp}`, `mp2_t2_storage.cpp` | `rmp2_kernel` / `ump2_kernel` (energies, frozen core), `rmp2_make_natural_orbitals`; layouts mirror PySCF's `_ChemistsERIs` |
 | `mp2_gradient.{h,cpp}` | RMP2 and UMP2 relaxed densities and gradient intermediates |
-| `rhf_response.{h,cpp}`, `uhf_response.{h,cpp}` | CPHF / Z-vector machinery and orbital Hessians (`build_rhf_cphf_matrix`, `build_uhf_cphf_matrix`), shared with SOSCF and stability; the UHF Z-vector is matrix-free GMRES |
+| `orbital_hessian.{h,cpp}` | `OrbitalHessian`: the matrix-free RHF/UHF orbital Hessian, one `SCF::two_electron_fock{,_uhf}` call per action (fitted under `scf_ri_jk`, exact otherwise); used by the Z-vector solves and HF SOSCF |
+| `rhf_response.{h,cpp}`, `uhf_response.{h,cpp}` | CPHF / Z-vector solves (`solve_rhf_cphf`, `solve_uhf_cphf`): GMRES on `OrbitalHessian` with the orbital-gap diagonal preconditioner |
 
 ### CI engine, FCI and FCIQMC (`ci/`, `fci.{h,cpp}`, `fciqmc_driver.{h,cpp}`)
 

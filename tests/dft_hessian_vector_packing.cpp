@@ -4,7 +4,7 @@
 //
 // This codebase has TWO different flat-index conventions for an (occ,virt)
 // pair, confirmed by reading both implementations rather than assumed:
-//   - HartreeFock::Correlation::build_rhf_cphf_matrix / build_uhf_cphf_matrix
+//   - HartreeFock::Correlation::OrbitalHessian (RHF and UHF)
 //     (the orbital-Hessian linear part solve_augmented_hessian's h_op must
 //     eventually match): idx(a,i) = a*n_occ + i -- VIRTUAL-major.
 //   - DFT::Driver::ResponseExcitationSpace::flat_index(i,a) = i*n_virt + a

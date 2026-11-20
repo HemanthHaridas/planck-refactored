@@ -199,7 +199,7 @@ namespace HartreeFock::Correlation
 
         // B_{(ia),Q} and B_{(jb),Q} share the same fitted AO-pair factors; the
         // two bra/ket blocks only differ in which MO coefficients project them.
-        const Eigen::MatrixXd pair_factors =
+        const Eigen::MatrixXd &pair_factors =
             HartreeFock::Correlation::RI::build_ri_pair_factors(calculator);
         const Eigen::MatrixXd b_bra =
             HartreeFock::Correlation::RI::build_ri_mo_block(pair_factors, C1, C2);
@@ -208,7 +208,7 @@ namespace HartreeFock::Correlation
 
         // (ia|jb) = Σ_Q B_bra(ia,Q) B_ket(jb,Q); rows of b_bra are i*n2+a,
         // rows of b_ket are j*n4+b — exactly the transform_eri row-major layout.
-        const Eigen::MatrixXd gram = b_bra * b_ket.transpose();
+        const Eigen::MatrixXd gram = HartreeFock::Correlation::RI::fitted_gram(b_bra, b_ket);
 
         const std::size_t n1 = static_cast<std::size_t>(C1.cols());
         const std::size_t n2 = static_cast<std::size_t>(C2.cols());

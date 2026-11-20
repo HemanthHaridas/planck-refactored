@@ -22,15 +22,12 @@
 
 // ─── Single-point helper ─────────────────────────────────────────────────────
 //
-// Re-runs basis construction, integrals, and SCF for the geometry currently
-// stored in calc._molecule._standard.  Also computes the analytic gradient.
-// Updates calc._total_energy, calc._gradient, and calc._nuclear_repulsion.
-// Returns the flat (3*natoms) gradient vector.
+// The one per-geometry SCF (+ MP2) + gradient step, shared by geometry
+// optimization and the semi-numerical Hessian (src/freq/hessian.cpp).
 
-static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFock::Calculator &calc)
+std::expected<Eigen::MatrixXd, std::string>
+HartreeFock::Opt::run_scf_gradient(HartreeFock::Calculator &calc, bool warm_start)
 {
-    const std::size_t natoms = calc._molecule.natoms;
-
     // Update input-frame coordinates from _standard (Bohr) for consistency
     calc.sync_coordinate_frames_from_standard();
 
@@ -39,14 +36,14 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     auto basis_res = HartreeFock::BasisFunctions::read_gbs_basis(
         gbs_path, calc._molecule, calc._basis._basis);
     if (!basis_res)
-        return std::unexpected("GeomOpt basis rebuild failed: " + basis_res.error());
+        return std::unexpected("Gradient step: basis rebuild failed: " + basis_res.error());
     calc._shells = std::move(*basis_res);
 
     // Save converged density from the previous step to warm-start the next SCF.
     // (initialize() zeros the density, so we must capture it beforehand.)
     const Eigen::MatrixXd prev_alpha = calc._info._scf.alpha.density;
     const Eigen::MatrixXd prev_beta = calc._info._scf.beta.density;
-    const bool have_prev_density = (prev_alpha.size() > 0);
+    const bool have_prev_density = warm_start && (prev_alpha.size() > 0);
 
     // Reset SCF data structures. Use working_nbasis() — equals nbasis() in
     // Cartesian mode, equals nbasis_sph() in spherical mode (the dimension SCF
@@ -77,7 +74,7 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
 
     // Nuclear repulsion
     if (auto nuclear_repulsion = calc.recompute_nuclear_repulsion(); !nuclear_repulsion)
-        return std::unexpected("Geometry optimization failed: " + nuclear_repulsion.error());
+        return std::unexpected("Gradient step: " + nuclear_repulsion.error());
 
     // Rebuild the geometry-derived working state (shell pairs, integral-symmetry
     // ops, _overlap and _hcore in the working basis). The helper is the
@@ -87,14 +84,14 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     // for the contract.
     auto shell_pairs_res = HartreeFock::SCF::rebuild_basis_dependent_state(calc);
     if (!shell_pairs_res)
-        return std::unexpected("GeomOpt working-state rebuild failed: " + shell_pairs_res.error());
+        return std::unexpected("Gradient step: working-state rebuild failed: " + shell_pairs_res.error());
     std::vector<HartreeFock::ShellPair> shell_pairs = std::move(*shell_pairs_res);
 
     // The PCM cavity moves with the atoms, so it is rebuilt at every geometry
     // (a disabled state without solvation). Its gradient term is added below.
     auto pcm = HartreeFock::Solvation::build_pcm_state(calc);
     if (!pcm)
-        return std::unexpected("GeomOpt PCM setup failed: " + pcm.error());
+        return std::unexpected("Gradient step: PCM setup failed: " + pcm.error());
 
     // SCF
     std::expected<void, std::string> scf_res;
@@ -109,7 +106,7 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     calc._scf._guess = saved_guess;
 
     if (!scf_res)
-        return std::unexpected("GeomOpt SCF failed: " + scf_res.error());
+        return std::unexpected("Gradient step: SCF failed: " + scf_res.error());
 
     // Post-HF correction / gradient
     Eigen::MatrixXd grad_mat;
@@ -117,28 +114,28 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     {
         auto mp2_res = HartreeFock::Correlation::rmp2_kernel(calc, shell_pairs, calc._mp2);
         if (!mp2_res)
-            return std::unexpected("GeomOpt RMP2 failed: " + mp2_res.error());
+            return std::unexpected("Gradient step: RMP2 failed: " + mp2_res.error());
         if (auto corr_res = HartreeFock::Correlation::apply_rmp2_result(calc, *mp2_res); !corr_res)
-            return std::unexpected("GeomOpt RMP2 failed: " + corr_res.error());
+            return std::unexpected("Gradient step: RMP2 failed: " + corr_res.error());
         calc._correlated_total_energy = calc._total_energy + calc._correlation_energy;
         calc._have_correlated_total_energy = true;
         auto grad_res = HartreeFock::Gradient::compute_rmp2_gradient(calc, shell_pairs);
         if (!grad_res)
-            return std::unexpected("GeomOpt RMP2 gradient failed: " + grad_res.error());
+            return std::unexpected("Gradient step: RMP2 gradient failed: " + grad_res.error());
         grad_mat = std::move(*grad_res);
     }
     else if (calc._correlation == HartreeFock::PostHF::UMP2)
     {
         auto mp2_res = HartreeFock::Correlation::ump2_kernel(calc, shell_pairs, calc._mp2);
         if (!mp2_res)
-            return std::unexpected("GeomOpt UMP2 failed: " + mp2_res.error());
+            return std::unexpected("Gradient step: UMP2 failed: " + mp2_res.error());
         if (auto corr_res = HartreeFock::Correlation::apply_ump2_result(calc, *mp2_res); !corr_res)
-            return std::unexpected("GeomOpt UMP2 failed: " + corr_res.error());
+            return std::unexpected("Gradient step: UMP2 failed: " + corr_res.error());
         calc._correlated_total_energy = calc._total_energy + calc._correlation_energy;
         calc._have_correlated_total_energy = true;
         auto grad_res = HartreeFock::Gradient::compute_ump2_gradient(calc, shell_pairs);
         if (!grad_res)
-            return std::unexpected("GeomOpt UMP2 gradient failed: " + grad_res.error());
+            return std::unexpected("Gradient step: UMP2 gradient failed: " + grad_res.error());
         grad_mat = std::move(*grad_res);
     }
     else if (calc._correlation == HartreeFock::PostHF::RCCSD ||
@@ -146,36 +143,46 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
              calc._correlation == HartreeFock::PostHF::RCCSDT ||
              calc._correlation == HartreeFock::PostHF::UCCSDT)
     {
-        return std::unexpected("GeomOpt coupled-cluster gradients are not implemented");
+        return std::unexpected("Gradient step: coupled-cluster gradients are not implemented");
     }
     else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
     {
         auto grad_res = HartreeFock::Gradient::compute_rohf_gradient(calc, shell_pairs);
         if (!grad_res)
-            return std::unexpected("GeomOpt ROHF gradient failed: " + grad_res.error());
+            return std::unexpected("Gradient step: ROHF gradient failed: " + grad_res.error());
         grad_mat = std::move(*grad_res);
     }
     else if (calc._scf._scf == HartreeFock::SCFType::UHF)
     {
         auto grad_res = HartreeFock::Gradient::compute_uhf_gradient(calc, shell_pairs);
         if (!grad_res)
-            return std::unexpected("GeomOpt UHF gradient failed: " + grad_res.error());
+            return std::unexpected("Gradient step: UHF gradient failed: " + grad_res.error());
         grad_mat = std::move(*grad_res);
     }
     else
     {
         auto grad_res = HartreeFock::Gradient::compute_rhf_gradient(calc, shell_pairs);
         if (!grad_res)
-            return std::unexpected("GeomOpt RHF gradient failed: " + grad_res.error());
+            return std::unexpected("Gradient step: RHF gradient failed: " + grad_res.error());
         grad_mat = std::move(*grad_res);
     }
 
     auto pcm_grad = HartreeFock::Gradient::pcm_gradient(calc, shell_pairs, &*pcm);
     if (!pcm_grad)
-        return std::unexpected("GeomOpt PCM gradient failed: " + pcm_grad.error());
+        return std::unexpected("Gradient step: PCM gradient failed: " + pcm_grad.error());
     grad_mat += *pcm_grad;
 
     calc._gradient = grad_mat;
+    return grad_mat;
+}
+
+static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFock::Calculator &calc)
+{
+    auto grad = HartreeFock::Opt::run_scf_gradient(calc, true);
+    if (!grad)
+        return std::unexpected(grad.error());
+    const Eigen::MatrixXd &grad_mat = *grad;
+    const std::size_t natoms = calc._molecule.natoms;
 
     // Return flat gradient vector (natoms*3) in atom-major order [x0,y0,z0, x1,y1,z1,...]
     // (consistent with how _standard is flattened: x[a*3+k])

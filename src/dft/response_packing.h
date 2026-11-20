@@ -7,8 +7,8 @@ namespace DFT::Driver
 {
     // F3.5 (docs/DFT_ANALYTIC_FXC_HESSIAN.md): pure plumbing -- project
     // an AO-basis induced XC potential into the (a,i) MO block and pack it
-    // into the SAME flat layout HartreeFock::Correlation::build_rhf_cphf_matrix
-    // / build_uhf_cphf_matrix already use for the orbital-Hessian linear
+    // into the SAME flat layout HartreeFock::Correlation::OrbitalHessian
+    // (RHF and UHF) already uses for the orbital-Hessian linear
     // part: idx(a,i) = a*n_occ + i (VIRTUAL-major), NOT
     // ResponseExcitationSpace::flat_index's i*n_virt + a (OCCUPIED-major,
     // driver.h). These are genuinely different conventions in this

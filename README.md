@@ -1453,7 +1453,8 @@ On N₂/STO-3G (10 orbitals, 7α/7β, 14 400 determinants — large enough that 
 | `fciqmc_granularity` | stochastic-rounding quantum for spawned weights (0 disables discretization) |
 | `fciqmc_initiator` | initiator weight threshold (0 disables the initiator approximation) |
 | `fciqmc_equilibration` / `fciqmc_steps` | steps discarded before sampling / steps sampled |
-| `fciqmc_spawn_attempts` | spawn draws per occupied determinant per step |
+| `fciqmc_spawn_attempts` | spawn draws per selected parent per step (all occupied determinants by default) |
+| `fciqmc_sample_low_weight_parents` | experimental, default `false`. Below the spawn granularity, select a parent for all its draws with probability `abs(weight) / granularity` and compensate its spawn weight. Zero granularity disables this sampling. |
 | `fciqmc_seed` | RNG seed; fixed-seed runs are bitwise reproducible |
 
 ### Coupled cluster — RCCSDT, RCCSDTQ, and UCC on small systems

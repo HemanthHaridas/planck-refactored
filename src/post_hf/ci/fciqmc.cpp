@@ -618,7 +618,8 @@ namespace HartreeFock::Correlation::CI::QMC
         double initiator_threshold,
         SpawnWorkspace &ws,
         Output &out,
-        FCIQMCPropagationProfile *profile)
+        FCIQMCPropagationProfile *profile,
+        bool sample_low_weight_parents = false)
     {
         // H2.4/H2.5 (docs/FCIQMC_PARALLELISM.md): the per-call
         // scaffolding -- 64 accumulators, 64 parent buckets, 64 RNG streams --
@@ -737,7 +738,6 @@ namespace HartreeFock::Correlation::CI::QMC
                                                          : &work->at_or_above_granularity;
                     ++weight_work->visits;
                     weight_work->absolute_weight += magnitude;
-                    weight_work->attempts += n_spawn_attempts;
                 }
                 // DEATH: deterministic, exactly as in propagate_deterministic.
                 // There is one diagonal element per determinant, so sampling it
@@ -763,7 +763,18 @@ namespace HartreeFock::Correlation::CI::QMC
                 // that the total expected spawn is independent of how many
                 // attempts are made -- otherwise raising n_spawn_attempts would
                 // silently scale the Hamiltonian.
-                const double per_attempt = weight / static_cast<double>(n_spawn_attempts);
+                double spawn_weight = weight;
+                if (sample_low_weight_parents && std::abs(weight) < granularity)
+                {
+                    // One draw per parent, shared by all its attempts. Conditional on
+                    // selection, weight / q is exactly the signed granularity.
+                    if (parent_rng.uniform() >= std::abs(weight) / granularity)
+                        continue;
+                    spawn_weight = std::copysign(granularity, weight);
+                }
+                if (weight_work)
+                    weight_work->attempts += n_spawn_attempts;
+                const double per_attempt = spawn_weight / static_cast<double>(n_spawn_attempts);
                 for (int attempt = 0; attempt < n_spawn_attempts; ++attempt)
                 {
                     if (work)
@@ -946,11 +957,12 @@ namespace HartreeFock::Correlation::CI::QMC
         double initiator_threshold,
         SpawnWorkspace &ws,
         CanonicalWalkerPopulation &out,
-        FCIQMCPropagationProfile *profile)
+        FCIQMCPropagationProfile *profile,
+        bool sample_low_weight_parents)
     {
         propagate_stochastic_impl(population, n_act, ham, dt, shift, rng,
                                   n_spawn_attempts, granularity,
-                                  initiator_threshold, ws, out, profile);
+                                  initiator_threshold, ws, out, profile, sample_low_weight_parents);
     }
 
     // Convenience overload: builds a local workspace and returns a value. For
@@ -1086,6 +1098,10 @@ namespace HartreeFock::Correlation::CI::QMC
         }
 
         out.numerator = numerator;
+        // The numerator is filled even at c_0 == 0 (reachable with a zero
+        // threshold): a ratio-of-sums caller needs it on every step.
+        if (out.reference_weight == 0.0)
+            return out;
         // E = H_00 + sum_j H_0j c_j / c_0. The diagonal term is separated because
         // it is exact -- it carries no sampling noise at all.
         out.energy = ham.diagonal(reference) + numerator / out.reference_weight;
@@ -1165,11 +1181,15 @@ namespace HartreeFock::Correlation::CI::QMC
         return std::sqrt(var / static_cast<double>(n));
     }
 
-    double blocked_standard_error(const std::vector<double> &series)
+    BlockingResult blocking_analysis(const std::vector<double> &series)
     {
         std::vector<double> data = series;
+        const double n = static_cast<double>(series.size());
         double worst = 0.0;
+        double se0 = std::numeric_limits<double>::quiet_NaN();
+        double block_length = 1.0;
         bool any = false;
+        bool converged = false;
 
         // Stop below 4 blocks: a standard error computed from 2 or 3 samples is
         // itself so noisy that the plateau cannot be read from it.
@@ -1178,16 +1198,31 @@ namespace HartreeFock::Correlation::CI::QMC
             const double se = naive_standard_error(data);
             if (std::isfinite(se))
             {
+                if (!any)
+                    se0 = se;
                 worst = std::max(worst, se);
                 any = true;
+                // A constant series (se0 == 0) has nothing to converge.
+                const double ratio = se0 > 0.0 ? se / se0 : 0.0;
+                if (block_length * block_length * block_length
+                    > 2.0 * n * ratio * ratio * ratio * ratio)
+                    converged = true;
             }
             std::vector<double> next;
             next.reserve(data.size() / 2);
             for (std::size_t i = 0; i + 1 < data.size(); i += 2)
                 next.push_back(0.5 * (data[i] + data[i + 1]));
             data.swap(next);
+            block_length *= 2.0;
         }
-        return any ? worst : std::numeric_limits<double>::quiet_NaN();
+        if (!any)
+            return {std::numeric_limits<double>::quiet_NaN(), false};
+        return {worst, converged};
+    }
+
+    double blocked_standard_error(const std::vector<double> &series)
+    {
+        return blocking_analysis(series).error;
     }
 
     Weight WalkerPopulation::total_population() const noexcept

@@ -1,3 +1,5 @@
+# Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENTS.md).
+# Reference: tests/pyscf/spherical_mp2_gradient_references.py.
 %begin_control
     basis       6-31g*
     calculation gradient
@@ -5,9 +7,12 @@
 %end_control
 
 %begin_scf
-    scf_type    rhf
-    correlation rmp2
-    guess       hcore
+    scf_type    uhf
+    correlation ump2
+    guess       sad
+    max_cycles  100
+    tol_energy  1.0e-12
+    tol_density 1.0e-11
 %end_scf
 
 %begin_geom
@@ -18,7 +23,7 @@
 
 %begin_coords
 3
-0   1
+1   2
 O     0.000000     0.000000     0.117176
 H     0.000000     0.757200    -0.468704
 H     0.000000    -0.757200    -0.468704

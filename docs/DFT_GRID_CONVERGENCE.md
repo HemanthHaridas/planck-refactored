@@ -285,11 +285,13 @@ live derivative results. No default changes before that review.
 
 ## Not done
 
-- **No committed regression case exercises the production UKS double-hybrid
-  gradient on V4.** The qualification evidence comes from runners under
-  `tests/`, not from `tests/regression_cases.json`. The release smoke test
-  described above is the obvious candidate to commit.
-- **Default migration is a separate decision.** The legacy pruning failed
-  rotational covariance on the hard UKS/DH cases. Whether that matters for
-  workflows that do not differentiate the grid at this precision has not been
-  measured.
+- **Default migration is a separate decision.** Measured 2026-11-18
+  (`docs/DFT_DEFAULT_GRID_SCOPE.md`): at the default `grid normal`,
+  legacy's gradient depends on orientation at 4–13e-4 Ha/Bohr for ordinary
+  PBE, B3LYP, HSE06 and UKS, caused by its angular pruning. The DH-fixture
+  comparison above measured legacy only at elevated presets.
+- **V4 was not selected on clusters.** Its error grows with neighbouring
+  molecules (water monomer 1.2e-9 Eh, 3 Å tetramer 1.2e-6 Eh) because its
+  outer bands pass through them; no selection or blind fixture had a
+  neighbour there. A re-selection needs cluster fixtures
+  (`docs/DFT_DEFAULT_GRID_SCOPE.md`).

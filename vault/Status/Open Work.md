@@ -9,8 +9,9 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-11-10 (UKS DH step list; rewrite at `8570139a` on 2026-11-08, then the
-Yukawa and `hcore` decisions and the CI blocker).
+Last updated: 2026-11-16 (rewrite: RI-JK answered and removed from the
+priority list; libecpint repinned to upstream, #82 filed; PySCF #3598 merged
+upstream).
 
 This is the canonical list of what remains. What is done lives in
 `vault/Status/Completion.md`. Each item names its scope or answer doc, which
@@ -18,12 +19,12 @@ holds the measurements and the ruled-out routes. Superseded plans are in
 [the historical archive](History/Open%20Work%20investigations%20through%202026-11-06.md),
 which is not a work queue.
 
-This rewrite removed what landed since the 2026-11-07 one: D3 dispersion
-(#183, merged) and the whole PCM geometry scope (smooth cavity, spherical
-PCM, analytic gradients, geometry optimization and frequencies;
-`docs/PCM_GEOMETRY.md`). Every item below was re-checked on 2026-11-08
-against the tree, and the upstream and CI items against GitHub. The core
-suite was 132/132 at `1b3ffc9b`.
+This rewrite removed what landed since 2026-11-08: the RI-JK routine-use
+scope (`docs/RI_JK_ROUTINE.md`, now an answer), the RI-MP2 gradient response
+fix and spherical RI-MP2 gradients (`docs/RI_MP2_GRADIENT_RESPONSE.md`), the
+matrix-free HF orbital Hessian (`docs/SCF_ORBITAL_HESSIAN_OPERATOR.md`), G6
+and the factored RI-MP2 pair density (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`).
+The upstream items were re-checked against GitHub on 2026-11-16.
 
 ## Priority for a final product (2026-11-10)
 
@@ -36,38 +37,44 @@ teaching code) reorders it.
 **Necessary.** Without these the product is broken or misleading.
 
 1. **CCSD(T).** Not implemented: CCSD, CCSDT and higher exist, perturbative
-   triples do not. It is the benchmark method users ask for first.
+   triples do not. It is the benchmark method users ask for first. Scope: `docs/CCSD_T_SCOPE.md`.
 2. **SCF robustness on medium systems.** 32-water RKS hits `max_cycles`
-   (§2, DFT).
+   (§2, DFT). Scope: `docs/SCF_CONVERGENCE_MEDIUM_SYSTEMS_SCOPE.md`.
 3. **Meta-GGA**, at least SCF energies with a by-name refusal everywhere else,
    then gradients (§2, DFT). r2SCAN, ωB97M-V, M06-2X and TPSSh are rejected
-   today.
-4. **Spherical MP2/UMP2 gradients** (§2, HF and post-HF). Every standard
-   basis is spherical; MP2 geometry optimization works only in Cartesian.
-5. **Default DFT grid qualified for gradients** (§2, DFT). `legacy` fails the
+   today. Scope: `docs/META_GGA_SCOPE.md`.
+4. **Default DFT grid qualified for gradients** (§2, DFT). `legacy` fails the
    rotational-covariance check, so default-settings geometries and
-   frequencies carry grid noise. A decision and a migration, not new code.
-6. **DFT ghost atoms and counterpoise** (§2, BSSE). Interaction energies are
-   mostly computed with DFT.
-7. **D3 reported separately in the results JSON** (§2, D3 follow-ups).
-   `electronic_energy` includes D3 without saying so. Small fix.
-8. **CI running again** (§3). Blocked on the shared-objects build change.
-9. **RI-JK validated and usable for routine DFT/HF** (§5, RI-JK and BLAS).
-   Nothing has landed and RI-JK has no regression case.
+   frequencies carry grid noise. Measured 2026-11-18: at the default grid
+   the gradient depends on orientation at 4–13e-4 Ha/Bohr for ordinary
+   functionals; V4 fixes isolated molecules but degrades with neighbouring
+   molecules (water tetramer 1.2e-6 Eh) and costs 9× the points. Rescoped
+   the same day: two tiers (default ≤ 3e-5, tight ≤ 1.5e-6 Ha/Bohr), the
+   existing policies measured first, and V5 only if tight-tier clusters
+   are needed. The ordered plan S1–S10 covers this and the XC-gradient
+   scope. 2026-11-19: S3/S3b done. No `normal`-level setting passes (they
+   fail naphthalene); `pyscf-nwchem-2.13@fine` passes the default tier with
+   ~10× margin but not the tight tier. S7 stage 1 (AO screening) landed so
+   the larger runs fit. Tight tier: V4 misses it on naphthalene (3.0e-6);
+   `pyscf-nwchem-2.13@ultrafine` meets it (8.2e-7) with fewer points.
+   Its noise does not grow from naphthalene to anthracene (STO-3G).
+   Next: S4 (frequency noise), S5 (cost at size). Scope:
+   `docs/DFT_DEFAULT_GRID_SCOPE.md`.
+5. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
+RI-JK for routine HF and DFT is no longer on this list: it is answered
+(`docs/RI_JK_ROUTINE.md`).
 
 **Expected, with a workaround.**
 
-10. Gating cases for PCM with UHF/UKS, spherical basis and `planck-dft`
-    frequencies; the code paths run ungated (§2, PCM leftovers).
-11. ROHF-MP2 and ROHF coupled cluster; UHF-based versions exist. Matters more
-    once CCSD(T) exists.
-12. Analytic Hessian; semi-numerical frequencies work, this is cost on large
-    systems.
-13. UKS double-hybrid geometry optimization and frequencies; the gradient
-    passes FD, so this is driver wiring and a gate.
-14. Spherical double-hybrid gradients, frozen-core PT2 in the gradient, RI-DH.
-    Necessary if double hybrids are a headline feature; spherical first.
-15. D4 dispersion; D3(BJ) covers most uses.
+6. ROHF-MP2 and ROHF coupled cluster; UHF-based versions exist. Matters more
+    once CCSD(T) exists. Scope: `docs/ROHF_CORRELATION_SCOPE.md`.
+7. Analytic Hessian; semi-numerical frequencies work, this is cost on large
+    systems. Scope: `docs/ANALYTIC_HESSIAN_SCOPE.md`.
+8. Spherical double-hybrid gradients, frozen-core PT2 in the gradient, RI-DH.
+    Necessary if double hybrids are a headline feature; spherical first. Scope: `docs/DH_GRADIENT_EXTENSIONS_SCOPE.md`.
+9. D4 dispersion; D3(BJ) covers most uses. Scope: `docs/DISPERSION_D4_SCOPE.md`.
+10. Range-separated functionals with RI-JK (attenuated erf 2c/3c integrals);
+    refused by name today, and the exact path works. §2, DFT.
 
 **Nice to have.** Imaginary-mode following in `planck-dft` and under PCM;
 HF-D3 and modified D3 damping; counterpoise-corrected gradients and N-body
@@ -75,7 +82,9 @@ counterpoise; ROHF stability, SOSCF and PCM; a spin-polarized inactive core in
 ROHF CASSCF; range-separated, solvent, SCS/DOS, meta-GGA and TDDFT
 double-hybrid variants; the incremental KS J/K build and PCM performance
 leftovers; `TensorOptimized` RCCSDT; conventional symmetry-unique ERI storage;
-further post-HF ghost-atom checks.
+further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
+3-center tensor; matters past nb ≈ 1000–1500; M0–M1 landed,
+`docs/RI_MPI_SCOPE.md`).
 
 ## 1. Correctness decisions and external dependencies
 
@@ -94,13 +103,10 @@ further post-HF ghost-atom checks.
   libxc 7.1.0 fixed a second wPBEh seam at small s (`EGscut`, issue #627),
   which Planck's 2023 pin lacks.
 
-- **libecpint is pinned to an unmerged upstream PR** (still open on
-  2026-11-08). Planck pins
-  robashaw/libecpint#81 at `4e8767fc` on `loriab/libecpint`, because stock
-  libecpint's derivatives miss FD by 4.6e-5 relative on HI/def2-QZVP. When #81
-  merges: repin to the merge commit, then rerun `planck-ecp-gradient-fd` and
-  every `*_ecp` regression case. If the fork branch disappears first, the
-  commit is still reachable as upstream `refs/pull/81/head`.
+- **libecpint thread safety upstream** (robashaw/libecpint#82, filed
+  2026-11-16). Since #78 a shared `ECPIntegral` races; Planck builds one per
+  thread, so nothing here depends on the outcome. Follow the issue; if
+  upstream restores re-entrant `const` methods, no change is needed.
 
 - **PySCF's DFT gradient is wrong on ECP atoms.** `grad/rks.py`
   `grids_response_becke` looks up Bragg radii by `atom_charges()` (Z − n_core).
@@ -113,13 +119,12 @@ further post-HF ghost-atom checks.
   `tests/pyscf/upstream/`; all six tests fail on master and pass with the
   patch. R4 also found that ghost atoms trigger the same mismatch on
   PySCF ≥ 2.14 (#3302 updated `radi.py` but not the gradient): 1.4e-5
-  Ha/Bohr on a counterpoise water dimer. R5 filed
-  2026-11-07: issue pyscf/pyscf#3597, PR pyscf/pyscf#3598 (both open,
-  review required, on 2026-11-08). Remaining: follow the review. Once a
-  release carries the fix, R6: drop
-  `patch_pyscf_grid_response_radii` and pin that PySCF version
-  (`docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`).
-  Planck's reference script patches it at runtime meanwhile.
+  Ha/Bohr on a counterpoise water dimer. R5: issue pyscf/pyscf#3597 and PR
+  pyscf/pyscf#3598, **merged 2026-11-15** (`6eb9abd1`). The latest release,
+  v2.15.0 (2026-11-05), predates it. Remaining, R6, once a release carries
+  the fix: drop `patch_pyscf_grid_response_radii` and pin that PySCF version
+  (`docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`). Planck's reference script
+  patches it at runtime meanwhile.
 
 ## 2. Capability gaps
 
@@ -130,15 +135,23 @@ further post-HF ghost-atom checks.
   Hessian, no CPHF), the response kernel, and VV10. Step 1 must make every
   non-SCF workflow refuse meta-GGA by name: the KS gradient picks its terms by
   `vsigma.cols()` and would otherwise silently drop the τ term.
+- **Rydberg states** (`docs/RYDBERG_ORBITALS_SCOPE.md`). Diffuse-basis
+  TDDFT runs, but no regression case uses a diffuse basis. On water
+  aug-cc-pVDZ CAM-B3LYP, the `legacy` grid's angular pruning misses PySCF by
+  7.2e-7 Eh and 0.7–2.2 meV per root; `g4-3-v4` is within 4.4e-9 Eh. The wall
+  is dense TDDFT: two nb⁴ tensors for range-separated functionals, so benzene
+  aug-cc-pVDZ needs 28 GB. Matrix-free TDDFT can reuse the KS stability (A+B)
+  operators and their Davidson solver. Canonical orthogonalization is not
+  needed yet (benzene aug-cc-pVTZ λ_min 7.7e-8, against a 1e-8 wall).
+- **Range-separated functionals with RI-JK.** `planck-dft` refuses them by
+  name: the RI 2c/3c integrals are Coulomb-kernel only. Needs attenuated
+  (erf) 2c/3c integrals and their derivatives (`docs/RI_JK_ROUTINE.md`, Not
+  in this scope).
 - **PCM leftovers** (`docs/PCM_GEOMETRY.md`, now an answer; see
   Completion). Imaginary-mode following under PCM is rejected (the loops
-  would carry the cavity, but no case gates it). UHF/UKS and spherical
-  geomopt/frequencies, and planck-dft frequencies, run through the gated
-  code paths but have no case of their own. Deferred from step 3:
+  would carry the cavity, but no case gates it). Deferred from step 3:
   tolerance-linked pair screening, and a cheaper φ_el contraction.
 - **Double hybrids** (`docs/DH_IMPLEMENTATION.md` §9):
-  - UKS DH geometry optimization and frequencies are rejected. The gradient
-    they would call already passes FD.
   - The UKS DH gradient is qualified only on small molecules (STO-3G and
     6-31G fixtures; `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md`).
   - O8 response throughput: paired J/K, blocked XC action, then batched
@@ -169,8 +182,6 @@ further post-HF ghost-atom checks.
   - Modified damping (`d3mbj`, `d3mzero`, `d3op`): one branch each in
     `DFT::Dispersion::compute`.
   - D4, which needs atomic partial charges.
-  - A separate D3 field in the results JSON. `electronic_energy` there is
-    total minus nuclear repulsion, so it currently includes D3.
   - Regenerating the references needs a hand-built shared simple-dftd3
     (`DFTD3_LIBRARY`): pyscf-dispersion 1.0.0 does not load on macOS arm64.
     Replace the workaround when a fixed wheel ships.
@@ -184,14 +195,22 @@ further post-HF ghost-atom checks.
   Roothaan Fock, which does not exist in the tree. ROHF CASSCF and RASSCF
   support only a closed inactive core, and the parity guard rejects a
   spin-polarized one. ROHF is also outside full-symmetry direct SCF.
-- **Spherical MP2/UMP2 gradients** (and the geomopt and frequency workflows
-  that need them) wait on a response-machinery audit before the lift adapter
-  can go through `compute_rmp2_gradient` / `compute_ump2_gradient`. Refused
-  by `water_rmp2_spherical_{gradient,geomopt}_rejected`.
-- **BSSE:** DFT ghost atoms and counterpoise (D3 already leaves ghost
-  atoms out, which is the counterpoise-consistent choice), N-body counterpoise beyond two
-  fragments, counterpoise-corrected gradients and geomopt, and post-HF
-  ghost-reference verification beyond the SCF-level gates.
+- **PySCF < 2.15 analytic MP2 gradients miss their own energy FD** by up to
+  4.2e-7 Ha/Bohr on C1 fixtures. It is fixed in PySCF 2.15.0 by its Krylov /
+  CPHF early-termination fix (pyscf/pyscf#3334); 2.14.0 still has it.
+  Planck agrees with the FD. `tests/pyscf/.venv` is 2.15.0 since
+  2026-11-11 (CH3 gap 6.5e-9), so PySCF's analytic MP2 gradient is usable
+  again; the committed MP2 gates keep their energy-FD references.
+- **Frozen-core MP2 gradients** (RMP2 and UMP2) are refused by name. The
+  builders lack the frozen–active occupied and virtual relaxation blocks and
+  see only the active orbitals; the scope doc says why and what to add
+  (PySCF `grad/mp2.py` L124–132). UMP2 had no refusal and printed a gradient
+  4.5e-2 Ha/Bohr off until 2026-11-11.
+- **BSSE:** N-body counterpoise beyond two fragments,
+  counterpoise-corrected gradients and geomopt (HF and DFT), counterpoise
+  under PCM (refused), and post-HF ghost-reference verification beyond the
+  SCF-level gates. HF and KS counterpoise single points are done
+  (`docs/DFT_COUNTERPOISE.md`).
 - **Symmetry:** conventional-path symmetry-unique ERI storage is out of scope
   (full-group reduction is a direct-SCF feature).
 - **`TensorOptimized` RCCSDT** is still treated in-tree as experimental.
@@ -279,6 +298,16 @@ further post-HF ghost-atom checks.
 
 None of these blocks correctness. Take each up only with a current profile.
 
+- **DFT AO arrays: S7b, only if needed.** AO screening per point block
+  (S7 stage 1, 2026-11-19) replaced the planned X4 streaming. What remains
+  (`docs/DFT_DEFAULT_GRID_SCOPE.md`, S7):
+  - port the dense consumers (SOSCF, stability, TDDFT, DH) to blocks and
+    delete the dense arrays; until then those runs allocate them on top;
+  - spatial sorting of grid points (water12 27 % → 21 % kept);
+  - shell-extent prescreening of the AO evaluation.
+- **DFT J/K.** After S7, the J and K direct builds are ~41 % of a
+  naphthalene B3LYP gradient run, and are built separately each iteration.
+  A joint J+K pass is the next DFT time lever; not scoped.
 - **SCF and ERI kernels** (`docs/ERI_KERNEL_VS_LIBCINT.md`,
   `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`, `docs/SCF_VS_PYSCF.md`):
   - Rerun the Planck-vs-PySCF Fock table and the end-to-end
@@ -300,21 +329,24 @@ None of these blocks correctness. Take each up only with a current profile.
   - Screened and explicit-engine derivative block fallbacks.
   - Phase E: shell-level `ShellPair`. Last, because it changes the shared
     contract.
-- **RI-JK and BLAS** (`docs/ERI_FOCK_BLAS_SCOPE.md`). Nothing has landed.
-  - B0: cache the density-independent `build_ri_pair_factors`, which is ~61 %
-    of the RI-JK Fock build. Add the first RI-JK regression case with it.
-  - B1: optional `USE_BLAS`.
-  - B2: RI-K from `C_occ`.
+- **RI-JK and BLAS** (`docs/ERI_FOCK_BLAS_SCOPE.md`).
+  - B0 landed for the pair factors (cached per geometry, 2026-11-16); the
+    unpacked per-aux `B_Q` matrices are still rebuilt on every Fock build
+    (~8 % of the RI-JK Fock build when measured).
+  - B1: optional `USE_BLAS` (RI-K GEMMs 4.3–7.8×).
   - B3 (`dsyevd`) is deferred.
 - **Gradients** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`):
-  - G6: profile RI 2c/3c derivatives.
+  - RI shell-block 3c/2c kernels (G6 threaded the per-component loops;
+    benzene RI-JK gradient 27.4 → 7.9 s). Only if RI gradients grow.
   - Block-level density screening and screened derivative block kernels.
   - Stored-ERI UMP2 response, only if its share pays.
   - Conventional tensor construction on real post-HF workloads.
 - **Post-HF threading and MPI** (`docs/HPC_MPI.md` Gap 5). The hand-written
   `tensor_backend.cpp` has no OpenMP. Profile MP2 and CC at a realistic size
   first. The dense post-HF MPI stripe (outer MO index) is untouched. RI is a
-  memory strategy, not a prerequisite for it.
+  memory strategy, not a prerequisite for it. RI work is split across ranks
+  with the data replicated (M1, 2026-11-17); distributing the 3-center
+  tensor (M2) is open: `docs/RI_MPI_SCOPE.md`.
 - **CASSCF** (`docs/CASSCF_PERFORMANCE.md`). Stopped at 1.3× behind PySCF at
   water cc-pVTZ C2v, which was accepted. Leftovers, only with a new target:
   re-profile cc-pVTZ C2v, a better relaxed-solve preconditioner, and the RI
@@ -335,14 +367,42 @@ None of these blocks correctness. Take each up only with a current profile.
     on this M3. E4 stays test-only.
   - R3 admits Cr₂ CAS(12,18) at 1.68 Å with 18 frozen RHF orbitals.
     The three 25k projections at τ = 5–6 exceed the variational upper
-    bound of −2064.896580 Eh by 0.108–1.092 Eh. Extending the seed that
-    retained its reference to τ = 10 increased its minimum error to
-    0.263 Eh, with 5,483 usable projections in 10,000 steps. Compare a fixed
-    multideterminant projection with the single-reference estimator on
-    identical trajectories. Two SC-NEVPT2 estimates differ by 19 mEh.
-  - Low-weight parents account for 93–96% of visits across three Cr₂
-    profiles. Test probabilistic spawning with compensation for skipped
-    draws on CAS(12,10), using exact CI and error at equal wall time.
+    bound of −2064.896580 Eh by 0.108–1.092 Eh. A code review
+    (2026-11-17, "Code review findings" in the doc) found four defects
+    that confound this result. All four are fixed and pass the unit tests, the statistical gate and the 13 FCIQMC
+    regressions; thread identity holds at 1, 2, 4 and 8 threads.
+    `n2_fciqmc_s5_threads1` was re-pinned. The four defects:
+    1. Surviving parent weights were never stochastically rounded, so
+       sub-walker determinants piled up (93–96 % low-weight visits).
+    2. The projected error bar blocked per-step ratios, not the reported
+       ratio of sums; it understated the seed spread about 4×.
+    3. Blocking had no plateau check. It now flags
+       `[ERROR BAR UNCONVERGED]`.
+    4. The projected sums dropped steps with |c₀| < 3.
+
+    The re-anchored reference is now chosen from averaged weights.
+    The five-seed CAS(12,10) control after the fixes: projected SD across
+    seeds / RMS reported SE 4.15 / 3.87 mEh (was 9.82 / 2.48), RMSE
+    5.2 mEh (was ≈10.6). H₂ and LiH regressions were lengthened to
+    128k / 240k steps after a 20-seed study showed their projected errors
+    were 30 % too small at the old lengths.
+    On the fixed code the CAS(12,18) projections still exceed the bound
+    (+0.165–0.231 Eh at τ = 5–6), and τ = 55 at 25k walkers does not
+    converge: the shift keeps falling and the anchor wanders. In exact
+    CASCI the RHF determinant holds 54 %, 0.55 % and 0.02 % of the
+    wavefunction in 10, 12 and 13 orbitals. Next: walker scan
+    (25k/100k/400k) on exact CAS(12,13), −2064.746875 Eh; the inputs are
+    `tests/inputs/exploratory/fciqmc/cr2_cas12_13_walkers_*.hfinp`. Too
+    slow for a laptop at 400k; run it elsewhere.
+    Open side questions: a −4 mEh mean offset of both estimators on
+    CAS(12,10) (five seeds, ~2 SEM), and a shift error bar 2–6× larger
+    than the spread across seeds. Two SC-NEVPT2 estimates differ by 19 mEh.
+  - Opt-in probabilistic spawning from low-weight parents passed the
+    November 16 correctness and thread-identity checks. Five CAS(12,10)
+    pairs: projected RMSE 2.48 → 1.40 mEh, shift RMSE 5.92 → 6.45 mEh,
+    3.14 % more mean wall time. It treated a symptom of defect 1 above;
+    after the rounding fix no parent is below one walker, so the option has
+    no effect and can be removed.
 - **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
   `docs/CCGEN_KERNEL_PERFORMANCE.md`):
   - Re-profile the generated production configuration, separating

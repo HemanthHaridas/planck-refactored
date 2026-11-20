@@ -44,8 +44,17 @@ namespace DFT
             return {};
         }
 
+        std::expected<void, std::string> validate_ao_grid(const ScreenedAOGrid &ao_grid)
+        {
+            if (ao_grid.nblocks() != ao_block_count(ao_grid.npoints()) ||
+                ao_grid.offset.size() != ao_grid.cols.size())
+                return std::unexpected("screened AO grid block count does not match its point count");
+            return {};
+        }
+
+        template <class AOGrid>
         DensityChannelOnGrid evaluate_density_channel(
-            const AOGridEvaluation &ao_grid,
+            const AOGrid &ao_grid,
             const Eigen::Ref<const Eigen::MatrixXd> &density,
             Eigen::Index slice_begin = 0,
             Eigen::Index slice_end = -1)
@@ -57,8 +66,7 @@ namespace DFT
             // contractions compact.
             const Eigen::MatrixXd symmetric_density = 0.5 * (density + density.transpose());
 
-            const Eigen::Index npoints = ao_grid.values.rows();
-            const Eigen::Index nbasis = ao_grid.values.cols();
+            const Eigen::Index npoints = ao_grid.npoints();
 
             // MPI slice: compute rho/grad only on [lo, hi); the arrays stay full
             // length npoints with the rest left ZERO. Downstream (libxc pack,
@@ -75,40 +83,50 @@ namespace DFT
             channel.grad_y = Eigen::VectorXd::Zero(npoints);
             channel.grad_z = Eigen::VectorXd::Zero(npoints);
 
-            // Blocked over grid points: each thread owns a disjoint row slab and
-            // computes its own `values * P` slice plus the four reductions over
-            // it, so there is no cross-thread summation and no dependence on
-            // completion order.  That matters here -- the historical DFT jitter
-            // came from an order-dependent reduction in the XC matrix build, and
-            // this loop deliberately has none.  Verified bitwise-identical to the
-            // whole-matrix form across thread counts.
+            // Over AO blocks: each block writes only its own rows, so there is
+            // no cross-thread summation and no dependence on completion order.
+            // That matters here -- the historical DFT jitter came from an
+            // order-dependent reduction in the XC matrix build, and this loop
+            // deliberately has none.  A screened block contracts only its kept
+            // AOs with the matching density sub-block P(s, s).
             //
             // Eigen's own GEMM threading stays disabled (EIGEN_DONT_PARALLELIZE);
-            // each slab is a serial Eigen product called from one OpenMP thread,
+            // each block is a serial Eigen product called from one OpenMP thread,
             // so this does not nest a second thread pool against ours.
-            constexpr Eigen::Index block_rows = 2048;
+            const Eigen::Index b_lo = lo / kAOBlock;
+            const Eigen::Index b_hi = ao_block_count(hi);
 
 #ifdef USE_OPENMP
             // Degrade to serial if a caller ever wraps this in its own region,
             // rather than oversubscribing the cores.
-#pragma omp parallel for schedule(static) if (!omp_in_parallel())
+#pragma omp parallel for schedule(dynamic, 1) if (!omp_in_parallel())
 #endif
-            for (Eigen::Index start = lo; start < hi; start += block_rows)
+            for (Eigen::Index b = b_lo; b < b_hi; ++b)
             {
-                const Eigen::Index rows = std::min(block_rows, hi - start);
+                const AOBlockView blk = ao_grid.block(b);
+                const Eigen::Index r0 = std::max(lo, blk.p0) - blk.p0;
+                const Eigen::Index rows = std::min(hi, blk.p0 + blk.n) - blk.p0 - r0;
+                if (rows <= 0)
+                    continue;
+                const Eigen::Index start = blk.p0 + r0;
 
-                const auto values_block = ao_grid.values.middleRows(start, rows);
-                Eigen::MatrixXd density_times_values(rows, nbasis);
-                density_times_values.noalias() = values_block * symmetric_density;
+                Eigen::MatrixXd P_sub;
+                if (blk.cols)
+                    P_sub = symmetric_density(*blk.cols, *blk.cols);
+                const Eigen::MatrixXd &P = blk.cols ? P_sub : symmetric_density;
+
+                const auto values_block = blk.phi.middleRows(r0, rows);
+                Eigen::MatrixXd density_times_values(rows, blk.ncols());
+                density_times_values.noalias() = values_block * P;
 
                 channel.rho.segment(start, rows) =
                     (values_block.array() * density_times_values.array()).rowwise().sum();
                 channel.grad_x.segment(start, rows) =
-                    (2.0 * ao_grid.grad_x.middleRows(start, rows).array() * density_times_values.array()).rowwise().sum();
+                    (2.0 * blk.grad[0].middleRows(r0, rows).array() * density_times_values.array()).rowwise().sum();
                 channel.grad_y.segment(start, rows) =
-                    (2.0 * ao_grid.grad_y.middleRows(start, rows).array() * density_times_values.array()).rowwise().sum();
+                    (2.0 * blk.grad[1].middleRows(r0, rows).array() * density_times_values.array()).rowwise().sum();
                 channel.grad_z.segment(start, rows) =
-                    (2.0 * ao_grid.grad_z.middleRows(start, rows).array() * density_times_values.array()).rowwise().sum();
+                    (2.0 * blk.grad[2].middleRows(r0, rows).array() * density_times_values.array()).rowwise().sum();
             }
 
             return channel;
@@ -350,9 +368,12 @@ namespace DFT
         return total.integrated_density(molecular_grid);
     }
 
+    namespace
+    {
+    template <class AOGrid>
     std::expected<DensityOnGrid, std::string>
-    evaluate_density_on_grid(
-        const AOGridEvaluation &ao_grid,
+    density_restricted(
+        const AOGrid &ao_grid,
         const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
         Eigen::Index slice_begin,
         Eigen::Index slice_end)
@@ -376,9 +397,10 @@ namespace DFT
         return density;
     }
 
+    template <class AOGrid>
     std::expected<DensityOnGrid, std::string>
-    evaluate_density_on_grid(
-        const AOGridEvaluation &ao_grid,
+    density_unrestricted(
+        const AOGrid &ao_grid,
         const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
         const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
         Eigen::Index slice_begin,
@@ -404,6 +426,37 @@ namespace DFT
         density.total.grad_z = density.alpha.grad_z + density.beta.grad_z;
 
         return density;
+    }
+    } // namespace
+
+    std::expected<DensityOnGrid, std::string>
+    evaluate_density_on_grid(const AOGridEvaluation &ao_grid, const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
+                             Eigen::Index slice_begin, Eigen::Index slice_end)
+    {
+        return density_restricted(ao_grid, restricted_density, slice_begin, slice_end);
+    }
+
+    std::expected<DensityOnGrid, std::string>
+    evaluate_density_on_grid(const ScreenedAOGrid &ao_grid, const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
+                             Eigen::Index slice_begin, Eigen::Index slice_end)
+    {
+        return density_restricted(ao_grid, restricted_density, slice_begin, slice_end);
+    }
+
+    std::expected<DensityOnGrid, std::string>
+    evaluate_density_on_grid(const AOGridEvaluation &ao_grid, const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
+                             const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
+                             Eigen::Index slice_begin, Eigen::Index slice_end)
+    {
+        return density_unrestricted(ao_grid, alpha_density, beta_density, slice_begin, slice_end);
+    }
+
+    std::expected<DensityOnGrid, std::string>
+    evaluate_density_on_grid(const ScreenedAOGrid &ao_grid, const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
+                             const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
+                             Eigen::Index slice_begin, Eigen::Index slice_end)
+    {
+        return density_unrestricted(ao_grid, alpha_density, beta_density, slice_begin, slice_end);
     }
 
     std::expected<XCGridEvaluation, std::string>
@@ -469,10 +522,13 @@ namespace DFT
         return evaluation;
     }
 
+    namespace
+    {
+    template <class AOGrid>
     std::expected<XCGridEvaluation, std::string>
-    evaluate_xc_on_grid(
+    xc_restricted(
         const MolecularGrid &molecular_grid,
-        const AOGridEvaluation &ao_grid,
+        const AOGrid &ao_grid,
         const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
         const XC::Functional &exchange_functional,
         const XC::Functional &correlation_functional,
@@ -490,10 +546,11 @@ namespace DFT
             correlation_functional);
     }
 
+    template <class AOGrid>
     std::expected<XCGridEvaluation, std::string>
-    evaluate_xc_on_grid(
+    xc_unrestricted(
         const MolecularGrid &molecular_grid,
-        const AOGridEvaluation &ao_grid,
+        const AOGrid &ao_grid,
         const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
         const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
         const XC::Functional &exchange_functional,
@@ -510,6 +567,49 @@ namespace DFT
             *density,
             exchange_functional,
             correlation_functional);
+    }
+    } // namespace
+
+    std::expected<XCGridEvaluation, std::string>
+    evaluate_xc_on_grid(const MolecularGrid &molecular_grid, const AOGridEvaluation &ao_grid,
+                        const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
+                        const XC::Functional &exchange_functional, const XC::Functional &correlation_functional,
+                        Eigen::Index slice_begin, Eigen::Index slice_end)
+    {
+        return xc_restricted(molecular_grid, ao_grid, restricted_density, exchange_functional,
+                             correlation_functional, slice_begin, slice_end);
+    }
+
+    std::expected<XCGridEvaluation, std::string>
+    evaluate_xc_on_grid(const MolecularGrid &molecular_grid, const ScreenedAOGrid &ao_grid,
+                        const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
+                        const XC::Functional &exchange_functional, const XC::Functional &correlation_functional,
+                        Eigen::Index slice_begin, Eigen::Index slice_end)
+    {
+        return xc_restricted(molecular_grid, ao_grid, restricted_density, exchange_functional,
+                             correlation_functional, slice_begin, slice_end);
+    }
+
+    std::expected<XCGridEvaluation, std::string>
+    evaluate_xc_on_grid(const MolecularGrid &molecular_grid, const AOGridEvaluation &ao_grid,
+                        const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
+                        const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
+                        const XC::Functional &exchange_functional, const XC::Functional &correlation_functional,
+                        Eigen::Index slice_begin, Eigen::Index slice_end)
+    {
+        return xc_unrestricted(molecular_grid, ao_grid, alpha_density, beta_density, exchange_functional,
+                               correlation_functional, slice_begin, slice_end);
+    }
+
+    std::expected<XCGridEvaluation, std::string>
+    evaluate_xc_on_grid(const MolecularGrid &molecular_grid, const ScreenedAOGrid &ao_grid,
+                        const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
+                        const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
+                        const XC::Functional &exchange_functional, const XC::Functional &correlation_functional,
+                        Eigen::Index slice_begin, Eigen::Index slice_end)
+    {
+        return xc_unrestricted(molecular_grid, ao_grid, alpha_density, beta_density, exchange_functional,
+                               correlation_functional, slice_begin, slice_end);
     }
 
 } // namespace DFT
