@@ -7646,6 +7646,38 @@
    ]
   },
   {
+   "id": "water_rks_b2plyp_frozen_gradient_rejected_sto3g",
+   "input": "tests/inputs/regression/dft/water_rks_b2plyp_frozen_gradient_rejected_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "core",
+    "dft",
+    "double_hybrid"
+   ],
+   "_note": "The RKS DH gradient has no frozen-core terms; before 2026-11-20 it ran and missed its own energy FD by 6.2e-5 Ha/Bohr.",
+   "expected_exit_code": 1,
+   "contains": [
+    "RKS double-hybrid analytic gradients do not support mp2_frozen"
+   ]
+  },
+  {
+   "id": "water_rks_b2plyp_ri_gradient_rejected_sto3g",
+   "input": "tests/inputs/regression/dft/water_rks_b2plyp_ri_gradient_rejected_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "core",
+    "dft",
+    "double_hybrid"
+   ],
+   "_note": "The RKS DH gradient is conventional PT2; before 2026-11-20 RI PT2 ran and missed its own energy FD by 4.8e-7 Ha/Bohr.",
+   "expected_exit_code": 1,
+   "contains": [
+    "RKS double-hybrid analytic gradients do not support mp2_use_ri"
+   ]
+  },
+  {
    "id": "water_rks_b3lyp_projected_restart_spherical_631gd",
    "input": "tests/inputs/regression/spherical/water_rks_b3lyp_projected_restart_spherical_631gd.hfinp",
    "executable": "planck-dft",

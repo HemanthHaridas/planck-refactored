@@ -9,9 +9,10 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-11-16 (rewrite: RI-JK answered and removed from the
-priority list; libecpint repinned to upstream, #82 filed; PySCF #3598 merged
-upstream).
+Last updated: 2026-11-20 (RKS DH gradient refuses frozen-core and RI PT2; CI
+is not blocked on the shared-objects change). Previous rewrite 2026-11-16:
+RI-JK answered and removed from the priority list; libecpint repinned to
+upstream, #82 filed; PySCF #3598 merged upstream.
 
 This is the canonical list of what remains. What is done lives in
 `vault/Status/Completion.md`. Each item names its scope or answer doc, which
@@ -60,7 +61,10 @@ teaching code) reorders it.
    Its noise does not grow from naphthalene to anthracene (STO-3G).
    Next: S4 (frequency noise), S5 (cost at size). Scope:
    `docs/DFT_DEFAULT_GRID_SCOPE.md`.
-5. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
+5. **CI running again** (§3). Next: measure the build's disk use (CI scope
+   step 1). Runner cleanup, cached external projects and `-g0` may be enough
+   on their own; the shared-objects change is the durable fix, not a
+   prerequisite. Scope: `docs/CI_SCOPE.md`.
 RI-JK for routine HF and DFT is no longer on this list: it is answered
 (`docs/RI_JK_ROUTINE.md`).
 
@@ -163,6 +167,10 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   - Not covered: range-separated DH gradients, solvent, SCS/DOS spin scaling,
     meta-GGA, frozen-core or RI PT2 in the gradient, DH TDDFT, and spherical
     DH gradients (refused by `water_rks_b2plyp_gradient_spherical_rejected`).
+    Frozen-core and RI PT2 are refused by name for RKS and UKS since
+    2026-11-20 (`water_rks_b2plyp_{frozen,ri}_gradient_rejected_sto3g`).
+  - `mp2_level_shift` is parsed but nothing reads it: no MP2, UMP2 or DH
+    kernel applies it. Either wire it or delete the keyword.
 - **The default grid is not qualified for differentiated-grid properties.**
   `legacy` failed the UKS DH rotational-covariance check (2.2e-5 Ha/Bohr
   against a 2e-6 limit), where `g4-3-v4` passes (1.1e-7). Migrating the
@@ -266,8 +274,9 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   since #181 it builds every target in two `PLANCK_CC_MAXORDER` jobs, so
   re-enabling it as it stands would fail the same way. The workflow fixes in
   #181 (build every target, `BASIS_PATH` for every test) have therefore never
-  executed on CI. **Blocked on** cutting the build's disk use, which the
-  shared-objects item above does by removing the duplicate objects. A first
+  executed on CI. It needs the build's disk use cut: first measure it, then
+  try runner cleanup, cached external projects and `-g0` (`docs/CI_SCOPE.md`
+  steps 1–2); the shared-objects item above is the durable fix. A first
   run is also the first Linux build of simple-dftd3 with gfortran. The
   `PLANCK_LICENSE` secret it needs is set. "Callgraph Profiling" hit the same
   limit on the 2026-11-07 `devel` push and is disabled too.

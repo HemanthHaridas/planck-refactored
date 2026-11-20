@@ -451,6 +451,15 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **RKS double-hybrid gradients refuse frozen-core and RI PT2 (2026-11-20).**
+  The UKS gate already did; the RKS gate checked only solvent. With
+  `mp2_frozen 1` the gradient ran and missed its own energy FD by 6.2e-5
+  Ha/Bohr (all-electron control 5.6e-8), and with `mp2_use_ri` by 4.8e-7
+  (water/STO-3G B2PLYP, O z, central difference). The RKS and UKS DH
+  gradient gates now call one `validate_dh_gradient_pt2_options`
+  (`src/dft/driver.cpp`), which names the offending option. Gated by
+  `water_rks_b2plyp_{frozen,ri}_gradient_rejected_sto3g`.
+
 - **DFT AO arrays screened per point block (S7 stage 1, 2026-11-19,
   `docs/DFT_DEFAULT_GRID_SCOPE.md`).** The SCF kept four npts × nb AO
   arrays (91 % of a naphthalene gradient's peak). `ScreenedAOGrid` keeps,
