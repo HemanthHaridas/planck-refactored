@@ -11,14 +11,25 @@ This file answers a narrower architecture question:
 
 ## Short answer
 
+**Correction (2026-11-21): cause 1 was only partly fixed in the route that
+runs.** The spin-adapted arbitrary-order TU (`ccsdt_arbitrary`, the one the
+registry executes) kept 68 ternary triples nests, including 25 t2·t3·⟨oo‖vv⟩
+at o⁵v⁵, about 74 % of modelled FLOPs. The factorizer's emit path still
+matched children against the retired recognition route's seeded operators,
+and a match was inlined instead of hoisted. That affected 112 terms across
+singles, doubles and triples. Fixed by `EMIT_FINGERPRINTS = ()` in
+`python/ccgen/optimization/factorize.py`, and value-gated by
+`test_factorize_all_binary.py`. CH4/STO-3G went from 11.0 s to 3.01 s on one
+thread at the same energy; see `docs/CCGEN_RCCSDT_COST_SCOPE.md`.
+
 Four causes were examined. Two were confirmed and fixed (3.6x and 1.76x, compounding to ~6.4x), one was built and refuted, one is scoped and untouched.
 
 | # | cause | status | worth |
 |---|---|---|---|
-| 1 | **contraction order** — 391 of 824 terms evaluated n-arily at `o⁵v⁵` | **FIXED**, `--dressing derived` | modelled 10x–18x FLOPs; **measured 3.6x** |
+| 1 | **contraction order** — 391 of 824 terms evaluated n-arily at `o⁵v⁵` | **FIXED**, `--dressing derived`; 112 terms left n-ary by seeded-operator inlining, fixed 2026-11-21 (correction above) | modelled 10x–18x FLOPs; **measured 3.6x** |
 | 2 | **one loop nest per term** — 806 nests vs the hand-written kernel's one | **BUILT** (`CCGEN_FUSE_LOOPS`), 806 → 15 | **~0 % runtime**; real compile-time/code-size win |
 | 3 | **operators rebuilt once per chunk** — 1080 builder calls for 270 operators | **FIXED** (H5) | **1.76x**; **20.8x** fewer calls at rank 4 |
-| 4 | **no OpenMP anywhere in CC** — 98.8 % CPU on 8 cores | **SCOPED** (H6) | modelled **3.86x** at 4 threads |
+| 4 | **no OpenMP anywhere in CC** — 98.8 % CPU on 8 cores | **LANDED** (H6, opt-in) | **3.22x** at 4 threads, measured (modelled 3.86x) |
 
 Cause 3 is the one the census-and-FLOP-model method missed. It was found by a `sample` profile in ~20 minutes, after two rounds of code-census-plus-FLOP-model had produced one hit and one miss. Cause 4 was found by asking whether the code was threaded at all. Neither needed a model.
 
@@ -88,7 +99,7 @@ Design rule:
 1. **Cause 1 (contraction order) — fixed.** 391 of 824 rank-3 triples-residual nests carried a four-index inner sum (`o²v²`), each costing `o⁵v⁵`, in four families: `t1·t2·t2·oovv` (172), `t2·t3·oovv` (151), `t1·t1·t3·oovv` (44), `t1·t1·t1·t2·oovv` (24) — these are 83–90% of generated FLOPs. `--dressing derived` eliminates all 391 (824 nests → 414, zero four-deep), moving the exponents from `o^4.92 v^4.94` to `o^4.42 v^4.40` against a hand-written `o^3.94 v^4.18`. Measured 3.62x on CH4 against a modelled 11.2x.
 2. **Cause 2 (one loop nest per term) — built via `CCGEN_FUSE_LOOPS=N`, refuted as a runtime lever.** 806 nests share only 15 distinct `(free, summed)` loop signatures. Fusion reduces 806 → 15 nests (54x), halving the TU and dropping 845 KB of binary, but changes runtime by 0–3% (inside noise, non-monotonic) both before and after cause 3's fix — tested at three sizes spanning 7x in `t3` (BH3 0.031 MiB, CH4 0.061 MiB, HF/6-31G 0.21 MiB). The traffic-savings model (32x fewer `o³v³` passes) is refuted by its own falsification criterion: HF/6-31G is 3.4x BH3's working set and shows +0.35%, not the predicted "material" saving.
 3. **Cause 3 (operators rebuilt once per chunk) — fixed (H5).** `_emit_chunked_kernel` emitted every dressed operator inside every `_partN` function, so the duplication factor equalled the part count: 1112 builder calls for 278 distinct operators on the rank-3 triples kernel (4 parts), 16 092 calls for 894 operators on the rank-4 quadruples kernel (18 parts) — the waste scaled with kernel size, worst at the production target. Fixed by building each operator once into a `<kernel>_ops` struct passed by `const&`. Measured on CH4: 29.59 s → 16.81 s (1.76x), `E_corr` bitwise identical, rank-4 TU 12.8 → 10.5 MB.
-4. **Cause 4 (no OpenMP) — scoped as H6, not yet built.** Zero `#pragma omp` anywhere in `src/post_hf/cc/*.cpp`, the generated kernels, or the emitter. A CH4 solve with `OMP_NUM_THREADS=8` runs at 98.8% CPU (one core, seven idle) while every other hot path in Planck is threaded. Amdahl on the post-H5 split (builders 45.1%, residual 53.7%) gives a modelled 3.86x at 4 threads; both sites are reduction-free (builders write private tensors, residual nests write disjoint `result(i,...)` slices).
+4. **Cause 4 (no OpenMP) — landed as H6 (2026-08-30), opt-in.** The generated residual nests now carry `#pragma omp parallel for collapse(3)` when generated with `CCGEN_OMP_COLLAPSE=3`: 3.22x at 4 threads on HF/6-31G, bitwise identical across thread counts (`docs/CCGEN_CC_OPENMP.md`). The hand-written `tensor_backend.cpp` is still unthreaded. As found: zero `#pragma omp` anywhere in `src/post_hf/cc/*.cpp`, the generated kernels, or the emitter. A CH4 solve with `OMP_NUM_THREADS=8` runs at 98.8% CPU (one core, seven idle) while every other hot path in Planck is threaded. Amdahl on the post-H5 split (builders 45.1%, residual 53.7%) gives a modelled 3.86x at 4 threads; both sites are reduction-free (builders write private tensors, residual nests write disjoint `result(i,...)` slices).
 
 ## Measured cost of each path
 
@@ -138,10 +149,10 @@ Three traps found while building fusion:
 | 1 contraction order | census + FLOP model | **hit** (3.6x) |
 | 2 loop fusion | census + traffic model | **miss** (~0%) |
 | 3 chunk rebuilds | `sample` profile | **hit** (1.76x) |
-| 4 no OpenMP | asking whether it was threaded | **modelled 3.86x** |
+| 4 no OpenMP | asking whether it was threaded | **hit** (3.22x at 4 threads; modelled 3.86x) |
 
 The two models cost days and went 1-for-2. The profile cost twenty minutes and found a defect neither model could see, because neither modelled work that should not happen at all — they both priced the arithmetic of the residual, while two-thirds of the time was redundant operator construction outside it. This is the transferable result: profile before modelling.
 
 ## Remaining architecture concern
 
-Cause 4 (no OpenMP in CC, modelled 3.86x at 4 threads) is scoped as H6 and not yet built. The isolated-kernel measurement route closed by `CCGEN_KERNEL_SCALING_SCOPE.md` remains narrow in scope: it forbids comparing the generated and hand-written *residuals* elementwise and makes their wall-clock ratio non-comparable, but it does not prevent profiling the generated path against itself — which is how causes 3 and 4 were found. An earlier revision of this document mistakenly treated that constraint as a reason the whole performance question had to be answered by modelling alone.
+Cause 4 landed as H6 (3.22x at 4 threads, `docs/CCGEN_CC_OPENMP.md`) but stays opt-in (`CCGEN_OMP_COLLAPSE=3`); whether to make it the default is open. The isolated-kernel measurement route closed by `CCGEN_KERNEL_SCALING_SCOPE.md` remains narrow in scope: it forbids comparing the generated and hand-written *residuals* elementwise and makes their wall-clock ratio non-comparable, but it does not prevent profiling the generated path against itself — which is how causes 3 and 4 were found. An earlier revision of this document mistakenly treated that constraint as a reason the whole performance question had to be answered by modelling alone.
