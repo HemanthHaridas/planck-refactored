@@ -1,12 +1,14 @@
 #include "post_hf/cc/rccgen.h"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <cstdlib>
 #include <format>
 
 #include "io/logging.h"
 #include "post_hf/cc/cc_amplitude_checkpoint.h"
+#include "post_hf/cc/ccsd_t.h"
 #include "post_hf/cc/generated_arbitrary_runtime.h"
 #include "post_hf/cc/generated_kernel_registry.h"
 
@@ -234,7 +236,7 @@ namespace HartreeFock::Correlation::CC
         // registry are both rank-generic, so a single call site serves every rank
         // the build generated. Rank 3 through this path (Route B) is what lets a
         // ccsdt_gen run write a SPATIAL .ccamp that a later cc4 run seeds from.
-        constexpr int generated_floor = PLANCK_CC_ARBITRARY_LOWER_RANKS ? 3 : 4;
+        constexpr int generated_floor = PLANCK_CC_ARBITRARY_LOWER_RANKS ? 2 : 4;
         const int rank = calculator._scf._cc_generated_rank;
         if (rank < generated_floor)
             return std::unexpected(std::format(
@@ -283,6 +285,25 @@ namespace HartreeFock::Correlation::CC
         }
 
         calculator._correlation_energy = solve_res->correlation_energy;
+
+        // (T) on the converged spatial t1/t2 (ccsd(t)_gen, docs/CCSD_T_SIZE_SCOPE.md).
+        if (calculator._scf._cc_triples)
+        {
+            if (rank != 2)
+                return std::unexpected(std::format(
+                    "RCCSD(T): (T) follows CCSD only (rank 2), got rank {}.", rank));
+            const auto t_start = std::chrono::steady_clock::now();
+            auto e_t = compute_rccsd_t_energy(calculator, shell_pairs, solve_res->state.amplitudes);
+            if (!e_t)
+                return std::unexpected("RCCSD(T): " + e_t.error());
+            const double t_sec = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t_start).count();
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "RCCSD(T) :",
+                std::format("E_corr(CCSD) = {:.10f}  E(T) = {:.10f}  t={:.3f}s",
+                            solve_res->correlation_energy, *e_t, t_sec));
+            calculator._correlation_energy += *e_t;
+        }
 
         // Persist the converged amplitudes to a .ccamp sidecar so a later run can
         // warm-start from them (X3). Gated on the same _save_checkpoint flag as the

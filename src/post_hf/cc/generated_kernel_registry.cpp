@@ -24,6 +24,8 @@
 #define PLANCK_CC_ARBITRARY_LOWER_RANKS 0
 #endif
 #if PLANCK_CC_ARBITRARY_LOWER_RANKS
+// Rank 2: spatial RCCSD for ccsd_gen / ccsd(t) (docs/CCSD_T_SIZE_SCOPE.md route A).
+#include "generated/cc/ccsd_arbitrary_planck_generated.cpp"
 #include "generated/cc/ccsdt_arbitrary_planck_generated.cpp"
 #endif
 #if PLANCK_CC_MAXORDER >= 4
@@ -121,7 +123,7 @@ namespace HartreeFock::Correlation::CC
         // use the hand-written backends. When the rank-3 arbitrary companion is
         // built (-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON) rank 3 also routes here as
         // a spatial seed source for the cc4 warm-start.
-        constexpr int generated_floor = PLANCK_CC_ARBITRARY_LOWER_RANKS ? 3 : 4;
+        constexpr int generated_floor = PLANCK_CC_ARBITRARY_LOWER_RANKS ? 2 : 4;
         if (rank < generated_floor)
             return std::unexpected(std::format(
                 "make_generated_rcc_kernels: rank {} has no generated tensor "
@@ -131,6 +133,8 @@ namespace HartreeFock::Correlation::CC
         switch (rank)
         {
 #if PLANCK_CC_ARBITRARY_LOWER_RANKS
+        case 2:
+            return make_generated_ccsd_kernels();
         case 3:
             return make_generated_ccsdt_kernels();
 #endif
