@@ -112,11 +112,6 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   libxc 7.1.0 fixed a second wPBEh seam at small s (`EGscut`, issue #627),
   which Planck's 2023 pin lacks.
 
-- **libecpint thread safety upstream** (robashaw/libecpint#82, filed
-  2026-11-16). Since #78 a shared `ECPIntegral` races; Planck builds one per
-  thread, so nothing here depends on the outcome. Follow the issue; if
-  upstream restores re-entrant `const` methods, no change is needed.
-
 - **PySCF's DFT gradient is wrong on ECP atoms.** `grad/rks.py`
   `grids_response_becke` looks up Bragg radii by `atom_charges()` (Z − n_core).
   On AuH·H₂O B3LYP it is 1.1e-5 Ha/Bohr off PySCF's own FD. R1–R3 are done

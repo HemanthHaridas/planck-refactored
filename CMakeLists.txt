@@ -342,16 +342,14 @@ externalproject_add(
 )
 
 # libecpint (MIT): ECP integrals and derivatives (docs/DEF2_ECP.md).
-# Pinned to upstream master 436d9c48 (2026-11-12): PR #81 (seven type-2 and
-# quadrature fixes, including the 6-digit kernel constants Planck used to
-# patch) squashed on top of #78 (efficiency, shell-pair screening). Older
-# releases miss finite differences by 4.6e-5 on HI/def2-QZVP
-# (planck-ecp-gradient-fd). Pin a commit on a branch of the cloned URL: the
-# earlier pin was the head of the fork's PR branch, which upstream deleted on
-# merge, and a fresh clone could not fetch it.
+# Pinned to upstream v1.1.0 (d7966f19, 2026-11-18, branch `main`): carries
+# PR #81 (type-2 and quadrature fixes; older releases miss finite differences
+# by 4.6e-5 on HI/def2-QZVP, planck-ecp-gradient-fd), fixed Gauss-Legendre
+# radial rules, L <= 8, per-thread caches (thread safe again, #82), and no
+# Faddeeva/pugixml dependencies.
 # Built with Planck's own C++ compiler because its API passes std::vector across
 # the boundary (libc++ vs libstdc++ would not link).
-set(LIBECPINT_GIT_TAG 436d9c4877aecbbe27e730b5aeec2b0ce4dc53dd)
+set(LIBECPINT_GIT_TAG d7966f196a5276ac0203c8ff0cca547d840ef51d)
 set(LIBECPINT_INSTALL_DIR ${SRC_DIR}/external/libecpint/install)
 externalproject_add(
     libecpint_ep
@@ -365,10 +363,9 @@ externalproject_add(
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
         -DBUILD_SHARED_LIBS:BOOL=OFF
-        -DLIBECPINT_USE_PUGIXML:BOOL=OFF
         -DLIBECPINT_BUILD_TESTS:BOOL=OFF
         -DLIBECPINT_BUILD_DOCS:BOOL=OFF
-    BUILD_BYPRODUCTS ${LIBECPINT_INSTALL_DIR}/lib/libecpint.a ${LIBECPINT_INSTALL_DIR}/lib/libFaddeeva.a
+    BUILD_BYPRODUCTS ${LIBECPINT_INSTALL_DIR}/lib/libecpint.a
 )
 # H_core (src/integrals/ecp.cpp, in INT_SRC) needs it, and INT_SRC is compiled
 # into most targets, so link it everywhere rather than per target. Static, so
@@ -377,7 +374,6 @@ file(MAKE_DIRECTORY ${LIBECPINT_INSTALL_DIR}/include/libecpint)
 add_library(ecpint STATIC IMPORTED GLOBAL)
 set_target_properties(ecpint PROPERTIES
     IMPORTED_LOCATION ${LIBECPINT_INSTALL_DIR}/lib/libecpint.a
-    INTERFACE_LINK_LIBRARIES ${LIBECPINT_INSTALL_DIR}/lib/libFaddeeva.a
     INTERFACE_INCLUDE_DIRECTORIES "${LIBECPINT_INSTALL_DIR}/include;${LIBECPINT_INSTALL_DIR}/include/libecpint")
 add_dependencies(ecpint libecpint_ep)
 link_libraries(ecpint)

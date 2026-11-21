@@ -135,15 +135,14 @@ directly for H_core, or ECP atoms lose their core operator.
 - libecpint's generator printed kernel constants at 6 digits (157.914 for
   16π²), a constant 2.09e-6 error on every off-centre type-2 integral;
   fixed by upstream PR #81 (with six further type-2/quadrature defects that
-  broke derivatives past def2-TZVP). Planck pins upstream `master`
-  `436d9c48`, which carries it.
-- **One `ECPIntegral` per thread.** Since upstream #78 its `const` compute
-  methods write shared scratch (`RadialIntegral::besselScratch_` /
-  `paramsScratch_`), so a shared engine races: garbage integrals and
-  "Failed to converge" at 4 threads. `_compute_ecp` and
-  `_compute_ecp_gradient` construct one inside the parallel region.
-  Reported upstream as robashaw/libecpint#82.
-- `describe_ecps` checks basis L and ECP L against `LIBECPINT_MAX_L` (5);
+  broke derivatives past def2-TZVP). Planck pins upstream v1.1.0
+  (`d7966f19`), which carries it.
+- **One shared `ECPIntegral`.** From upstream #78 until v1.1.0 its `const`
+  compute methods wrote shared scratch, so a shared engine raced (garbage
+  integrals at 4 threads) and Planck built one per thread. v1.1.0 keeps the
+  scratch in per-thread caches (robashaw/libecpint#82, closed), so
+  `_compute_ecp` and `_compute_ecp_gradient` share one engine again.
+- `describe_ecps` checks basis L and ECP L against `LIBECPINT_MAX_L` (8 since v1.1.0);
   libecpint only asserts it, and asserts are off in Release.
 
 PySCF-gated to ≤1.1e-9 Eh on HI, AgCl, PdCO, AuH·H2O

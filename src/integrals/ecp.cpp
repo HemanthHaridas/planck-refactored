@@ -69,17 +69,11 @@ Eigen::MatrixXd HartreeFock::ECP::_compute_ecp(const HartreeFock::Basis &basis)
     const int nshell = static_cast<int>(shells.size());
 
     // Each (a, b >= a) block is owned by one iteration: no shared writes, and the
-    // ECP sum inside runs in fixed order, so U is thread-count invariant.
-    // One ECPIntegral per thread: since libecpint #78 its const compute methods
-    // write shared scratch (RadialIntegral's besselScratch_/paramsScratch_), so
-    // a shared engine races. Seen as garbage ECP integrals at 4 threads.
-#ifdef USE_OPENMP
-#pragma omp parallel
-#endif
-    {
+    // ECP sum inside runs in fixed order, so U is thread-count invariant. The engine
+    // is shared: libecpint >= 1.1 keeps its scratch in per-thread caches (#82).
     const libecpint::ECPIntegral engine(max_lb, max_lu);
 #ifdef USE_OPENMP
-#pragma omp for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic)
 #endif
     for (int a = 0; a < nshell; ++a)
     {
@@ -108,7 +102,6 @@ Eigen::MatrixXd HartreeFock::ECP::_compute_ecp(const HartreeFock::Basis &basis)
                 }
         }
     }
-    }
     return U;
 }
 
@@ -130,14 +123,9 @@ Eigen::MatrixXd HartreeFock::ECP::_compute_ecp_gradient(const HartreeFock::Basis
     // binned by a and the bins summed in fixed order: thread-count invariant.
     constexpr int kBins = 64;
     std::vector<Eigen::MatrixXd> bins(kBins, grad);
-    // One ECPIntegral per thread, as in _compute_ecp.
+    const libecpint::ECPIntegral engine(max_lb, max_lu, 1); // shared, as in _compute_ecp
 #ifdef USE_OPENMP
-#pragma omp parallel
-#endif
-    {
-    const libecpint::ECPIntegral engine(max_lb, max_lu, 1);
-#ifdef USE_OPENMP
-#pragma omp for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic)
 #endif
     for (int bin = 0; bin < kBins; ++bin)
     {
@@ -169,7 +157,6 @@ Eigen::MatrixXd HartreeFock::ECP::_compute_ecp_gradient(const HartreeFock::Basis
                     }
                 }
             }
-    }
     }
     for (const Eigen::MatrixXd &b : bins)
         grad += b;
