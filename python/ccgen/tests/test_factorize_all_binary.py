@@ -14,16 +14,50 @@ from __future__ import annotations
 
 import re
 import unittest
+from unittest import mock
 
 import numpy as np
 
-from ccgen.tests.test_merged_call_sites import _residuals
+from ccgen.tests import test_merged_call_sites as M
+from ccgen.tests.test_emitted_builder_matches_spec import _spatial_tensors
 
 
-def _emit(dressing: str, method: str = "ccsdt") -> str:
+def _emit(dressing: str, method: str = "ccsdt", fold: bool = True) -> str:
+    """Spin-adapted emit. ``fold=False`` swaps the triples symmetry group for
+    the identity, so the kernel computes R directly: the reference arm for the
+    fold, sharing nothing with it."""
     from ccgen.generate import print_cpp_planck
-    return print_cpp_planck(method, dressing=dressing, spin_adapt=True,
-                            force_arbitrary=True)
+    from ccgen.optimization import permutation
+    group = permutation.AAB_TRIPLES_GROUP if fold else (({}, 1),)
+    with mock.patch.object(permutation, "AAB_TRIPLES_GROUP", group):
+        return print_cpp_planck(method, dressing=dressing, spin_adapt=True,
+                                force_arbitrary=True)
+
+
+def aab_tensors(no, nv):
+    """The physical fixture for the spin-adapted manifold. t3 is the aabaab
+    block, antisymmetric under a<->b and i<->j (an all-six-pair-permutation t3,
+    as `_physical_tensors` builds, is not this block, and the residual is not
+    antisymmetric under it). v carries every real-orbital ERI symmetry."""
+    t = _spatial_tensors(no, nv)
+    v = t["v"]
+    v = v + v.transpose(2, 1, 0, 3)
+    v = v + v.transpose(1, 0, 3, 2)
+    v = v + v.transpose(2, 3, 0, 1)
+    t["v"] = v
+    sl = {"o": slice(0, no), "v": slice(no, no + nv)}
+    t["_blocks"] = {k: v[tuple(sl[c] for c in k)] for k in t["_blocks"]}
+    t["t2"] = t["t2"] + np.transpose(t["t2"], (1, 0, 3, 2))
+    t3 = t["t3"]                                   # (a, b, c, i, j, k)
+    t3 = t3 - np.transpose(t3, (1, 0, 2, 3, 4, 5))
+    t3 = t3 - np.transpose(t3, (0, 1, 2, 4, 3, 5))
+    t["t3"] = t3
+    return t
+
+
+def _residuals(src):
+    with mock.patch.object(M, "_physical_tensors", aab_tensors):
+        return M._residuals(src)
 
 
 def _residual_bodies(src: str, method: str) -> list[str]:
@@ -55,9 +89,11 @@ class FactorizeAllBinaryTests(unittest.TestCase):
         self.assertEqual(bad, [], f"{len(bad)} n-ary residual terms, e.g. {bad[:3]}")
 
     def test_derived_residual_matches_undressed(self):
+        """Derived and folded against undressed and unfolded: neither the
+        operators nor the fold are shared by the two arms."""
         try:
             derived = _residuals(_emit("derived"))
-            plain = _residuals(_emit("none"))
+            plain = _residuals(_emit("none", fold=False))
         except ImportError as exc:  # pragma: no cover
             self.skipTest(f"ccgen deps unavailable: {exc}")
         self.assertEqual(sorted(derived), ["doubles", "singles", "triples"])
@@ -69,6 +105,23 @@ class FactorizeAllBinaryTests(unittest.TestCase):
             d = float(np.abs(a - b).max())
             self.assertLess(d, 1e-12 * scale,
                             f"ccsdt {tag}: derived vs undressed rel={d/scale:.2e}")
+
+
+    def test_fold_cuts_triples_terms(self):
+        """The fold is live: the folded kernel emits far fewer triples nests and
+        carries the symmetrize pass; the reference arm carries neither."""
+        try:
+            folded, plain = _emit("derived"), _emit("derived", fold=False)
+        except ImportError as exc:  # pragma: no cover
+            self.skipTest(f"ccgen deps unavailable: {exc}")
+
+        def triples_nests(src):
+            return sum(b.count("acc +=") for b in _residual_bodies(src, "ccsdt")
+                       if "triples" in b.split("(")[0])
+
+        self.assertIn("// symmetrize ijkabc:", folded)
+        self.assertNotIn("// symmetrize", plain)
+        self.assertLess(triples_nests(folded), 0.5 * triples_nests(plain))
 
 
 if __name__ == "__main__":

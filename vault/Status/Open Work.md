@@ -209,15 +209,16 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen
     today; (Q) is limited by the generated CCSDT's cost, and Λ needs new
     ccgen machinery.
-  - Generated RCCSDT is 5.8× the hand-written one at 4 threads on
-    CH4/STO-3G, 4.6× on one (`docs/CCGEN_RCCSDT_COST_SCOPE.md`; it was
-    19× / 15×). It got there in two changes:
+  - Generated RCCSDT is 3.7× the hand-written one at 4 threads on
+    CH4/STO-3G, 3.1× on one (`docs/CCGEN_RCCSDT_COST_SCOPE.md`; it was
+    19× / 15×). It got there in three changes:
     - every residual term is now binary: the emit path had kept matching
       the retired route's seeded operators, leaving 112 terms n-ary;
-    - the builders are threaded.
+    - the builders are threaded;
+    - the triples residual is computed once per aab symmetry orbit.
 
-    Next: symmetrize once (step 2), then the ladder. A dressed build also
-    routes plain `ccsdt` there by default.
+    Next: the ladder. A dressed build also routes plain `ccsdt` there by
+    default.
 - **ROHF:** RMP2/UMP2, coupled cluster, stability, PCM and SOSCF reject ROHF.
   SOSCF and stability need new orbital-response machinery for the effective
   Roothaan Fock, which does not exist in the tree. ROHF CASSCF and RASSCF

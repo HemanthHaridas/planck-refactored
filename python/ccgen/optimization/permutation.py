@@ -325,3 +325,78 @@ def permutation_grouping_stats(
             "eliminated": len(terms) - after,
         }
     return stats
+
+
+# ── Symmetrize-once folding over the external indices ──────────────
+
+# The spin-adapted rank-3 residual is the aabaab block: (ia) and (jb) alpha,
+# (kc) beta. It is antisymmetric under a<->b and under i<->j separately and
+# symmetric under both (measured to 4e-15 with an aab-correct t3,
+# docs/CCGEN_RCCSDT_COST_SCOPE.md step 2). No symmetry involves (kc).
+AAB_TRIPLES_GROUP: tuple[tuple[dict[str, str], int], ...] = (
+    ({}, 1),
+    ({"a": "b", "b": "a"}, -1),
+    ({"i": "j", "j": "i"}, -1),
+    ({"a": "b", "b": "a", "i": "j", "j": "i"}, 1),
+)
+
+
+def _rename_free(term: AlgebraTerm, mapping: dict[str, str]) -> AlgebraTerm:
+    if not mapping:
+        return term
+
+    def ren(idx: Index) -> Index:
+        if idx.is_dummy or idx.name not in mapping:
+            return idx
+        return Index(mapping[idx.name], idx.space, idx.is_dummy)
+
+    return AlgebraTerm(
+        coeff=term.coeff,
+        factors=tuple(Tensor(f.name, tuple(ren(i) for i in f.indices),
+                             f.antisym_groups) for f in term.factors),
+        free_indices=term.free_indices,
+        summed_indices=term.summed_indices,
+        connected=term.connected,
+        provenance=term.provenance,
+    )
+
+
+def _term_text(term: AlgebraTerm) -> tuple:
+    return tuple(sorted((f.name, tuple(i.name for i in f.indices))
+                        for f in term.factors))
+
+
+def fold_external_symmetry(
+    terms: Sequence[AlgebraTerm],
+    group: Sequence[tuple[dict[str, str], int]],
+) -> list[AlgebraTerm]:
+    """Return terms X with R = sum_g s_g g(X), for a residual R that satisfies
+    g(R) = s_g R for every (g, s_g) in ``group``.
+
+    Exact given that symmetry of R, with no requirement that the terms come in
+    complete orbits: |G| R = sum_g s_g g(R), and for T = h(rep),
+    sum_g s_g g(T) = s_h sum_g s_g g(rep). So each orbit contributes
+    (sum_T c_T s_h / |G|) rep. ``group`` must be closed, with g its own inverse
+    and s a homomorphism (true for AAB_TRIPLES_GROUP). Orbits are matched on the
+    term's text with dummies left as named, which finds fewer orbits than full
+    canonicalization would but never a wrong one.
+    """
+    names = {i.name for t in terms for i in t.free_indices}
+    for mapping, _ in group:
+        if not set(mapping) <= names:
+            raise ValueError(f"group renames {sorted(set(mapping) - names)}, "
+                             f"not free indices of these terms ({sorted(names)})")
+    order: list[tuple] = []
+    reps: dict[tuple, AlgebraTerm] = {}
+    kappa: dict[tuple, Fraction] = {}
+    for term in terms:
+        images = [(_term_text(_rename_free(term, m)), m, s) for m, s in group]
+        key, mapping, sign = min(images, key=lambda x: x[0])
+        if key not in reps:
+            order.append(key)
+            reps[key] = _rename_free(term, mapping)
+            kappa[key] = Fraction(0)
+        kappa[key] += term.coeff * sign
+    n = len(group)
+    return [reps[k].scaled(kappa[k] / (n * reps[k].coeff))
+            for k in order if kappa[k] != 0]

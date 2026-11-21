@@ -1172,6 +1172,7 @@ def _emit_kernel(
     free_indices: Sequence[Index] | None = None,
     force_arbitrary: bool = False,
     ucc: bool = False,
+    symmetrizer: Sequence[tuple[dict[str, str], int]] | None = None,
 ) -> str:
     lowered_terms = tuple(lowered_terms or ())
     if free_indices is None:
@@ -1254,7 +1255,7 @@ def _emit_kernel(
         return _emit_chunked_kernel(
             method, target, lines, emitted_terms, result_type, free_indices,
             denominator_type, amplitude_type, required_intermediates,
-            intermediate_names, arbitrary, ucc)
+            intermediate_names, arbitrary, ucc, symmetrizer=symmetrizer)
 
     if arbitrary:
         bindings = (_amplitude_view_bindings(emitted_terms)
@@ -1266,9 +1267,38 @@ def _emit_kernel(
     lines.extend(_emit_terms(
         emitted_terms, intermediate_names, arbitrary, ucc, _fuse_loops_setting(),
         omp_collapse=_omp_collapse_setting()))
+    lines.extend(_symmetrize_lines(result_type, free_indices, symmetrizer))
     lines.append("    return result;")
     lines.append("}")
     return "\n".join(lines)
+
+
+def _symmetrize_lines(result_type, free_indices, symmetrizer) -> list[str]:
+    """R = sum_g s_g g(X), for a kernel whose terms were folded to X by
+    `fold_external_symmetry`. One o^n pass over a copy of X.
+
+    The comment line is read by the numpy evaluator in ccgen/tests, so the
+    value gates apply the same pass the C++ does.
+    """
+    if not symmetrizer or len(symmetrizer) < 2:   # the identity group is a no-op
+        return []
+    names = [i.name for i in free_indices]
+    images = []
+    for mapping, sign in symmetrizer:
+        args = [mapping.get(n, n) for n in names]
+        images.append(("+" if sign > 0 else "-", args))
+    tag = " ".join(f"{sg}{''.join(a)}" for sg, a in images)
+    rhs = " ".join(f"{sg} x({', '.join(a)})" for sg, a in images)
+    out = ["", f"    // symmetrize {''.join(names)}: {tag}", "    {",
+           f"        const {result_type} x = result;"]
+    collapse = _omp_collapse_setting()
+    if collapse > 0 and len(free_indices) >= collapse:
+        out.append(f"        #pragma omp parallel for collapse({collapse}) schedule(static)")
+    for idx in free_indices:
+        out.append(f"        for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, None)}; ++{idx.name})")
+    out.append(f"            result({', '.join(names)}) = {rhs.lstrip('+ ')};")
+    out.append("    }")
+    return out
 
 
 # Terms-per-function threshold above which a residual kernel is split into
@@ -1282,7 +1312,7 @@ _KERNEL_CHUNK_TERMS = 256
 def _emit_chunked_kernel(
     method, target, header_lines, emitted_terms, result_type, free_indices,
     denominator_type, amplitude_type, required_intermediates,
-    intermediate_names, arbitrary, ucc=False,
+    intermediate_names, arbitrary, ucc=False, symmetrizer=None,
 ):
     """Emit a large residual kernel as `_partN` sub-functions accumulating into a
     by-reference `result`, plus the main kernel that allocates `result`, calls
@@ -1380,6 +1410,7 @@ def _emit_chunked_kernel(
         body.append(
             f"    {kernel}_part{p}(result, reference, mo_blocks, denominators, amplitudes"
             f"{call_tail}")
+    body.extend(_symmetrize_lines(result_type, free_indices, symmetrizer))
     body.append("    return result;")
     body.append("}")
     return "\n".join(out + body)
@@ -1576,6 +1607,7 @@ def emit_planck_translation_unit(
     force_arbitrary: bool = False,
     spin_adapted: bool = False,
     ucc: bool = False,
+    symmetrizers: dict[str, Sequence[tuple[dict[str, str], int]]] | None = None,
 ) -> str:
     """Emit a Planck-compatible C++ translation unit.
 
@@ -1633,6 +1665,7 @@ def emit_planck_translation_unit(
                 intermediates=intermediates,
                 force_arbitrary=force_arbitrary,
                 ucc=ucc,
+                symmetrizer=(symmetrizers or {}).get(target),
             )
         )
         lines.append("")

@@ -1167,6 +1167,20 @@ def print_cpp_planck(
         if include_intermediates:
             include_intermediates = False
 
+    # Symmetrize once: the spin-adapted rank-3 residual is the aabaab block,
+    # antisymmetric under a<->b and under i<->j. Emit one term per orbit (X) and
+    # let the kernel form R = sum_g s_g g(X) in one o^3v^3 pass. 806 ccsdt
+    # triples terms fold to 273 orbits, a 2.67x cut in modelled FLOPs
+    # (docs/CCGEN_RCCSDT_COST_SCOPE.md step 2). Before factorization, so no
+    # operator is built for a folded-away term.
+    symmetrizers = None
+    if spin_adapt and "triples" in eqs:
+        from .optimization.permutation import (
+            AAB_TRIPLES_GROUP, fold_external_symmetry)
+        eqs = dict(eqs)
+        eqs["triples"] = fold_external_symmetry(eqs["triples"], AAB_TRIPLES_GROUP)
+        symmetrizers = {"triples": AAB_TRIPLES_GROUP}
+
     if ucc and include_intermediates:
         # Same reasoning as the spin_adapt force-off above: CSE was built for the
         # raw occ-first spin-orbital layout and is not validated on spin-RESOLVED
@@ -1262,6 +1276,7 @@ def print_cpp_planck(
         # U5.0: prefix the emitted SYMBOLS so a UCC TU can coexist with the RCC
         # one for the same method (they collide otherwise).
         ucc=ucc,
+        symmetrizers=symmetrizers,
     )
 
 

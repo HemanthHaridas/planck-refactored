@@ -249,7 +249,27 @@ def _residuals(src: str, method: str = "ccsdt"):
             out[tag] = acc
         elif re.search(r"Tensor\dD %s\(" % re.escape(whole), src):
             out[tag] = eval_chunks(parse_blocks(src, whole), shape, resolve)
+        if tag in out:
+            out[tag] = _apply_symmetrize(src, whole, out[tag])
     assert out, f"no residual functions found for {method}"
+    return out
+
+
+def _apply_symmetrize(src: str, kernel: str, x):
+    """Apply a kernel's `// symmetrize <names>: +<perm> -<perm> ...` pass.
+
+    Folded kernels (`fold_external_symmetry`) compute X; the C++ then forms
+    R = sum_g s_g g(X). Evaluating the parts alone would gate X, not R.
+    """
+    m = re.search(r'%s\(.*?\n\}\n' % re.escape(kernel), src, re.S)
+    sym = m and re.search(r'// symmetrize (\w+): ([-+\w ]+)\n', m.group(0))
+    if not sym:
+        return x
+    names = sym.group(1)
+    out = np.zeros_like(x)
+    for item in sym.group(2).split():
+        sign, perm = (1 if item[0] == '+' else -1), item[1:]
+        out = out + sign * np.einsum(f"{perm}->{names}", x)
     return out
 
 
