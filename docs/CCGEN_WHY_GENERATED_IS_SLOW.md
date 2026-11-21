@@ -11,16 +11,60 @@ This file answers a narrower architecture question:
 
 ## Short answer
 
-**Correction (2026-11-21): cause 1 was only partly fixed in the route that
-runs.** The spin-adapted arbitrary-order TU (`ccsdt_arbitrary`, the one the
-registry executes) kept 68 ternary triples nests, including 25 t2·t3·⟨oo‖vv⟩
-at o⁵v⁵, about 74 % of modelled FLOPs. The factorizer's emit path still
-matched children against the retired recognition route's seeded operators,
-and a match was inlined instead of hoisted. That affected 112 terms across
-singles, doubles and triples. Fixed by `EMIT_FINGERPRINTS = ()` in
-`python/ccgen/optimization/factorize.py`, and value-gated by
-`test_factorize_all_binary.py`. CH4/STO-3G went from 11.0 s to 3.01 s on one
-thread at the same energy; see `docs/CCGEN_RCCSDT_COST_SCOPE.md`.
+**Correction (2026-11-21): the route that runs still had n-ary work in two
+places, and this investigation missed both.** See
+`docs/CCGEN_RCCSDT_COST_SCOPE.md` for the fixes and timings.
+
+1. **Residual terms (cause 1 was only partly fixed).** The spin-adapted
+   arbitrary-order TU (`ccsdt_arbitrary`, the one the registry executes)
+   kept 68 ternary triples nests, including 25 t2·t3·⟨oo‖vv⟩ at o⁵v⁵, about
+   74 % of modelled FLOPs. Singles and doubles add 44 more, for 112 terms.
+   The factorizer's emit path still matched children against the retired
+   recognition route's seeded operators, and inlined each match instead of
+   hoisting it. Fixed by `EMIT_FINGERPRINTS = ()` in
+   `python/ccgen/optimization/factorize.py`. CH4/STO-3G went from 11.0 s to
+   3.01 s on one thread at the same energy.
+2. **Builder bodies.** Every builder was emitted as one flat n-ary nest. A
+   t1·t3·⟨oo‖vv⟩ builder ran at o⁵v⁴ and took 55 % of a C2H6 run; it is
+   the source of the ladder's o^0.78 growth in the generated/hand-written
+   ratio. M3.0 (2026-08-04) had built factored builder bodies, but only on
+   `emit_factorized_translation_unit`. When W3.2 (2026-08-27) wired the
+   derived route into `print_cpp_planck`, it carried over
+   `factorize_equations` but not `factor_builder_bodies`. Now passed on the
+   derived route.
+
+**Why the census above did not find either.** Its "factorized: 414 nests,
+0 four-deep" cannot be reproduced. ccgen at the correction commit
+(`ac80d93f`), censused the same way, gives:
+
+| Configuration, code at `ac80d93f` | four-deep triples nests |
+|---|---|
+| GCC, plain TU | 9 |
+| spin-adapted, plain TU | 25 |
+| spin-adapted, arbitrary TU (the one that runs) | 25 |
+
+The seeded-fingerprint inlining dates from 2026-08-04, before the census, so
+no configuration of that code gives 0. The census was taken on a TU in a
+`build-profile/` tree that no longer exists, with flags that were not
+recorded. That is invariant 4 below, and what produced its 0 is unknown.
+The builders were missed for different reasons:
+- cause 3 counted builder **calls**, never what one builder computes;
+- every measurement had o = 5, where an o⁵v⁴ builder hides among o⁴v⁴ work.
+
+**The general failure.** A property was verified on Python objects, or on
+one artifact, and then assumed for the code production emits. The value
+gates could not catch either defect, because an n-ary term computes the
+right value, only slowly. Both were found by profiling the production
+binary and censusing the TU it compiles.
+
+**Gate.** `test_factorize_all_binary.test_no_nary_statements` reads the
+emitted text of the production route, residuals and builders, for `ccsd`
+and `ccsdt`. It fails on either defect:
+
+| Mutation | ccsd | ccsdt |
+|---|---|---|
+| seeded fingerprints | 39 n-ary residual statements | 75 |
+| flat builder bodies | 14 n-ary builder statements | 38 |
 
 Four causes were examined. Two were confirmed and fixed (3.6x and 1.76x, compounding to ~6.4x), one was built and refuted, one is scoped and untouched.
 

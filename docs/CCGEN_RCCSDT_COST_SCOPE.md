@@ -6,25 +6,85 @@ answers: `docs/CCGEN_WHY_GENERATED_IS_SLOW.md` (causes 1–4),
 
 ## Current answer
 
-On CH4/STO-3G (o = 5, v = 4) the generated route costs **3.7× the
-hand-written one at 4 threads and 3.1× on one.** Both give
-E_corr = −0.0791116946.
+**Factored builder bodies are built and pass every value, energy and
+determinism gate. They are not yet timed.** They target the one cause the
+ladder found: the gap grows with the occupied space because the builders
+were emitted as flat n-ary loop nests.
+- **The change.** `print_cpp_planck` passes `factor_builder_bodies=True` on
+  the derived route, so each builder is emitted as its contraction tree of
+  binary scratch steps (M3.0). The rank-3 TU now carries 41 scratch-step
+  tensors.
+- **ccgen gates.** Derived and factored residuals equal unfolded, undressed
+  ones to ≤ 1e-12, and every emitted builder matches its spec at rank 3 and
+  rank 4. Merged call sites agree at both ranks.
+  `test_no_nary_statements` finds no statement with three or more factors
+  in any residual or builder of `ccsd` and `ccsdt`.
+- **Energy gates.** All 9 pass:
+  - `ch4_rccsdt_generated_sto3g`, `lih_rccsdt_generated_sto3g`,
+    `be_rccsdtq_sto3g`;
+  - `water_rccsd_t_{sto3g,631g}`;
+  - `b_ucc{2,3,4}_sto3g`, `oh_uccsd_t_631g`.
+- **Determinism.** Every iteration's E_corr, dE and rms(res) are identical
+  at 1/2/4/8 threads on CH4 and C2H2/STO-3G.
+- **Test evaluator.** The numpy evaluator found builder steps by
+  `// Definition term` markers, which factored bodies lack, and ignored
+  their scratch writes. So it read every factored builder as zero, and the
+  first gate run failed at 1.35e-3 for that reason alone. `eval_body`
+  (`ccgen/tests/emitted_cpp_eval.py`) now evaluates any body, flat or
+  factored, step by step.
+- **Pending.** The ladder re-run, to see whether the o^0.78 growth goes
+  away. It waits for a full ccgen test run that is still competing for the
+  CPU.
 
-| | 1 thread | 2 | 4 | 8 | iterations |
+**The ladder result that motivated it.** A 9-rung ladder at 4 threads gives
+per-iteration fits that hold under leave-one-out validation:
+
+| Per-iteration cost | fit | LOO max / median error |
+|---|---|---|
+| generated | o^4.30 · v^3.55 | 22 % / 8 % |
+| hand-written | o^3.52 · v^3.79 | 12 % / 6 % |
+| ratio | o^0.78 · v^−0.24 | 15 % / 5 % |
+
+So the generated route does not scale worse in v; the gap shrinks slightly
+with it. It does scale worse in o, by about o^0.8.
+
+**Cause.** On C2H6/STO-3G (o = 9, one thread) the builders take 82 % of the
+run, and one family, `W_t1t3v_oooovv`, takes 55 %. Its builder is one flat
+nest, t3·t1·⟨oo‖vv⟩, at o⁵v⁴. The factorizer's tree for it is cheaper
+(t1·v first, then t3, o⁵v³), but production emits every builder flat.
+Builder bodies are supposed to be emitted through `factored_builder_steps`
+(M3.0, `docs/CCGEN_INTERMEDIATE_MEMORY_LOCALITY.md` design rule 3). The flag
+that does it existed only on `emit_factorized_translation_unit`, which
+production never calls. The earlier binary-terms census checked residual
+terms only, so it could not see n-ary builders.
+
+**Where it stands at 4 threads** (wall-clock generated / hand-written).
+Both give the same E_corr to ≤ 1.5e-9 on every rung.
+
+| Rung | o | v | per-iteration ratio | wall ratio | iterations, gen / hand |
 |---|---|---|---|---|---|
-| generated (`rccsdt_backend optimized`) | 2.25–2.27 s | 1.26 s | 0.82 s | 0.81–0.82 s | 15 |
-| hand-written (`rccsdt_backend tensor`) | 0.74 s | | 0.22 s | | 24 |
+| CH4/STO-3G | 5 | 4 | 7.3× | 3.7× | 15 / 24 |
+| HF/6-31G | 5 | 6 | 5.8× | 3.6× | 15 / 23 |
+| H2O/6-31G | 5 | 8 | 5.5× | 3.1× | 16 / 28 |
+| NH3/6-31G | 5 | 10 | 5.7× | 3.2× | 18 / 32 |
+| H2O/6-31G* | 5 | 14 | 5.2× | 3.1× | 16 / 27 |
+| C2H2/STO-3G | 7 | 5 | 8.4× | 4.7× | 19 / 33 |
+| C2H4/STO-3G | 8 | 6 | 8.8× | 3.2× | 15 / 41 |
+| C2H6/STO-3G | 9 | 7 | 9.6× | 4.2× | 15 / 34 |
 
-The latest change is symmetrize-once. The spin-adapted triples residual is
-folded to one term per symmetry orbit (806 nests to 273), and the kernel
-rebuilds the full residual in one o³v³ pass. Measured, it is 1.50× on one
-thread and 1.55× on four, against a modelled 2.67×. E_corr, dE and
-rms(res) are identical at 1/2/4/8 threads, and 8 threads gain nothing over
-4 at this size.
+The wall ratio stays near 3–5× for two reasons. The generated route needs
+about half as many iterations, and it is threaded while the hand-written
+backend runs on one core. On one thread the per-iteration ratio is 18–21×
+at o = 5 and 35× on C2H4. Peak RSS is lower for the generated route on every
+rung, for example 121 MB against 412 MB on H2O/6-31G*.
 
-This is the end-to-end cost of two different solvers (dense against
-wedge-packed amplitudes), not a codegen-quality ratio (WHY doc,
-invariant 1). It started at 11.0 s / 4.10 s (1 / 4 threads):
+**Correction.** An earlier version of this doc gave 3.1× on one thread for
+CH4. The hand-written time it used, 0.74 s, came from a cold first run;
+warm, it is 0.22 s. On one thread CH4 is 8.7× wall-clock, not 3.1×.
+
+**How the CH4 number got here.** These are end-to-end costs of two
+different solvers (dense against wedge-packed amplitudes), not a
+codegen-quality ratio (WHY doc, invariant 1).
 
 | Change | 1 thread | 4 threads |
 |---|---|---|
@@ -32,13 +92,15 @@ invariant 1). It started at 11.0 s / 4.10 s (1 / 4 threads):
 | every residual term binary | 3.01 s | 1.84 s |
 | builders threaded | 3.39 s | 1.27 s |
 | symmetrize once | 2.26 s | 0.82 s |
+| hand-written, for reference | 0.22 s | 0.22 s |
 
-Overall that is 4.9× on one thread and 5.0× on four. The target (≤ 2×
-hand-written) is not met on CH4.
+Symmetrize-once was measured at 1.50× on one thread and 1.55× on four,
+against a modelled 2.67×. E_corr, dE and rms(res) are identical at
+1/2/4/8 threads, and 8 threads gain nothing over 4 at CH4 size. The target
+(≤ 2× hand-written on every rung, with no growth) is not met.
 
-**Next:** the ladder (step 0). It decides whether the remaining 3–4× is a
-constant or still grows with size, and a profile on it decides what step 3
-takes on.
+**Next:** build and time factored builder bodies, then re-run the ladder.
+If the o^0.78 growth remains, profile the largest-o rung again.
 
 ## Symmetrize once
 
@@ -134,8 +196,11 @@ All in `ccgen/tests/test_factorize_all_binary.py` unless named.
   manifold: an aab-block t3 and full real-orbital ERI symmetry.
   - Mutations: a flipped operator-read sign fails at 1.1e-2, and a flipped
     group sign at 1.0 relative.
-- **No n-ary terms.** No emitted residual term has three or more factors.
-  The old default fails it with 112.
+- **No n-ary statements** (`test_no_nary_statements`). It reads the emitted
+  text of the production route, residuals and builders, for `ccsd` and
+  `ccsdt`. Seeded fingerprints fail it with 39 / 75 n-ary residual
+  statements (ccsd / ccsdt). Flat builder bodies fail it with 14 / 38 n-ary
+  builder statements.
 - **The fold is applied.** The folded kernel has under half the triples
   nests and carries the symmetrize pass. The unfolded arm has neither.
 - **Operator-count pins.** Seven ccgen pins taken from the seeded default
@@ -166,17 +231,23 @@ constant.
 
 ## Remaining steps
 
-### 0. Ladder
+### 0. Ladder (done; re-run after each fix)
 
-The rungs are LiH/STO-3G, CH4/STO-3G, H2O/6-31G, HF/6-31G, and one rung
-above 0.85 MiB of t3 (every earlier ladder stayed inside L2). At 1 and 4
-threads, record seconds per iteration, iteration count and peak RSS.
+The nine rungs are in the table at the top. Three of them are above
+0.85 MiB of t3, and four vary o; the first version of the ladder had only
+one rung with o ≠ 5, and its joint fit failed leave-one-out at about 97 %.
+- Inputs and the runner live in the session scratchpad. Each rung is a
+  copy of `ch4_rccsdt_generated_sto3g.hfinp` with `rccsdt_backend
+  optimized` or `tensor` and the molecule swapped.
+- Generated per-iteration time is the sum of the solver's own `t=`. The
+  hand-written backend prints no per-iteration time, so its CC time is its
+  wall time minus the generated run's non-CC overhead. Both runs share the
+  same SCF and integrals.
+- Peak RSS comes from `/usr/bin/time -l`.
+- LiH and N2 are left out of the fits. On those, the hand-written run
+  converged in its stage-1 warm start and never entered the tensor loop.
 - Run `grep '^PLANCK_CC' build/CMakeCache.txt` first (WHY doc,
-  invariant 4).
-- Fit exponents only with leave-one-out validation.
-
-The ladder decides whether the remaining gap is a constant or still grows
-with size.
+  invariant 4), and fit only with leave-one-out validation.
 
 ### 3. Only if a profile points there
 
@@ -187,8 +258,8 @@ refuted as a runtime lever once already (cause 2).
 ### 4. Default routing
 
 A dressed build sends plain `correlation ccsdt` to the generated route by
-default. The hand-written backend is 3.1–3.7× cheaper on CH4, at the same
-energy. Decide whether to keep that default; any change
+default. The hand-written backend is 3–5× cheaper wall-clock at 4 threads
+across the ladder, and about 9–13× on one thread, at the same energy. Decide whether to keep that default; any change
 must be checked against the four known rccsdt routing failures.
 
 ## Rank 2 and rank 4
