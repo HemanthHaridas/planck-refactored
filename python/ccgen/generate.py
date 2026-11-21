@@ -1268,6 +1268,11 @@ def print_cpp_planck(
         method,
         eqs,
         intermediates=intermediates,
+        # M3.0 for the route that runs: each derived builder is emitted as its
+        # own contraction tree, not one flat n-ary nest. Flat, a t1.t3.v builder
+        # ran at o^5v^4 and took 55 % of a C2H6 CCSDT run
+        # (docs/CCGEN_RCCSDT_COST_SCOPE.md, step 0).
+        factor_builder_bodies=(dressing == "derived"),
         # UCC terms are already resolved AlgebraTerms, exactly like spin-adapted
         # ones, so the closed-shell relabel-only lowering must not run on them
         # either -- and it would crash on the block-tagged target names.

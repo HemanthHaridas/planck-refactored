@@ -154,52 +154,11 @@ def _part_blocks(src: str, symbol: str, kind: str = 'static void'):
 
 
 def _build_operators(src, method, no, nv, lookup):
-    """Materialize every emitted builder, INCLUDING the rank >= 7 ones.
-
-    `build_emitted_operators` keys on `Tensor<N>D build_W_...`, but the emitter
-    switches to the runtime-rank type at rank 7 -- `TensorND build_W_...` with
-    `TensorND result(std::vector<int>{no, no, ...}, 0.0)`. Those builders are
-    therefore invisible to it, and at rank 4 the residual reads plenty of them
-    (`W_t3v_ooooovvv_*`, `W_t1t4v_ooooovvv_*`), so the shared helper alone cannot
-    evaluate a `ccsdtq` residual at all. Fixed-rank ones still go through the
-    shared helper; this adds the TensorND pass on top, ordered by dependency so a
-    builder that reads another resolves.
-    """
+    """Materialize every emitted builder: fixed-rank and the rank >= 7
+    `TensorND` ones, flat or factored (M3.0 scratch steps), via the shared
+    `eval_body`. Emission order is dependency order."""
     from ccgen.tests.emitted_cpp_eval import build_emitted_operators
-
-    ops = dict(build_emitted_operators(src, method, no, nv, lookup))
-
-    def resolve(name):
-        v = lookup(name)
-        return ops.get(name) if v is None else v
-
-    pending = {}
-    for m in re.finditer(
-            r'TensorND (build_(W_[A-Za-z0-9_]+)_%s)\(' % method, src):
-        symbol, name = m.group(1), m.group(2)
-        dims = re.search(
-            r'TensorND %s\(.*?TensorND result\(std::vector<int>\{([^}]*)\}'
-            % re.escape(symbol), src, re.S).group(1)
-        shape = tuple(no if d.strip() == 'no' else nv for d in dims.split(','))
-        pending[name] = (symbol, shape)
-
-    # Dependency order is not given, so iterate to a fixed point: each pass
-    # resolves whatever now has all its inputs. Terminates because the emitted
-    # builders form a DAG.
-    while pending:
-        progressed = False
-        for name, (symbol, shape) in list(pending.items()):
-            try:
-                ops[name] = eval_chunks(_part_blocks(src, symbol, kind='TensorND'),
-                                        shape, resolve)
-            except KeyError:
-                continue
-            del pending[name]
-            progressed = True
-        if not progressed:
-            raise AssertionError(
-                f"unresolvable TensorND builders: {sorted(pending)[:5]}")
-    return ops
+    return build_emitted_operators(src, method, no, nv, lookup)
 
 
 def _residuals(src: str, method: str = "ccsdt"):

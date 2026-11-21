@@ -1,12 +1,19 @@
-"""Every derived-dressed residual term is a binary contraction, and the
+"""Every statement the derived route emits is a binary contraction, and the
 factorization does not change what the residual computes.
+
+"Binary" was once concluded from the factorizer's Python objects and one
+census of one emitted TU, and it was false twice in the code production
+compiles (docs/CCGEN_WHY_GENERATED_IS_SLOW.md, correction). So the census
+reads the EMITTED TEXT of the route that runs, residuals and builders alike:
 
 The derived route used to inline any child matching a seeded CCSD operator
 (Wmbej, Wmnij, Fae, Fmi), because it emits no builders for those. That left
 68 spin-adapted ccsdt triples terms ternary -- t2.t3.v at o^5v^5, ~74 % of
 modelled FLOPs -- plus 33 doubles and 11 singles
-(docs/CCGEN_RCCSDT_COST_SCOPE.md step 1). The census test fails if any comes
-back. The value test compares against the UNDRESSED spin-adapted emit, which
+(docs/CCGEN_RCCSDT_COST_SCOPE.md step 1). Separately, every builder body was
+emitted as one flat nest, because factored builder bodies (M3.0) were never
+wired into print_cpp_planck: a t1.t3.v builder ran at o^5v^4 and took 55 % of a
+C2H6 run. The census test fails if either comes back. The value test compares against the UNDRESSED spin-adapted emit, which
 shares no operator with the derived one, so a wrong hoisted operator cannot
 agree with it by construction.
 """
@@ -75,18 +82,38 @@ def _factor_count(expr: str) -> int:
     return len(re.findall(r'[A-Za-z_][A-Za-z0-9_.]*\s*\(', expr))
 
 
+def _builder_bodies(src: str) -> list[str]:
+    return [m.group(0) for m in re.finditer(
+        r'(?:Tensor\dD|TensorND) build_W_\w+\(.*?\n\}\n', src, re.S)]
+
+
+def _nary_statements(bodies: list[str]) -> list[str]:
+    """Every accumulation with three or more tensor factors: `acc += ...` and
+    direct `name(...) += ...` writes (terms with no summed index)."""
+    out = []
+    for b in bodies:
+        for e in re.findall(r'(?:\bacc|\w+\([^)]*\))\s*\+=\s*([^;]*);', b):
+            if e.strip() != 'acc' and _factor_count(e) >= 3:
+                out.append(e.strip())
+    return out
+
+
 class FactorizeAllBinaryTests(unittest.TestCase):
-    def test_no_nary_residual_terms(self):
-        try:
-            src = _emit("derived")
-        except ImportError as exc:  # pragma: no cover
-            self.skipTest(f"ccgen deps unavailable: {exc}")
-        bodies = _residual_bodies(src, "ccsdt")
-        self.assertTrue(bodies, "no residual functions found")
-        bad = [e.strip() for b in bodies
-               for e in re.findall(r'acc\s*\+=\s*([^;]*);', b)
-               if _factor_count(e) >= 3]
-        self.assertEqual(bad, [], f"{len(bad)} n-ary residual terms, e.g. {bad[:3]}")
+    def test_no_nary_statements(self):
+        """Residuals and builders of the emitted ccsd and ccsdt TUs."""
+        for method in ("ccsd", "ccsdt"):
+            with self.subTest(method):
+                try:
+                    src = _emit("derived", method=method)
+                except ImportError as exc:  # pragma: no cover
+                    self.skipTest(f"ccgen deps unavailable: {exc}")
+                residuals, builders = _residual_bodies(src, method), _builder_bodies(src)
+                self.assertTrue(residuals, "no residual functions found")
+                self.assertTrue(builders, "no builders found -- gate vacuous")
+                for kind, bodies in (("residual", residuals), ("builder", builders)):
+                    bad = _nary_statements(bodies)
+                    self.assertEqual(bad, [], f"{method}: {len(bad)} n-ary {kind} "
+                                              f"statements, e.g. {bad[:3]}")
 
     def test_derived_residual_matches_undressed(self):
         """Derived and folded against undressed and unfolded: neither the

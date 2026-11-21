@@ -78,20 +78,48 @@ def eval_chunks(chunks, shape, lookup):
     return total
 
 
+def _dims(text: str, no: int, nv: int) -> tuple[int, ...]:
+    """`no, no, nv, 0.0` or `std::vector<int>{no, nv}, 0.0` -> a shape."""
+    names = re.findall(r'\b(no|nv)\b', text)
+    return tuple(no if d == 'no' else nv for d in names)
+
+
+def eval_body(body: str, no: int, nv: int, resolve):
+    """Evaluate one emitted function body, flat or factored, in order.
+
+    A factored builder (M3.0) writes scratch steps `Xn(...) += ...` before
+    `result`, and carries no `// Definition term` markers. Each write is one
+    einsum; a scratch tensor is resolved locally once written. Returns the
+    `result` array.
+    """
+    local: dict[str, np.ndarray] = {}
+    decl = re.search(r'(?:Tensor\dD|TensorND) result\(([^;]*)\);', body)
+    local['result'] = np.zeros(_dims(decl.group(1), no, nv))
+    for m in re.finditer(r'(?:Tensor\dD|TensorND) (X\d+)\(([^;]*)\);', body):
+        local[m.group(1)] = np.zeros(_dims(m.group(2), no, nv))
+
+    def look(name):
+        return local[name] if name in local else resolve(name)
+
+    for w in re.finditer(r'\b(result|X\d+)\(\{?([^)}]*)\}?\)\s*\+=\s*([^;]*);', body):
+        lhs, tgt, rhs = w.group(1), [x.strip() for x in w.group(2).split(',')], w.group(3).strip()
+        if rhs == 'acc':
+            rhs = re.findall(r'acc\s*\+=\s*([^;]*);', body[:w.start()])[-1].strip()
+        local[lhs] = local[lhs] + eval_chunks([(tgt, rhs)], local[lhs].shape, look)
+    return local['result']
+
+
 def build_emitted_operators(src: str, method: str, no: int, nv: int, lookup):
-    """Materialize every `build_W_*` in `src` by evaluating its emitted body."""
+    """Materialize every `build_W_*` in `src` (flat or factored body), in
+    emission order, which is dependency order."""
     ops: dict[str, np.ndarray] = {}
 
     def resolve(name):
         v = lookup(name)
         return ops.get(name) if v is None else v
 
-    for m in re.finditer(r'Tensor\dD (build_(W_[A-Za-z0-9_]+)_%s)\(' % method, src):
-        symbol, name = m.group(1), m.group(2)
-        dims = re.search(
-            r'Tensor\dD %s\(.*?Tensor\dD result\(([^)]*)\)' % re.escape(symbol),
-            src, re.S).group(1)
-        shape = tuple(no if d.strip() == 'no' else nv
-                      for d in dims.split(',')[:-1])
-        ops[name] = eval_chunks(parse_blocks(src, symbol), shape, resolve)
+    for m in re.finditer(
+            r'(?:Tensor\dD|TensorND) build_(W_[A-Za-z0-9_]+)_%s\(.*?\n\}\n' % method,
+            src, re.S):
+        ops[m.group(1)] = eval_body(m.group(0), no, nv, resolve)
     return ops
