@@ -369,6 +369,16 @@ def seeded_fingerprints():
     return out
 
 
+# The emit path (emittable_operators, rewrite_term_factorized,
+# manifold_operators) derives every operator and matches none: it emits no
+# Reuse builders, and the recognized route that would dress seeded matches is
+# retired. A seeded match there could only be inlined, which left terms n-ary
+# (112 in spin-adapted ccsdt, docs/CCGEN_RCCSDT_COST_SCOPE.md step 1). The
+# analysis helpers (identify_tree, value_operators, reused_operators) still
+# default to the seeded set, since reporting reuse is what they are for.
+EMIT_FINGERPRINTS = ()
+
+
 # ── F2.3: match or derive ──────────────────────────────────────────
 
 
@@ -540,7 +550,7 @@ def emittable_operators(term: AlgebraTerm, fingerprints=None):
     ponytail: `internal_nodes` yields the root first (pre-order), so dropping
     index 0 is the whole fix — no tree re-walk."""
     if fingerprints is None:
-        fingerprints = seeded_fingerprints()
+        fingerprints = EMIT_FINGERPRINTS
     _, root = best_contraction_tree_full(term)
     nodes = internal_nodes(root)
     non_root = nodes[1:]  # drop the root; its contraction is the residual
@@ -581,7 +591,7 @@ def rewrite_term_factorized(
     from ..indices import canonical_index_order
 
     if fingerprints is None:
-        fingerprints = seeded_fingerprints()
+        fingerprints = EMIT_FINGERPRINTS
     _, root = best_contraction_tree_full(term)
     if root is None or root.is_leaf:
         return term
@@ -719,7 +729,7 @@ def _manifold_operators_impl(terms, fingerprints, include_reuse,
     from .dressing import seeded_operators, operator_to_intermediate_spec
 
     if fingerprints is None:
-        fingerprints = seeded_fingerprints()
+        fingerprints = EMIT_FINGERPRINTS
     derived: dict[str, list] = {}
     reuse_counts: dict[str, int] = {}
     for t in terms:

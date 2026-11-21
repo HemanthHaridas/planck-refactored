@@ -499,10 +499,10 @@ class MergedOperatorsTests(unittest.TestCase):
         from ccgen.spin import spin_adapt_equations
         for label, terms, sp, expect in (
             ("GCC", generate_cc_equations("ccsd", canonical_fock=True)["doubles"],
-             False, (27, 19)),
+             False, (38, 28)),  # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_RCCSDT_COST_SCOPE.md); those sub-contractions are now derived operators.
             ("spatial", spin_adapt_equations(
                 generate_cc_equations("ccsd", canonical_fock=True))["doubles"],
-             True, (59, 31)),
+             True, (81, 45)),
         ):
             with self.subTest(label):
                 self.assertEqual(self._check(label, terms, sp), expect)
@@ -512,7 +512,8 @@ class MergedOperatorsTests(unittest.TestCase):
         un-merged set, because it will not be permuting its call sites."""
         from ccgen.optimization.factorize import manifold_operators
         terms = generate_cc_equations("ccsd", canonical_fock=True)["doubles"]
-        self.assertEqual(len(manifold_operators(terms, include_reuse=False)), 27)
+        # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_RCCSDT_COST_SCOPE.md); those sub-contractions are now derived operators.
+        self.assertEqual(len(manifold_operators(terms, include_reuse=False)), 38)
 
 
 class HigherRankMergeTests(unittest.TestCase):
@@ -525,7 +526,8 @@ class HigherRankMergeTests(unittest.TestCase):
     different code path.
 
     Rank 4 is the strongest evidence the merge is sound: 2536 rewritten
-    quadruples terms, 254 -> 69 operators, zero disagreements.
+    quadruples terms, 268 -> 79 operators (254 -> 69 before the 2026-11-21
+    seeded-operator fix), zero disagreements.
     """
 
     def _check(self, method, manifold, expect_ops):
@@ -567,14 +569,14 @@ class HigherRankMergeTests(unittest.TestCase):
         return checked
 
     def test_rank3_triples_merge_preserves_value(self):
-        # (80, 39) at canonical_fock=True, which is what the emitter uses;
-        # the default (canonical_fock=False) set gives (83, 42).
-        self.assertGreater(self._check("ccsdt", "triples", (80, 39)), 300)
+        # canonical_fock=True, which is what the emitter uses. Was (80, 39).
+        # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_RCCSDT_COST_SCOPE.md); those sub-contractions are now derived operators.
+        self.assertGreater(self._check("ccsdt", "triples", (94, 49)), 300)
 
     def test_rank4_quadruples_merge_preserves_value(self):
         """Slow (~1 min) and deliberately kept: rank 4 is the case rank 3 has
         repeatedly failed to predict in this codebase."""
-        self.assertGreater(self._check("ccsdtq", "quadruples", (254, 69)), 2000)
+        self.assertGreater(self._check("ccsdtq", "quadruples", (268, 79)), 2000)
 
 
 class SharedRepresentativeIsTheDefectTests(unittest.TestCase):
