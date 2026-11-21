@@ -3,14 +3,14 @@ factorization does not change what the residual computes.
 
 "Binary" was once concluded from the factorizer's Python objects and one
 census of one emitted TU, and it was false twice in the code production
-compiles (docs/CCGEN_WHY_GENERATED_IS_SLOW.md, correction). So the census
+compiles (docs/CCGEN_GENERATED_CC_COST.md, correction). So the census
 reads the EMITTED TEXT of the route that runs, residuals and builders alike:
 
 The derived route used to inline any child matching a seeded CCSD operator
 (Wmbej, Wmnij, Fae, Fmi), because it emits no builders for those. That left
 68 spin-adapted ccsdt triples terms ternary -- t2.t3.v at o^5v^5, ~74 % of
 modelled FLOPs -- plus 33 doubles and 11 singles
-(docs/CCGEN_RCCSDT_COST_SCOPE.md step 1). Separately, every builder body was
+(docs/CCGEN_GENERATED_CC_COST.md #7). Separately, every builder body was
 emitted as one flat nest, because factored builder bodies (M3.0) were never
 wired into print_cpp_planck: a t1.t3.v builder ran at o^5v^4 and took 55 % of a
 C2H6 run. The census test fails if either comes back. The value test compares against the UNDRESSED spin-adapted emit, which

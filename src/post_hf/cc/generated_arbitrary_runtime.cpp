@@ -187,7 +187,7 @@ namespace HartreeFock::Correlation::CC
             kernels.is_all_sectors()
                 ? 0u
                 : static_cast<std::size_t>(state.max_excitation_rank));
-        // H0b (docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md): per-rank attribution.
+        // H0b (docs/CCGEN_GENERATED_CC_COST.md_SCOPE.md): per-rank attribution.
         // H0a showed the residual evaluation is ~100% of the iteration; this says
         // WHICH rank, which is what separates H1 (the rank-3 kernel dominates) from
         // H2 (the harness pays for lower ranks it need not recompute).
@@ -303,7 +303,7 @@ namespace HartreeFock::Correlation::CC
         {
             const auto iter_start = std::chrono::steady_clock::now();
 
-            // H0a (docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md): attribute the
+            // H0a (docs/CCGEN_GENERATED_CC_COST.md_SCOPE.md): attribute the
             // iteration to its three phases. The loop already had exactly these
             // three delimited calls and already reported the total as `t=`; these
             // brackets only split what was being measured as one number.

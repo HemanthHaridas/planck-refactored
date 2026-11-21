@@ -44,7 +44,7 @@ These are cheaper and some are prerequisites:
 1. **Thread the generated kernels by default.** Done 2026-11-20:
    `PLANCK_CC_OMP_COLLAPSE` (default 3) is passed to the generator. The
    results are bitwise unchanged, and `oh_uccsd_t_631g` runs 3.4× faster at
-   4 threads (`docs/CCGEN_CC_OPENMP.md`). MPI ranks on one node now compete
+   4 threads (`docs/CCGEN_GENERATED_CC_COST.md`). MPI ranks on one node now compete
    with these threads, so a node should run one rank with threads, not
    many single-threaded ranks.
 2. **A spatial RCCSD** (`docs/CCSD_T_SIZE_SCOPE.md`, route A). The

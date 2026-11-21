@@ -253,7 +253,7 @@ Threading the CC kernels needs OpenMP in the build (<code>USE_OPENMP=ON</code>,
 the default — but check the configure log actually found it). It is off by
 default because it is new; the generated kernels are otherwise byte-identical
 without it. Full measurements and the determinism verification are in
-<code>docs/CCGEN_CC_OPENMP.md</code>.
+<code>docs/CCGEN_GENERATED_CC_COST.md</code>.
 </p>
 
 ### Offline or air-gapped builds

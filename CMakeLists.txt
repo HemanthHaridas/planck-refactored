@@ -127,7 +127,7 @@ set(PLANCK_CC_INTERMEDIATE_THRESHOLD "5" CACHE STRING
 set(PLANCK_CC_ENGINE "diagram" CACHE STRING
     "ccgen generation engine: diagram (default, fast) or wick (textbook)")
 # OpenMP collapse depth for the generated CC residual nests, passed to ccgen as
-# CCGEN_OMP_COLLAPSE. 3 is the measured value (docs/CCGEN_CC_OPENMP.md: 3.22x at
+# CCGEN_OMP_COLLAPSE. 3 is the measured value (docs/CCGEN_GENERATED_CC_COST.md: 3.22x at
 # 4 threads, energies bitwise identical at 1/2/4/8 threads); 0 emits no pragma.
 set(PLANCK_CC_OMP_COLLAPSE "3" CACHE STRING
     "OpenMP collapse depth for generated CC kernels (0 = unthreaded)")

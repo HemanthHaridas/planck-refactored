@@ -209,19 +209,36 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen
     today; (Q) is limited by the generated CCSDT's cost, and Λ needs new
     ccgen machinery.
-  - Generated RCCSDT is 3–5× the hand-written one wall-clock at 4
-    threads, and 9–13× on one (`docs/CCGEN_RCCSDT_COST_SCOPE.md`). On
-    CH4/STO-3G it was 19× at 4 threads before three fixes:
-    - every residual term is now binary: the emit path had kept matching
-      the retired route's seeded operators, leaving 112 terms n-ary;
-    - the builders are threaded;
-    - the triples residual is computed once per aab symmetry orbit.
-
-    A 9-rung ladder fits the per-iteration ratio as o^0.78 · v^−0.24, so
-    the gap grows with the occupied space. The cause is builders emitted as
-    flat n-ary nests: on C2H6, one o⁵v⁴ family takes 55 %. Factored builder
-    bodies (M3.0) are being wired into the production emit. A dressed build
-    also routes plain `ccsdt` to the generated route by default.
+  - **Generated RCCSDT: reading amplitudes through a fixed-rank view made
+    it 5–6× faster per iteration on one thread** (`docs/CCGEN_GENERATED_CC_COST.md`).
+    Hot nests read t2/t3 as `t3({...})`, a runtime-rank offset loop with
+    the index array rebuilt in memory on every read: about 40 instructions
+    per multiply-add. The emitter now binds every amplitude as
+    `fixed_rank_view<N>` (`src/post_hf/cc/common.h`) and emits
+    `t2(i, j, a, b)`. Iterations and energies are bitwise unchanged; all 9
+    generated CC regression cases pass. On an 8-rung ladder, generated is
+    1.4–2.3× the hand-written backend per iteration on one thread (was
+    2.2–5.1×; ratio fit o^0.38 · v^−0.32, LOO 11 %), and faster
+    wall-clock at four threads on every rung but CH4 (2.9–4.2× from
+    H2O/6-31G up). A 1.0e-8 Eh gap on C2H2 was the
+    hand-written solver stopping early (a fixed 1e-6 step tolerance let
+    |dE| alone decide); it now uses `tol_density`, and the routes agree to
+    ≤ 4e-10 (C2H4 1.7e-9, convergence noise). Open: re-run the ladder's
+    hand-written timings (it now takes more iterations), and its residual
+    plateaus near 1.7e-10. The registry's `-O1`
+    pin was measured and stays: `-O3` gains 1.15–1.23× for an ~21 min
+    compile.
+    - Before this, generated RCCSDT was 1.3–2.6× the hand-written one
+      wall-clock at 4 threads (within 2× on 6 of 8 rungs) and about 5.7×
+      on one thread; CH4 was 19× at 4 threads. Four fixes got it there:
+      every residual term binary (the emit path had kept matching the
+      retired route's seeded operators, leaving 112 terms n-ary), threaded
+      builders, the triples residual once per aab symmetry orbit, and
+      factored builder bodies (M3.0 had never reached the production
+      emit). The per-iteration ratio went from o^0.78 · v^−0.24 to
+      o^0.11 · v^−0.63, so the gap no longer grows with size.
+    - Also open: whether this lands, and the default `ccsdt` routing of a
+      dressed build.
 - **ROHF:** RMP2/UMP2, coupled cluster, stability, PCM and SOSCF reject ROHF.
   SOSCF and stability need new orbital-response machinery for the effective
   Roothaan Fock, which does not exist in the tree. ROHF CASSCF and RASSCF
@@ -446,8 +463,7 @@ None of these blocks correctness. Take each up only with a current profile.
     3.14 % more mean wall time. It treated a symptom of defect 1 above;
     after the rounding fix no parent is below one walker, so the option has
     no effect and can be removed.
-- **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
-  `docs/CCGEN_KERNEL_PERFORMANCE.md`). Threading has been on by default
+- **ccgen generated kernels** (`docs/CCGEN_GENERATED_CC_COST.md`). Threading has been on by default
   since 2026-11-20 (`PLANCK_CC_OMP_COLLAPSE`, default 3):
   - Re-profile the generated production configuration, separating
     per-iteration cost from iteration count.

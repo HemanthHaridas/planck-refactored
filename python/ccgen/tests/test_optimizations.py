@@ -1024,15 +1024,18 @@ class EmissionTests(unittest.TestCase):
         )
         # The arbitrary-order runtime binds the rank-4 amplitude view once as a
         # local `t4` (via _amplitude_view_bindings) and indexes that, rather than
-        # calling amplitudes.tensor(4)(...) inline at every use.
+        # calling amplitudes.tensor(4)(...) inline at every use. The view has a
+        # fixed rank, so reads take plain arguments, not an initializer list
+        # (2026-11-21, docs/CCGEN_GENERATED_CC_COST.md).
         self.assertIn(
-            "const auto t4 = amplitudes.tensor(4).value();",
+            "const auto t4 = fixed_rank_view<8>(amplitudes.tensor(4).value());",
             code,
         )
         self.assertIn(
-            "t4({i, j, k, l, a, b, c, d})",
+            "t4(i, j, k, l, a, b, c, d)",
             code,
         )
+        self.assertNotIn("t4({", code)
         self.assertIn(
             "denominators.tensor(4)({i, j, k, l, a, b, c, d})",
             code,

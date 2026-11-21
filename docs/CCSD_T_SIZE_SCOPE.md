@@ -73,14 +73,14 @@ route A needs:
   as the (T) TU is (84 KB), or only with the lower-ranks option.
 
 The known risk is the generated route's cost.
-`docs/CCGEN_WHY_GENERATED_IS_SLOW.md` sets the terms:
+`docs/CCGEN_GENERATED_CC_COST.md` sets the terms:
 - The generated and hand-written paths are different solvers (dense versus
   packed storage, different intermediates and iteration counts). Their
   wall-clock ratio is an end-to-end cost, never "the generated kernel is N×
   slower". The rank-3 CCSDT end-to-end gap was 93–151× with dressing, on BH3
   and CH4.
 - Generated-kernel OpenMP has been on by default since 2026-11-20
-  (`PLANCK_CC_OMP_COLLAPSE`, default 3; `docs/CCGEN_CC_OPENMP.md`).
+  (`PLANCK_CC_OMP_COLLAPSE`, default 3; `docs/CCGEN_GENERATED_CC_COST.md`).
 - Rank 2 has never been measured, generated against hand-written.
 
 Until 2026-11-20 the generated kernels had no `#pragma omp`, so `ucc2`

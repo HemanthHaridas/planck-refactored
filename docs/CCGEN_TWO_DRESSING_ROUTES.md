@@ -24,7 +24,7 @@ So the question's premise — that ccgen tried what CFOUR/MRCC do and it did not
 - `python/ccgen/tests/residual_eval.py` — basis-matched fixtures: `random_tensors` (GCC) / `ucc_closed_shell_tensors(...)[1]` (spatial)
 - `docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md` — the retirement this document questions
 - `docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` — operator granularity, UCC carry-over
-- `docs/CCGEN_KERNEL_SCALING_SCOPE.md` — the unmodelled cost this document's FLOP figures do not capture
+- `docs/CCGEN_GENERATED_CC_COST.md` — the unmodelled cost this document's FLOP figures do not capture
 - `docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md` — the production wiring of the derivation route
 
 ## The two routes
@@ -112,7 +112,7 @@ The payoff grows with rank. The retirement measured only `ccsd`, observed the sa
 
 The merging referred to above is a separate finding with its own answer (`docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md`): the shape key that fixed correctness also over-split operators that are one contraction up to a transpose. Merging them back is exact, costs nothing at the call site (operators are read by index inside the loop nest; no `W` is ever copied), and roughly doubles the spatial payoff.
 
-Every figure here is a FLOP model (`operator_savings` / `build_cost`). It does not price the emitter's contraction order, which `docs/CCGEN_KERNEL_SCALING_SCOPE.md` measured as a scaling defect (21.8x → 50.1x, no plateau) that no current cost model predicts. These are ratios between comparable configurations, not predicted wall-clock.
+Every figure here is a FLOP model (`operator_savings` / `build_cost`). It does not price the emitter's contraction order, which `docs/CCGEN_GENERATED_CC_COST.md` measured as a scaling defect (21.8x → 50.1x, no plateau) that no current cost model predicts. These are ratios between comparable configurations, not predicted wall-clock.
 
 ## Validation strategy that should remain in place
 

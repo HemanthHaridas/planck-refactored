@@ -332,7 +332,7 @@ def permutation_grouping_stats(
 # The spin-adapted rank-3 residual is the aabaab block: (ia) and (jb) alpha,
 # (kc) beta. It is antisymmetric under a<->b and under i<->j separately and
 # symmetric under both (measured to 4e-15 with an aab-correct t3,
-# docs/CCGEN_RCCSDT_COST_SCOPE.md step 2). No symmetry involves (kc).
+# docs/CCGEN_GENERATED_CC_COST.md #9). No symmetry involves (kc).
 AAB_TRIPLES_GROUP: tuple[tuple[dict[str, str], int], ...] = (
     ({}, 1),
     ({"a": "b", "b": "a"}, -1),

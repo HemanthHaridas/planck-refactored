@@ -2390,10 +2390,19 @@ namespace
         const TensorRCCSDResult &rccsd)
     {
         const RHFReference &reference = state.reference.orbital_partition;
+        // Same cap as the generated route (rccgen.cpp). The old
+        // min(64, max(24, 2*max_cycles)) gave C2H4/STO-3G 44 steps, and CH4/STO-3G
+        // needed all 64 once the step tolerance below became tol_density.
         const unsigned int max_iter =
-            std::min(64u, std::max(24u, 2u * calculator._scf.get_max_cycles(calculator._shells.nbasis())));
+            std::max(calculator._scf.get_max_cycles(calculator._shells.nbasis()), 100u);
         const double tol_energy = std::max(1e-10, calculator._scf._tol_energy);
-        const double tol_normt = 1e-6;
+        // Amplitude-step tolerance: tol_density, the residual tolerance every
+        // other CC solver here uses. It was a fixed 1e-6 (PySCF's default
+        // conv_tol_normt), so in practice |dE| alone decided convergence: on
+        // C2H2/STO-3G one small energy step ended the run 1.0e-8 Eh short of the
+        // converged E_corr, with rms(R3) still 2.9e-8
+        // (docs/CCGEN_GENERATED_CC_COST.md).
+        const double tol_normt = calculator._scf._tol_density;
 
         RCCSDTAmplitudes amps =
             project_rccsd_warm_start_to_restricted(rccsd, reference);
@@ -2498,13 +2507,13 @@ namespace
         const double sd_damping = calculator._scf._cc_damping;
         if (triples_damping < 0.0 || triples_damping > 1.0)
             return std::unexpected("run_staged_tensor_triples_iterations: cc_damping must be between 0 and 1.");
-        // The staged tensor path is meant to become the production solver for
-        // larger systems, so it should not stop at a tolerance inherited from
-        // the more forgiving SCF density threshold. Keep the stage criterion
-        // tight enough that the SD/T3 coupling is genuinely refined before
-        // handing off to the moderate-case fallback.
-        const double tol_stage =
-            std::max(1e-7, calculator._scf._tol_density);
+        // Residual tolerance: tol_density, as in the RCCSD warm start above and
+        // the generated route. This was std::max(1e-7, tol_density), a floor
+        // that let the stage accept residuals of ~3e-8 whatever the input asked
+        // for: on C2H2/STO-3G it stopped 1.0e-8 Eh short of the converged
+        // E_corr while its last energy step happened to be small
+        // (docs/CCGEN_GENERATED_CC_COST.md, Not done).
+        const double tol_stage = calculator._scf._tol_density;
         const double tol_energy =
             std::max(1e-10, calculator._scf._tol_energy);
         const ProductionSpinOrbitalReference so_ref =

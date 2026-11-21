@@ -587,16 +587,18 @@ def _map_factor(
         # The arbitrary-order runtime type (ArbitraryOrderRCCAmplitudes, rank ≥ 4
         # methods) exposes only `.tensor(rank)` — returning std::expected<view> —
         # with no t1/t2/t3 members. The view is bound ONCE per kernel/builder as a
-        # local `t<rank>` (see _amplitude_view_bindings); the factor then indexes
-        # that local with an initializer-list `t<rank>({...})`. The rank ≤ 3
-        # tensor_backend types (RCCSD/RCCSDTAmplitudes) have direct t1/t2/t3(...)
-        # accessors instead.
+        # local `t<rank>` of fixed rank (see _amplitude_view_bindings); the factor
+        # then indexes that local with plain arguments `t<rank>(i, j, ...)`, which
+        # expand to inline arithmetic. (The braced runtime-rank form `t<rank>({...})`
+        # looped over the rank on every read: 5.7x slower on a triples nest at the
+        # registry's -O1.) The rank ≤ 3 tensor_backend types
+        # (RCCSD/RCCSDTAmplitudes) have direct t1/t2/t3(...) accessors instead.
         if arbitrary_amplitudes:
             # R3.1.3d: a higher Sz sector reads from its own bound view
             # `t<rank>_<tag>` (sector_tag), the reference from `t<rank>`.
             view = (f"t{excitation_rank}_{sector_tag}" if sector_tag
                     else f"t{excitation_rank}")
-            return 1, f"{view}({{{', '.join(occ + vir)}}})"
+            return 1, f"{view}({', '.join(occ + vir)})"
         if excitation_rank == 1:
             return 1, f"amplitudes.t1({occ[0]}, {vir[0]})"
         if excitation_rank == 2:
@@ -658,7 +660,7 @@ def _omp_collapse_setting() -> int:
     script run without the variable is not.
 
     Unset or 0 => no pragma, byte-identical to the unthreaded emit. **3 is the
-    measured value** (docs/CCGEN_CC_OPENMP.md): 3.22x at 4 threads on HF/6-31G
+    measured value** (docs/CCGEN_GENERATED_CC_COST.md): 3.22x at 4 threads on HF/6-31G
     with the energy bitwise identical at 1/2/4/8 threads. 2 also works but is
     ~4 % slower -- 25 chunks over 4 threads against 125.
     """
@@ -698,7 +700,7 @@ def _emit_terms(
 ) -> list[str]:
     """Emit the term bodies of a residual kernel.
 
-    `fuse_loops` is the F3/F4 knob (docs/CCGEN_WHY_GENERATED_IS_SLOW.md): 0 emits
+    `fuse_loops` is the F3/F4 knob (docs/CCGEN_GENERATED_CC_COST.md): 0 emits
     one nest per term (the default, byte-identical to before); N > 0 fuses the N
     LARGEST loop-signature groups into one nest each and leaves the rest per-term.
     F3 uses N=1 to land the mechanism against a bit-identical-energy gate before
@@ -801,7 +803,7 @@ def emit_planck_fused_group(
     the shape the hand-written kernel writes by hand (~9 accumulations per
     single-index loop).
 
-    See docs/CCGEN_WHY_GENERATED_IS_SLOW.md: this does not change FLOP count. It
+    See docs/CCGEN_GENERATED_CC_COST.md: this does not change FLOP count. It
     cuts how many times the o^3v^3 result is traversed and its operands
     re-streamed -- 414 nests -> 13 on the factorized manifold, 399 -> 8 undressed.
 
@@ -869,7 +871,7 @@ def term_loop_signature(
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The `(free, summed)` index-name pair that defines a term's loop nest.
 
-    F2 (docs/CCGEN_WHY_GENERATED_IS_SLOW.md). Terms sharing this signature emit
+    F2 (docs/CCGEN_GENERATED_CC_COST.md). Terms sharing this signature emit
     IDENTICAL loop headers and differ only in the accumulated expression, so they
     are exactly the candidates for fusing into one nest -- which is what the
     hand-written kernel does by hand (~9 accumulations per single-index loop).
@@ -1024,16 +1026,19 @@ def _amplitude_view_bindings(terms, indent: int = 4) -> list[str]:
     is unwrapped once here and indexed in the loops. `.value()` is safe: the
     solver constructs every rank ≤ max before calling. The reference sector binds
     `t<rank> = amplitudes.tensor(rank)`; a higher Sz sector (R3.1.3d) binds
-    `t<rank>_<tag> = amplitudes.sector_tensor(rank, "<tag>")`."""
+    `t<rank>_<tag> = amplitudes.sector_tensor(rank, "<tag>")`. Each is wrapped
+    in `fixed_rank_view<2*rank>` so the loops index it with inline arithmetic."""
     pad = " " * indent
     lines: list[str] = []
     for rank, tag in _amplitude_ranks_used(terms):
         if tag is None:
-            lines.append(f"{pad}const auto t{rank} = amplitudes.tensor({rank}).value();")
+            lines.append(
+                f"{pad}const auto t{rank} = "
+                f"fixed_rank_view<{2 * rank}>(amplitudes.tensor({rank}).value());")
         else:
             lines.append(
-                f'{pad}const auto t{rank}_{tag} = '
-                f'amplitudes.sector_tensor({rank}, "{tag}").value();')
+                f'{pad}const auto t{rank}_{tag} = fixed_rank_view<{2 * rank}>('
+                f'amplitudes.sector_tensor({rank}, "{tag}").value());')
     return lines
 
 
@@ -1336,7 +1341,7 @@ def _emit_chunked_kernel(
 
     n_parts = (len(emitted_terms) + _KERNEL_CHUNK_TERMS - 1) // _KERNEL_CHUNK_TERMS
 
-    # H5 (docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md): build each dressed operator
+    # H5 (docs/CCGEN_GENERATED_CC_COST.md_SCOPE.md): build each dressed operator
     # ONCE and pass it to the parts, instead of every part rebuilding the whole set.
     #
     # The comment this replaces called the per-part rebuild "cheap". It was, for an

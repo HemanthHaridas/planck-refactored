@@ -373,7 +373,7 @@ def seeded_fingerprints():
 # manifold_operators) derives every operator and matches none: it emits no
 # Reuse builders, and the recognized route that would dress seeded matches is
 # retired. A seeded match there could only be inlined, which left terms n-ary
-# (112 in spin-adapted ccsdt, docs/CCGEN_RCCSDT_COST_SCOPE.md step 1). The
+# (112 in spin-adapted ccsdt, docs/CCGEN_GENERATED_CC_COST.md #7). The
 # analysis helpers (identify_tree, value_operators, reused_operators) still
 # default to the seeded set, since reporting reuse is what they are for.
 EMIT_FINGERPRINTS = ()

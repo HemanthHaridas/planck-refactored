@@ -1171,7 +1171,7 @@ def print_cpp_planck(
     # antisymmetric under a<->b and under i<->j. Emit one term per orbit (X) and
     # let the kernel form R = sum_g s_g g(X) in one o^3v^3 pass. 806 ccsdt
     # triples terms fold to 273 orbits, a 2.67x cut in modelled FLOPs
-    # (docs/CCGEN_RCCSDT_COST_SCOPE.md step 2). Before factorization, so no
+    # (docs/CCGEN_GENERATED_CC_COST.md #9). Before factorization, so no
     # operator is built for a folded-away term.
     symmetrizers = None
     if spin_adapt and "triples" in eqs:
@@ -1253,7 +1253,7 @@ def print_cpp_planck(
         # (CH4) with energies bitwise identical and iteration counts unchanged,
         # and it shrinks the -O1-pinned registry TU 1.5x. No case was found where
         # the unmerged form wins, so it gets no flag. See
-        # docs/CCGEN_MERGE_TRANSPOSES.md.
+        # docs/CCGEN_GENERATED_CC_COST.md.
         eqs, dressed_intermediates = factorize_equations(
             eqs, spatial=spin_adapt, merge_transposes=True)
         dressed_intermediates = dressed_intermediates or None
@@ -1271,7 +1271,7 @@ def print_cpp_planck(
         # M3.0 for the route that runs: each derived builder is emitted as its
         # own contraction tree, not one flat n-ary nest. Flat, a t1.t3.v builder
         # ran at o^5v^4 and took 55 % of a C2H6 CCSDT run
-        # (docs/CCGEN_RCCSDT_COST_SCOPE.md, step 0).
+        # (docs/CCGEN_GENERATED_CC_COST.md, #10).
         factor_builder_bodies=(dressing == "derived"),
         # UCC terms are already resolved AlgebraTerms, exactly like spin-adapted
         # ones, so the closed-shell relabel-only lowering must not run on them

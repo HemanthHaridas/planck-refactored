@@ -499,7 +499,7 @@ class MergedOperatorsTests(unittest.TestCase):
         from ccgen.spin import spin_adapt_equations
         for label, terms, sp, expect in (
             ("GCC", generate_cc_equations("ccsd", canonical_fock=True)["doubles"],
-             False, (38, 28)),  # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_RCCSDT_COST_SCOPE.md); those sub-contractions are now derived operators.
+             False, (38, 28)),  # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_GENERATED_CC_COST.md); those sub-contractions are now derived operators.
             ("spatial", spin_adapt_equations(
                 generate_cc_equations("ccsd", canonical_fock=True))["doubles"],
              True, (81, 45)),
@@ -512,7 +512,7 @@ class MergedOperatorsTests(unittest.TestCase):
         un-merged set, because it will not be permuting its call sites."""
         from ccgen.optimization.factorize import manifold_operators
         terms = generate_cc_equations("ccsd", canonical_fock=True)["doubles"]
-        # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_RCCSDT_COST_SCOPE.md); those sub-contractions are now derived operators.
+        # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_GENERATED_CC_COST.md); those sub-contractions are now derived operators.
         self.assertEqual(len(manifold_operators(terms, include_reuse=False)), 38)
 
 
@@ -570,7 +570,7 @@ class HigherRankMergeTests(unittest.TestCase):
 
     def test_rank3_triples_merge_preserves_value(self):
         # canonical_fock=True, which is what the emitter uses. Was (80, 39).
-        # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_RCCSDT_COST_SCOPE.md); those sub-contractions are now derived operators.
+        # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_GENERATED_CC_COST.md); those sub-contractions are now derived operators.
         self.assertGreater(self._check("ccsdt", "triples", (94, 49)), 300)
 
     def test_rank4_quadruples_merge_preserves_value(self):

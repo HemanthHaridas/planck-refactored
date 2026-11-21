@@ -107,7 +107,10 @@ class UccSwitchTests(unittest.TestCase):
             ("ccsdt", None): "f70c70701d00a505",
             ("ccsdt", "diagram"): "00b7d05821c655e9",
             # The discriminating point: rank 4 is where the sector amplitudes live.
-            ("ccsdtq", "diagram"): "46c90d47ea08c78f",
+            # Restated 2026-11-21 for fixed-rank amplitude reads
+            # (docs/CCGEN_GENERATED_CC_COST.md #11); reverting the binding and read
+            # forms by regex reproduces the previous pin, 46c90d47ea08c78f.
+            ("ccsdtq", "diagram"): "df90d610924ff302",
         }
         for (method, engine), digest in expected.items():
             with self.subTest(method=method, engine=engine):

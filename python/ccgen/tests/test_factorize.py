@@ -947,7 +947,7 @@ class CostModelTests(unittest.TestCase):
         b_plain, b_merged = builders(plain), builders(merged)
         self.assertLess(len(b_merged), len(b_plain),
                         "merging did not reduce the emitted builder count")
-        # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_RCCSDT_COST_SCOPE.md); those sub-contractions are now derived operators.
+        # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_GENERATED_CC_COST.md); those sub-contractions are now derived operators.
         self.assertEqual((len(b_plain), len(b_merged)), (41, 30))
 
         # a merged-away operator must not survive anywhere in the source

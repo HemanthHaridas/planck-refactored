@@ -7,6 +7,7 @@
 #include <expected>
 #include <initializer_list>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Forward declaration, not base/types.h: every CC header (and the generated
@@ -27,7 +28,7 @@ namespace HartreeFock::Correlation::CC
         // std::expected; with no LTO configured it could not be inlined away, costing two
         // heap allocations per element read. Measured at 13.5x on the rank-3 triples
         // kernel -- the dominant term in the generated-vs-hand-written gap.
-        // See docs/CCGEN_TENSOR_ACCESSOR.md.
+        // See docs/CCGEN_GENERATED_CC_COST.md.
         //
         // The debug assert keeps BOTH conditions the old checked_fixed_rank_index enforced:
         // per-index range, and offset < data_size. The storage half is not redundant with
@@ -292,6 +293,52 @@ namespace HartreeFock::Correlation::CC
 
         const double &operator()(const std::vector<int> &indices) const;
     };
+
+    // Read-only view with the rank fixed at compile time, for generated kernels.
+    // ConstDenseTensorView's braced access loops over a runtime rank and builds its
+    // index array in memory on every read; at the registry's -O1 neither unrolls, and
+    // the int stores also block hoisting of neighbouring Tensor4D dims. This view
+    // expands the offset by a fold over the rank, so each read is inline arithmetic
+    // at any optimization level (5.7x on a triples nest at -O1;
+    // docs/CCGEN_GENERATED_CC_COST.md). Plain int dims, no std::vector, so the
+    // compiler can keep them in registers across the loops.
+    template <int N>
+    struct ConstFixedRankView
+    {
+        const double *data = nullptr;
+        int dims[N] = {};
+
+        template <class... I>
+        const double &operator()(I... indices) const noexcept
+        {
+            static_assert(sizeof...(I) == N, "ConstFixedRankView: wrong number of indices");
+            const int idx[N] = {static_cast<int>(indices)...};
+            return data[offset(idx, std::make_integer_sequence<int, N>{})];
+        }
+
+    private:
+        template <int... P>
+        std::size_t offset(const int (&idx)[N], std::integer_sequence<int, P...>) const noexcept
+        {
+            assert(((idx[P] >= 0 && idx[P] < dims[P]) && ...) &&
+                   "ConstFixedRankView index out of range");
+            std::size_t off = 0;
+            ((off = off * static_cast<std::size_t>(dims[P]) + static_cast<std::size_t>(idx[P])), ...);
+            return off;
+        }
+    };
+
+    // Binds a runtime-rank view at rank N; the rank must match.
+    template <int N>
+    [[nodiscard]] ConstFixedRankView<N> fixed_rank_view(const ConstDenseTensorView &view) noexcept
+    {
+        assert(view.order() == N && "fixed_rank_view: rank mismatch");
+        ConstFixedRankView<N> out;
+        out.data = view.data;
+        for (int p = 0; p < N; ++p)
+            out.dims[p] = view.dims[static_cast<std::size_t>(p)];
+        return out;
+    }
 
     [[nodiscard]] DenseTensorView make_tensor_view(Tensor2D &tensor);
     [[nodiscard]] DenseTensorView make_tensor_view(Tensor4D &tensor);

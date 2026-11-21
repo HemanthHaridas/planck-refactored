@@ -53,7 +53,7 @@ G4's first population was i.i.d. Gaussian, and a mutation restricting the sample
 
 Design rule:
 
-- When designing a fixture to catch a specific class of sampler bias, make sure the fixture has the structure that bias would actually violate (e.g., a trend across the sampled index), not just statistically plausible-looking data. This is the inverse trap of `CCGEN_MERGE_TRANSPOSES`, where a fixture was too general rather than too structureless — both directions defeat the gate's purpose.
+- When designing a fixture to catch a specific class of sampler bias, make sure the fixture has the structure that bias would actually violate (e.g., a trend across the sampled index), not just statistically plausible-looking data. This is the inverse trap of `CCGEN_GENERATED_CC_COST.md`, where a fixture was too general rather than too structureless — both directions defeat the gate's purpose.
 
 ### 3. Deterministic FCI cost does not follow one pooled scaling exponent
 

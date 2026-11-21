@@ -59,11 +59,15 @@ BASELINES = (
     # (`build_tau_ccsd`) like every other builder -- one naming rule, no exceptions.
     ("factorize_tau", {"factorize_tau": True}, 37433,
      "b8ecaa6711793302be21d9e9e1cdc3fbc154acc2d5f57d98692c9e10a9926495"),
-    ("force_arbitrary", {"force_arbitrary": True}, 37175,
-     "bf1e083d5759120621369de2fe1572a926fbf96d21d886387d452d81afe6363e"),
+    # Restated 2026-11-21: amplitude views bound as fixed_rank_view<N>(...) and read
+    # as t2(i, j, a, b) instead of t2({i, j, a, b}) (docs/CCGEN_GENERATED_CC_COST.md
+    # #11). Reverting exactly those two forms by regex reproduces the previous pins:
+    # 37175 / bf1e083d..., 64265 / f3a85400....
+    ("force_arbitrary", {"force_arbitrary": True}, 36941,
+     "5e1657eb67051cc57774d659c3a55cb45b625a7a79615dce2a07b98eef83d1b1"),
     ("spin_adapt+force_arbitrary",
-     {"spin_adapt": True, "force_arbitrary": True}, 64265,
-     "f3a85400f3178fabb06f1ba674e51a5fb9e963d437b70ffda32f900c98e7ca2f"),
+     {"spin_adapt": True, "force_arbitrary": True}, 63781,
+     "1a21483c2e326c1c97f576ede7cbe4f2569e0888946e34abaa05e6083e4b07d5"),
     # Moved at V1.3 (27960 -> 28122): builders that reference a sibling intermediate now
     # bind it (`const auto tau = build_tau(...)`), which is what made the dressed TU
     # compile for the first time. The four undressed baselines above are unchanged, so the

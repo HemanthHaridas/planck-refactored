@@ -487,7 +487,7 @@ historical design context, but they are no longer the source of truth for
     (`docs/CCSD_T_SIZE_SCOPE.md`).
 
 - **Generated CC kernels threaded by default (2026-11-20,
-  `docs/CCGEN_CC_OPENMP.md`).** The emitter's docstring named a CMake
+  `docs/CCGEN_GENERATED_CC_COST.md`).** The emitter's docstring named a CMake
   option `PLANCK_CC_OMP_COLLAPSE` that did not exist, so every build's
   generated CC kernels had no `#pragma omp` and ran on one core. The option
   now exists (default 3) and is passed to the RCC, UCC and CCSD(T)
@@ -1983,10 +1983,11 @@ historical design context, but they are no longer the source of truth for
   BRACED runtime-rank accessor** (`result({i, j, ...})`, which numpy rejects as
   non-letter subscripts) and **rank >= 7 builders return `TensorND`**, invisible
   to `build_emitted_operators`'s fixed-rank regex, so a `ccsdtq` residual could
-  not be evaluated at all until a local pass materialized them. What remains
-  untried at rank 4 is only an end-to-end RUN — building the 6.6 MB dressed TU
-  against the `-O1`-pinned registry and timing a solve. Full record:
-  `docs/CCGEN_MERGE_TRANSPOSES.md`.
+  not be evaluated at all until a local pass materialized them. The merged
+  6.5 MB rank-4 dressed TU builds and runs: `be_rccsdtq_sto3g` gives
+  -14.4036550465 in 6 iterations (checked 2026-11-18). A rank-4 merged-vs-
+  unmerged timing is still not done. Full record:
+  `docs/CCGEN_GENERATED_CC_COST.md`.
 
 - CC tensor element accessors inlined (`src/post_hf/cc/common.h`), the dominant
   cost in every CC kernel. `Tensor{2,4,6}D::operator()` and the runtime-rank
@@ -2018,7 +2019,7 @@ historical design context, but they are no longer the source of truth for
   transposed index), covers the permuted-dims `swap_mid_axes` pattern used by
   `rebind_physicist`, and cross-checks the braced-index overload against the
   still-out-of-line `vector<int>` one. Also drops the now-unused `to_vector` and
-  `checked_fixed_rank_index`. See `docs/CCGEN_TENSOR_ACCESSOR.md`.
+  `checked_fixed_rank_index`. See `docs/CCGEN_GENERATED_CC_COST.md`.
 - Generated rank-3 CCSDT fixed, and the kernel was never the defect. The ccgen
   rank-3 triples residual reproduces PySCF `rccsdt` to +1.49e-08 and is
   **bitwise identical** across both harnesses at identical inputs; what was wrong
@@ -2057,7 +2058,7 @@ historical design context, but they are no longer the source of truth for
   handoff, so the hand-written tensor solver had no regression gate for its entire
   life. Verified falsifiable before being trusted. Cost is not addressed: the
   correct path is ~500× slower (0.19 s vs ~100 s on CH4), per-iteration rather
-  than convergence; see `docs/CCGEN_ARBITRARY_HARNESS_COST.md`. Full answer,
+  than convergence; see `docs/CCGEN_GENERATED_CC_COST.md`. Full answer,
   with the eight ruled-out hypotheses:
   `docs/CCGEN_RANK3_KERNEL_AND_SOLVER.md`.
 - The generated-vs-hand-written CC kernel gap is characterized: it is a
@@ -2080,8 +2081,7 @@ historical design context, but they are no longer the source of truth for
   `water_rccsdt_sto3g` silently yields no timing at all and any ladder point
   needs `nso > 16 || ndet > 10000`; and the whole reachable ladder stays under
   0.85 MiB `t3`, inside L2, so the memory-bound hypothesis is untested rather
-  than refuted. See `docs/CCGEN_KERNEL_SCALING_SCOPE.md` and
-  `docs/CCGEN_KERNEL_PERFORMANCE.md`.
+  than refuted. See `docs/CCGEN_GENERATED_CC_COST.md`.
 - SAD isolated-atom false-convergence fixed in the SCF convergence gate
   (`is_converged`, `src/scf/scf.cpp`). For small lone closed-shell atoms
   (He/cc-pVDZ) the SAD guess drove DIIS to extrapolate a Fock whose

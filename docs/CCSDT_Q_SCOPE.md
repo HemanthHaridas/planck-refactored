@@ -79,7 +79,7 @@ it.
   `ArbitraryOrderRCCAmplitudes`. The hand-written `run_rccsdt` mostly goes
   to the determinant backstop and keeps no dense amplitudes (C3 in
   `docs/CC_AMPLITUDE_CHECKPOINT.md`). That route is correct but slow
-  (`docs/CCGEN_ARBITRARY_HARNESS_COST.md`), so **its cost decides how
+  (`docs/CCGEN_GENERATED_CC_COST.md`), so **its cost decides how
   large a (Q) can run**. It is the same question `CCSD_T_SIZE_SCOPE.md`
   route A answers one rank down; measure that first.
 - **Generation.** Write `python/ccgen/methods/ccsdt_q.py` on the pattern of

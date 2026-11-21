@@ -24,8 +24,8 @@ ccgen has two routes that produce dressed CC operators. Recognition matches hand
 - `python/ccgen/tests/test_emitted_builder_matches_spec.py`
 - `python/ccgen/tests/test_eri_symmetry_tables.py`
 - `docs/CCGEN_TWO_DRESSING_ROUTES.md` — established the derivation route's value and recommended wiring it
-- `docs/CCGEN_MERGE_TRANSPOSES.md` — the follow-on for threading `merge_transposes` into this path
-- `docs/CCGEN_KERNEL_SCALING_SCOPE.md` — the scaling ladder this route has not yet been re-run against
+- `docs/CCGEN_GENERATED_CC_COST.md` — the follow-on for threading `merge_transposes` into this path
+- `docs/CCGEN_GENERATED_CC_COST.md` — the scaling ladder this route has not yet been re-run against
 - `docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` — O6, the prerequisite for UCC support here
 
 ## What invariants matter
@@ -129,7 +129,7 @@ Everything previously claimed for this route (2.0x-7.1x) was a FLOP model. Measu
 
 Medians of 3 and 2 runs; spreads 0.03-0.10 s (LiH) and 0.3-0.4 s (CH4). Energies identical to all printed digits on both, and CH4 takes 15 steps either way — so this is per-iteration work, not fewer iterations.
 
-Both land inside the modelled range, worth stating plainly because `CCGEN_KERNEL_SCALING_SCOPE.md` gave good reason to expect otherwise: it measured the generated-vs-hand-written gap as a scaling defect that no cost model predicts. The model survived contact here; two points is not enough to say it survives generally, and the ratio does grow between them (3.12 -> 3.61).
+Both land inside the modelled range, worth stating plainly because `CCGEN_GENERATED_CC_COST.md` gave good reason to expect otherwise: it measured the generated-vs-hand-written gap as a scaling defect that no cost model predicts. The model survived contact here; two points is not enough to say it survives generally, and the ratio does grow between them (3.12 -> 3.61).
 
 ## Validation strategy that should remain in place
 
@@ -143,6 +143,6 @@ The six failing selection-model gates (`test_savings_concentration` and five oth
 
 ## Remaining architecture concern
 
-- **`merge_transposes` is not threaded** on the production path, so `derived` emits the un-merged 59 builders on spatial `ccsd` rather than 31. Scoped in `docs/CCGEN_MERGE_TRANSPOSES.md`, which also corrects a reading this document invited: the 1.4x -> 2.1x -> 3.7x figures are an operator-count reduction, while the modelled FLOP saving is only 1.02x-1.20x. The likely win is compile time, not speed, and should be measured before wiring.
-- **The scaling ladder has not been re-run under dressing.** `CCGEN_KERNEL_SCALING_SCOPE.md` attributes the generated-vs-hand gap to H3 (n-ary contraction order) and recommends consuming `_optimal_contraction_order`. Dressing addresses the same hypothesis by a different mechanism, so the two fixes may overlap; the six-point ladder should be re-run with `--dressing derived` before the emitter change is attempted.
+- **`merge_transposes` is not threaded** on the production path, so `derived` emits the un-merged 59 builders on spatial `ccsd` rather than 31. Scoped in `docs/CCGEN_GENERATED_CC_COST.md`, which also corrects a reading this document invited: the 1.4x -> 2.1x -> 3.7x figures are an operator-count reduction, while the modelled FLOP saving is only 1.02x-1.20x. The likely win is compile time, not speed, and should be measured before wiring.
+- **The scaling ladder has not been re-run under dressing.** `CCGEN_GENERATED_CC_COST.md` attributes the generated-vs-hand gap to H3 (n-ary contraction order) and recommends consuming `_optimal_contraction_order`. Dressing addresses the same hypothesis by a different mechanism, so the two fixes may overlap; the six-point ladder should be re-run with `--dressing derived` before the emitter change is attempted.
 - **UCC is out of scope.** The emitter rejects spin-blocked manifold names (`Unknown manifold 'singles_aa'`), and recognition finds zero operators there. Needs O6 in `CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` first.

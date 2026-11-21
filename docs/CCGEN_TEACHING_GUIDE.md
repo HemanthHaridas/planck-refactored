@@ -939,7 +939,7 @@ something that looks plausible.
   routes. Status: `docs/CCGEN_GENERATION_AND_VALIDATION.md` and
   `vault/Status/Completion.md`.
 - The generated path is slower than the hand-written one, and the gap is a **real
-  open question**, not a constant tax: `docs/CCGEN_WHY_GENERATED_IS_SLOW.md`. Two
+  open question**, not a constant tax: `docs/CCGEN_GENERATED_CC_COST.md`. Two
   levers have landed since (dressed-operator derivation, ~3.5x; OpenMP, 3.22x) —
   but note the two paths are different *solvers*, so their wall-clock is not a
   like-for-like ratio.

@@ -39,7 +39,7 @@ carry-over) is measured and open**: naive tag-blind matching is unsound.
 - `python/ccgen/tests/test_factorize_value_preservation.py` — **the referee**
 - `docs/CCGEN_TWO_DRESSING_ROUTES.md` — the coupled scope (D6 landed; D8 blocked on O3, now
   unblocked)
-- `docs/CCGEN_KERNEL_SCALING_SCOPE.md` — cost-model caveat
+- `docs/CCGEN_GENERATED_CC_COST.md` — cost-model caveat
 
 ## What invariants matter
 
@@ -253,7 +253,7 @@ manifold:
 figure D8 should use is the merged, `build_cost`-priced one — not 7.48e+10 (un-merged), and not
 4.96e+12 (mis-priced). D8 is unblocked. One caveat to carry: all of the above is
 `operator_savings`, a FLOP model. It does not price the emitter's actual contraction order, which
-`docs/CCGEN_KERNEL_SCALING_SCOPE.md` measured as a scaling defect no current cost model predicts.
+`docs/CCGEN_GENERATED_CC_COST.md` measured as a scaling defect no current cost model predicts.
 Treat these as ratios between comparable configurations, not as absolute performance.
 
 **Which of the six pre-existing failing `test_factorize` selection gates merging fixes: one
@@ -336,7 +336,7 @@ throughout.
   restores a route that does not compute its own equations.
 - **Do not treat `operator_savings` as ground truth.** It is a model — element-count-free but
   still a model, and it does not price the call-site transpose or the emitter's actual contraction
-  order. `docs/CCGEN_KERNEL_SCALING_SCOPE.md` measured the generated-vs-hand gap as a *scaling*
+  order. `docs/CCGEN_GENERATED_CC_COST.md` measured the generated-vs-hand gap as a *scaling*
   defect that no current cost model predicts.
 - **Do not attempt tag-blind operator matching for UCC.** See Remaining architecture concern
   below — it is measured and unsound.
