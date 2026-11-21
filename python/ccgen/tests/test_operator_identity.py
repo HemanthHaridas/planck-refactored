@@ -225,10 +225,10 @@ class CanonicalShapeTests(unittest.TestCase):
         from ccgen.optimization.operator_identity import canonical_shape
         for label, terms, sp, expect in (
             ("GCC", generate_cc_equations("ccsd", canonical_fock=True)["doubles"],
-             False, 19),
+             False, 28),  # was 19; 2026-11-21: seeded-operator sub-contractions are now derived operators (EMIT_FINGERPRINTS)
             ("spatial", spin_adapt_equations(
                 generate_cc_equations("ccsd", canonical_fock=True))["doubles"],
-             True, 31),
+             True, 45),  # was 31
         ):
             ops = manifold_operators(terms, include_reuse=False)
             classes = defaultdict(list)
@@ -279,10 +279,11 @@ class MergePlanTests(unittest.TestCase):
                 self.assertEqual(set(plan), {o.name for o in ops})
 
     def test_plan_matches_the_canonical_partition(self):
-        """Its classes are `canonical_shape`'s classes -- 19 GCC / 31 spatial,
-        the same numbers O3 measured by union-find over the pairwise predicate."""
+        """Its classes are `canonical_shape`'s classes -- 28 GCC / 45 spatial,
+        the same numbers union-find gives over the pairwise predicate (19 / 31
+        before 2026-11-21: seeded-operator sub-contractions are now derived operators (EMIT_FINGERPRINTS))."""
         from ccgen.optimization.operator_identity import merge_plan
-        for label, sp, expect in (("GCC", False, 19), ("spatial", True, 31)):
+        for label, sp, expect in (("GCC", False, 28), ("spatial", True, 45)):
             plan = merge_plan(self._ops(sp), sp)
             with self.subTest(label):
                 self.assertEqual(len({r for r, _ in plan.values()}), expect)

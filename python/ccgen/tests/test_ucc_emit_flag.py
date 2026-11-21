@@ -100,10 +100,14 @@ class UccSwitchTests(unittest.TestCase):
         expected = {
             ("ccsd", None): "44705c8ad85f951c",
             ("ccsd", "diagram"): "4d1ab40e5a75fb19",
-            ("ccsdt", None): "7d5dc96aeebb2141",
-            ("ccsdt", "diagram"): "792a73c904403849",
+            # Restated 2026-11-21 for the symmetrize-once fold of the spin-adapted
+            # triples (fold_external_symmetry). With the fold disabled these emit
+            # the previous pins exactly: ccsdt 7d5dc96aeebb2141 / 792a73c904403849,
+            # ccsdtq d6e0f38aba1e6961.
+            ("ccsdt", None): "f70c70701d00a505",
+            ("ccsdt", "diagram"): "00b7d05821c655e9",
             # The discriminating point: rank 4 is where the sector amplitudes live.
-            ("ccsdtq", "diagram"): "d6e0f38aba1e6961",
+            ("ccsdtq", "diagram"): "46c90d47ea08c78f",
         }
         for (method, engine), digest in expected.items():
             with self.subTest(method=method, engine=engine):
