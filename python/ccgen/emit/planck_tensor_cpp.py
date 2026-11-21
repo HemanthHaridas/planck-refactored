@@ -1480,16 +1480,21 @@ def _emit_intermediate_builder(
                 stype = _tensor_type(len(step.free_indices))
                 lines.append(
                     f"    {stype} {lhs}({_dims_expr(step.free_indices, stype)});")
+            # Builders thread like the residual nests: each nest writes disjoint
+            # elements of its lhs, and each step is its own parallel region, so
+            # the barrier orders a scratch write before the next step reads it.
             lines.append(emit_planck_term(
                 step, lhs=lhs, indent=4, intermediate_names=names_in_scope,
-                arbitrary_amplitudes=arbitrary))
+                arbitrary_amplitudes=arbitrary,
+                omp_collapse=_omp_collapse_setting()))
             lines.append("")
     else:
         for i, term in enumerate(lowered_definition_terms, start=1):
             lines.append(f"    // Definition term {i}")
             lines.append(emit_planck_term(
                 term, lhs="result", indent=4, intermediate_names=sibling_names,
-                arbitrary_amplitudes=arbitrary))
+                arbitrary_amplitudes=arbitrary,
+                omp_collapse=_omp_collapse_setting()))
             lines.append("")
     lines.append("    return result;")
     lines.append("}")
