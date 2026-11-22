@@ -319,31 +319,26 @@ namespace HartreeFock::Correlation::CC
 #endif
 
     std::expected<double, std::string> compute_rccsd_t_energy(
-        HartreeFock::Calculator &calculator,
-        const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        const ArbitraryOrderRCCAmplitudes &t1_t2)
+        const HartreeFock::Calculator &calculator,
+        const ArbitraryOrderTensorCCState &state)
     {
 #if !PLANCK_HAVE_CCSD_T_KERNELS
         (void)calculator;
-        (void)shell_pairs;
-        (void)t1_t2;
+        (void)state;
         return std::unexpected(
             "CCSD(T): the generated (T) kernels were not built (ccsd_t_planck_generated.cpp "
             "is produced by ccgen, which needs Python 3 at configure time).");
 #else
-        auto state = prepare_generated_arbitrary_order_state(calculator, shell_pairs, 2, "CCSD(T) :");
-        if (!state)
-            return std::unexpected("CCSD(T): " + state.error());
-        const int no = state->reference.orbital_partition.n_occ;
-        const int nv = state->reference.orbital_partition.n_virt;
+        const int no = state.reference.orbital_partition.n_occ;
+        const int nv = state.reference.orbital_partition.n_virt;
+        const auto &t1_t2 = state.amplitudes;
         if (t1_t2.by_rank.size() != 2 ||
             t1_t2.by_rank[0].dims != std::vector<int>{no, nv} ||
             t1_t2.by_rank[1].dims != std::vector<int>{no, no, nv, nv})
             return std::unexpected(std::format(
                 "CCSD(T): amplitudes must be spatial t1 ({0},{1}) and t2 ({0},{0},{1},{1}).", no, nv));
-        state->amplitudes = t1_t2;
 
-        const double e_t = batched_triples_energy(*state);
+        const double e_t = batched_triples_energy(state);
 
         // Keep the full-tensor oracle exercised: at verbose output on a small
         // system, recompute E(T) with it and print the difference. Output only;
@@ -353,7 +348,7 @@ namespace HartreeFock::Correlation::CC
         const double o3v3 = std::pow(static_cast<double>(no) * nv, 3);
         if (calculator._output._verbosity >= HartreeFock::Verbosity::Verbose && o3v3 <= 2.0e6)
         {
-            const double e_full = full_tensor_triples_energy(*state);
+            const double e_full = full_tensor_triples_energy(state);
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info, "RCCSD(T) check :",
                 std::format("|batched - full-tensor| E(T) = {:.3e}", std::abs(e_t - e_full)));

@@ -13,9 +13,12 @@ Scope, opened 2026-11-20. Status lives in `vault/Status/Open Work.md`
 - **Water dimer / cc-pVTZ now completes on this 8 GiB machine**, but only
   just: footprint peak 5.5 GB, with ~3.5 GB of it paged out. Before steps 1
   and 2 it did not fit (6.7 GB, stopped).
-- **The two largest transients left** on that system are (T)'s duplicate
-  rebuild of the CC integral blocks (step 3) and the SCF's
-  Cartesian→spherical transform (~4.3 GB, step 6).
+- **Which phase sets that 5.5 GB peak is not known.** Step 3 removed
+  (T)'s duplicate block build and the peak did not move; the step-3 run
+  reached 5.3 GB in its first 73 s, before (T). The largest known transient
+  is the SCF's Cartesian→spherical transform (~4.3 GB of tensors, step 6),
+  but footprint also counts freed-but-cached heap and compressor accounting,
+  so the next measurement is an allocation profile of the dimer itself.
 - **(T) is now 42–57 % of the CC time**, so once memory is settled (T)'s
   kernels are the next time lever.
 
@@ -23,9 +26,9 @@ Scope, opened 2026-11-20. Status lives in `vault/Status/Open Work.md`
 |---|---|
 | Total energy | −152.7012785674 Eh (no PySCF reference yet) |
 | E_corr(CCSD), E(T) | −0.5642828768, −0.0160404999 |
-| SCF / CCSD / (T) | 20 iterations / 18 × 15.9 s = 286 s / 379 s |
-| Whole run | 694 s (inflated: watchdog pauses and paging) |
-| Footprint peak | 5.5 GB, during (T)'s block rebuild |
+| SCF / CCSD / (T) | 20 iterations / 18 × 15.3 s = 276 s / 354 s (after step 3; 379 s before) |
+| Whole run | 661 s (inflated: watchdog pauses and paging) |
+| Footprint peak | 5.5 GB, both before and after step 3; phase not known |
 
 ## Steps
 
@@ -36,11 +39,12 @@ the steps that must land first.
 |---|---|---|---|
 | 0 | Measure the limit on the generated route | done | — |
 | 1 | One SCF copy of the ERI tensor; transform consumes its input | done, `885109ce` | 0 |
-| 2 | Batch `transform_eri` over its leading index | done, uncommitted | 0 |
-| 3 | (T) reuses the CCSD's integral blocks | next | — |
+| 2 | Batch `transform_eri` over its leading index | done, `25714026` | 0 |
+| 3 | (T) reuses the CCSD's integral blocks | done, uncommitted | — |
+| 3a | Allocation profile of the dimer in cc-pVTZ: which phase sets the peak | next | 3 |
 | 4 | Free the thread-local ERI scratch after the build | open | — |
 | 5 | Free the AO tensor once the CC blocks exist | open | 3 |
-| 6 | Direct spherical ERI build (per-block transform) | open, conditional | 7 |
+| 6 | Direct spherical ERI build (per-block transform) | open, conditional | 3a, 7 |
 | 7 | Re-measure the ladder, footprint-watched, clean timings | open | 3, 4, 5 |
 | 8 | Reshape the (T) kernels | open, conditional | 7 |
 | 9 | CCSD time levers | open, conditional | 7 |
@@ -64,7 +68,7 @@ copies, not the CC.
   tensor); spherical dimer cc-pVDZ SCF 165 → 122 MiB. Energies unchanged;
   46 spherical and Cartesian HF/post-HF regression cases pass.
 
-### 2. Batch `transform_eri` — done, uncommitted
+### 2. Batch `transform_eri` — done (`25714026`)
 
 - `transform_eri` (`src/post_hf/integrals.cpp`) runs all four quarter
   transforms per leading index i into that i's output slice. The
@@ -78,26 +82,40 @@ copies, not the CC.
 - Result: dimer cc-pVTZ completes (footprint 6.7 → 4.8 GB through the
   CCSD, 5.5 GB peak in (T)). No time cost (A/B below), energies identical,
   `planck-transform-eri` passes at 1 and 4 threads.
-- **Before committing:** the 114 regression cases that reach the transform
-  (MP2, CC, UCC, stability, TDDFT, double hybrids) on the fully featured
-  `build/`, running now.
+- Regression: 110 of the 114 cases that reach the transform (MP2, CC, UCC,
+  stability, TDDFT, double hybrids) pass on the fully featured `build/`;
+  the other four are the known `rccsdt` routing cases.
 
-### 3. (T) reuses the CCSD's integral blocks — next
+### 3. (T) reuses the CCSD's integral blocks — done, uncommitted
 
-- **Now:** `compute_rccsd_t_energy` (`src/post_hf/cc/ccsd_t.cpp:334`) calls
-  `prepare_generated_arbitrary_order_state` again. It rebuilds the
+- **Before:** `compute_rccsd_t_energy` called
+  `prepare_generated_arbitrary_order_state` again and rebuilt the
   reference, every integral block and the denominators from the AO tensor,
-  though `run_rccgen` holds all of them in its converged state.
-- **Cost:** on the dimer in cc-pVTZ the rebuild held a second ~1 GB `vvvv`
-  beside the CCSD's (the 5.5 GB peak) and repeated the block transform
-  inside (T)'s 379 s.
-- **Change:** `compute_rccsd_t_energy` takes the CCSD's state instead of
-  rebuilding it. Check the UCC (T) (`compute_uccsd_t_energy`) for the same
-  pattern.
-- **Expected:** E(T) bitwise unchanged; dimer cc-pVTZ peak about the CCSD's
-  4.8 GB; (T) shorter by the rebuild.
-- **Gates:** the four `*_rccsd_t_*` cases, including `ccsd_t_oracle_diff`
-  on `water_rccsd_t_631g`; the `*_uccsd_t_*` cases if the UCC path changes.
+  though `run_rccgen` held all of them in its converged state.
+- **Change:** `compute_rccsd_t_energy(calculator, state)` takes the CCSD's
+  converged `ArbitraryOrderTensorCCState`, the same signature the UCC (T)
+  (`compute_uccsd_t_energy`) already had; `run_rccgen` passes
+  `solve_res->state`. The solver only reads the blocks (`const` uses), and
+  both builds came from the same `prepare` call, so (T) sees the same data.
+- **Result:** E(T) bitwise unchanged on every rung; the four `*_rccsd_t_*`
+  gates pass, including `ccsd_t_oracle_diff`. (T) time: water cc-pVTZ
+  2.17 → 1.83 s, dimer cc-pVDZ 4.17 → 3.96 s, dimer cc-pVTZ 379 → 354 s.
+- **The dimer cc-pVTZ footprint peak did not move** (5.5 GB before and
+  after). The earlier attribution of that peak to the rebuild was wrong: the
+  step-3 run reached 5.3 GB within 73 s, before (T). That is step 3a.
+
+### 3a. Allocation profile of the dimer in cc-pVTZ — next
+
+- **Why:** the small-rung profile located the live tensors, but on the dimer
+  the footprint also counts freed-but-cached heap and compressor
+  accounting, and the peak phase is unknown.
+- **How:** the same interposed allocator (every live allocation ≥ 1 MiB,
+  with backtraces, at the moment their total peaks), on the dimer, without
+  the `vmmap` watchdog. Its live-peak total against the 5.5 GB footprint
+  also says how much of the footprint is heap overhead rather than live
+  tensors.
+- **Decides** between step 6 (if the SCF transform holds the peak) and
+  steps 4–5 (if later phases do).
 
 ### 4. Free the thread-local ERI scratch — open
 

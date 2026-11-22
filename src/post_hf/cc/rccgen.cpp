@@ -294,7 +294,7 @@ namespace HartreeFock::Correlation::CC
                 return std::unexpected(std::format(
                     "RCCSD(T): (T) follows CCSD only (rank 2), got rank {}.", rank));
             const auto t_start = std::chrono::steady_clock::now();
-            auto e_t = compute_rccsd_t_energy(calculator, shell_pairs, solve_res->state.amplitudes);
+            auto e_t = compute_rccsd_t_energy(calculator, solve_res->state);
             if (!e_t)
                 return std::unexpected("RCCSD(T): " + e_t.error());
             const double t_sec = std::chrono::duration<double>(

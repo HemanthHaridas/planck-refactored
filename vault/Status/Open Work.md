@@ -208,13 +208,15 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     8 GiB machine (694 s, footprint peak 5.5 GB, still paging); it did not
     fit before steps 1–2. Done: 0 measure; 1 one SCF copy of the ERI
     tensor, transform frees its input (`885109ce`); 2 batched
-    `transform_eri` (uncommitted, bitwise identical, no time cost; its
-    114-case regression pass is running). Next: 3 (T) reuses the CCSD's
-    blocks (its rebuild set the 5.5 GB peak); 4 free the ~112 MiB of
-    thread-local ERI scratch; 5 free the AO tensor once the blocks exist
-    (needs 3); 7 re-measure (needs 3–5). 6 (direct spherical ERI build),
-    8 ((T) kernels; (T) is 42–57 % of the CC time) and 9 (CCSD time) are
-    conditional on 7.
+    `transform_eri` (`25714026`, bitwise identical, no time cost, 110/114
+    transform-dependent cases pass, the rest the known rccsdt ones); 3 (T)
+    reuses the CCSD's blocks (uncommitted; E(T) identical, (T) 379 → 354 s
+    on the dimer). The dimer's 5.5 GB peak did not move with 3, so its
+    phase is unknown: next is 3a, an allocation profile of the dimer. Then
+    4 free the ~112 MiB of thread-local ERI scratch; 5 free the AO tensor
+    once the blocks exist; 7 re-measure (needs 3–5). 6 (direct spherical ERI
+    build) depends on 3a and 7; 8 ((T) kernels; (T) is 42–57 % of the CC
+    time) and 9 (CCSD time) on 7.
   - CCSD[T], CCSDT(Q), CCSDTQ(P) and the Λ variants
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen
     today; (Q) is limited by the generated CCSDT's cost, and Λ needs new

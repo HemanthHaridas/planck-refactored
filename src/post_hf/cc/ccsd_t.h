@@ -3,14 +3,10 @@
 
 #include <expected>
 #include <string>
-#include <vector>
-
-#include "post_hf/cc/amplitudes.h"
 
 namespace HartreeFock
 {
     struct Calculator;
-    struct ShellPair;
 }
 
 namespace HartreeFock::Correlation::CC
@@ -26,12 +22,14 @@ namespace HartreeFock::Correlation::CC
     // o^3 v^3 tensor), threaded, independent of the thread count. At verbose
     // output on small systems it also recomputes E(T) with the full-tensor
     // kernels and logs the difference.
-    std::expected<double, std::string> compute_rccsd_t_energy(
-        HartreeFock::Calculator &calculator,
-        const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        const ArbitraryOrderRCCAmplitudes &t1_t2);
-
+    //
+    // Takes the converged generated RCCSD state (cc2): its reference, MO
+    // integral blocks and amplitudes, so (T) builds no second set of blocks
+    // (docs/CCSD_T_SIZE_SCOPE.md, step 3).
     struct ArbitraryOrderTensorCCState;
+    std::expected<double, std::string> compute_rccsd_t_energy(
+        const HartreeFock::Calculator &calculator,
+        const ArbitraryOrderTensorCCState &state);
 
     // Open-shell (T) from a converged generated UCCSD state (ucc2): t1_aa/bb and
     // t2_aaaa/abab/bbbb sectors, spin-blocked physicist ERIs and the per-spin
