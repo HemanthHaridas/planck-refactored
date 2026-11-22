@@ -78,10 +78,9 @@ it.
   rank-3 route (`ccsdt_gen`, `run_rccgen`) produces them as
   `ArbitraryOrderRCCAmplitudes`. The hand-written `run_rccsdt` mostly goes
   to the determinant backstop and keeps no dense amplitudes (C3 in
-  `docs/CC_AMPLITUDE_CHECKPOINT.md`). That route is correct but slow
-  (`docs/CCGEN_GENERATED_CC_COST.md`), so **its cost decides how
-  large a (Q) can run**. It is the same question `CCSD_T_SIZE_SCOPE.md`
-  route A answers one rank down; measure that first.
+  `docs/CC_AMPLITUDE_CHECKPOINT.md`). That route is correct, and its cost
+  (`docs/CCGEN_GENERATED_CC_COST.md`) **decides how
+  large a (Q) can run**.
 - **Generation.** Write `python/ccgen/methods/ccsdt_q.py` on the pattern of
   `ccsd_t.py`. It takes R4 from ⟨Q|(V T3 + ½ V T2²)_C|0⟩ and L4 from the
   paper's left vector. It emits the full-tensor oracle and the
@@ -151,9 +150,10 @@ user asking for CC3 would silently get CCSDT.
 ## Recommended order
 
 1. CCSD[T] (step 0). It is a few lines.
-2. Wait for the CCSD route-A measurement. If generated rank 2 and rank 3
-   are close to hand-written cost, take step 1. If not, (Q) only runs on
-   molecules where it is academic, so record that and stop.
+2. Step 1. The cost condition it waited on is met: generated rank 2 is
+   48–59× faster than hand-written (`docs/CCSD_T_SIZE_SCOPE.md`), and
+   generated rank 3 is faster wall-clock at four threads on every ladder
+   rung but CH4 (`docs/CCGEN_GENERATED_CC_COST.md`).
 3. Steps 2 and 3 only on request. Step 4 as its own scope, together with
    CC gradients.
 

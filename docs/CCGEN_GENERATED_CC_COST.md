@@ -840,10 +840,13 @@ selection under a memory budget; symbolic, not timed),
   differs by 6.2e-08 from the dressed merged run (−14.4036550465), a
   discrepancy older than this work.
 - **Rank 2.** The generated RCCSD equals the hand-written RCCSD(T) to
-  ≤ 3e-10 Eh on all four `*_rccsd_t_*` inputs, but has not been re-timed
-  since #7–#11 (it took 55.4 s against 32.1 s on C1 H2O2/6-31G, 19.6 s
-  against 14.8 s on spherical water/cc-pVDZ). Its doubles residual is
-  symmetric under (ia)(jb) (5.6e-16), an order-2 group the fold could use.
+  ≤ 3e-10 Eh on all four `*_rccsd_t_*` inputs. Re-timed 2026-11-22 after
+  #7–#11: C1 H2O2/6-31G 0.54 s against 32.0 s hand-written (was 55.4 s
+  against 32.1 s), spherical water/cc-pVDZ 0.30 s against 14.5 s (was
+  19.6 s against 14.8 s), 4 threads; full table in
+  `docs/CCSD_T_SIZE_SCOPE.md`. Its doubles residual is symmetric under
+  (ia)(jb) (5.6e-16), an order-2 group the fold could use; at these sizes
+  that is not worth doing.
 - **Cache spill (H1).** No measured system has t3 beyond L2; cc-pVDZ-class
   cases (H2O/cc-pVDZ, 6.5 MiB t3) would test it.
 - **Beyond four threads.** The measuring machine has four performance cores.

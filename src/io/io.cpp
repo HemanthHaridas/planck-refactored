@@ -638,7 +638,10 @@ namespace HartreeFock::IO
                 {"rmp2", HartreeFock::PostHF::RMP2},
                 {"ump2", HartreeFock::PostHF::UMP2},
                 {"ccsd", HartreeFock::PostHF::RCCSD},
-                {"ccsd(t)", HartreeFock::PostHF::RCCSD}, // RCCSD + (T): scf._cc_triples
+                // Generated spatial RCCSD (rank 2) + (T): scf._cc_triples. The
+                // hand-written RCCSD is spin-orbital and 48-59x slower
+                // (docs/CCSD_T_SIZE_SCOPE.md), so (T) follows the generated one.
+                {"ccsd(t)", HartreeFock::PostHF::RCCSDTQ},
                 {"uccsd", HartreeFock::PostHF::UCCSD},
                 {"ccsdt", HartreeFock::PostHF::RCCSDT},
                 {"uccsdt", HartreeFock::PostHF::UCCSDT},
@@ -652,11 +655,10 @@ namespace HartreeFock::IO
                 // amplitudes and can write a .ccamp seed for a later cc4 run
                 // (Route B). Only usable when the rank-3 companion is built
                 // (-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON).
-                // ccsd_gen / ccsd(t)_gen: generated spatial RCCSD (rank 2), the
-                // candidate CCSD for (T) at size (docs/CCSD_T_SIZE_SCOPE.md).
+                // cc2 / ccsd_gen: generated spatial RCCSD (rank 2), built in
+                // every build; the CCSD behind ccsd(t).
                 {"cc2", HartreeFock::PostHF::RCCSDTQ},
                 {"ccsd_gen", HartreeFock::PostHF::RCCSDTQ},
-                {"ccsd(t)_gen", HartreeFock::PostHF::RCCSDTQ},
                 {"cc3", HartreeFock::PostHF::RCCSDTQ},
                 {"ccsdt_gen", HartreeFock::PostHF::RCCSDTQ},
                 {"ccsdtq", HartreeFock::PostHF::RCCSDTQ},
@@ -678,9 +680,8 @@ namespace HartreeFock::IO
                 // rank, which is twice the excitation rank) -- so ucc5/ucc6 follow
                 // PLANCK_CC_MAXORDER exactly as cc5/cc6 do.
                 //
-                // RCC's rank-2 keywords (cc2 / ccsd_gen / ccsd(t)_gen, above)
-                // need PLANCK_CC_ARBITRARY_LOWER_RANKS; their consumer is (T)
-                // at size. UCC's floor is rank 2 in every UCC build.
+                // RCC's rank-2 keywords (cc2 / ccsd_gen / ccsd(t), above) are
+                // built in every build. UCC's floor is rank 2 in every UCC build.
                 {"ucc2", HartreeFock::PostHF::UCCGEN},
                 {"uccsd(t)", HartreeFock::PostHF::UCCGEN}, // ucc2 + (T): scf._cc_triples
                 {"uccsd_gen", HartreeFock::PostHF::UCCGEN},
@@ -762,7 +763,7 @@ namespace HartreeFock::IO
                      if (!parsed)
                          return std::unexpected(parsed.error());
                      correlation = *parsed;
-                     scf._cc_triples = (value == "ccsd(t)" || value == "ccsd(t)_gen" || value == "uccsd(t)");
+                     scf._cc_triples = (value == "ccsd(t)" || value == "uccsd(t)");
                      // For the generated arbitrary-order RCC path (all spellings
                      // map to RCCSDTQ), carry the requested excitation rank so the
                      // driver dispatches to the right generated kernel without a
@@ -771,7 +772,7 @@ namespace HartreeFock::IO
                      {
                          static const std::unordered_map<std::string, int> _cc_rank =
                              {
-                                 {"cc2", 2}, {"ccsd_gen", 2}, {"ccsd(t)_gen", 2},
+                                 {"cc2", 2}, {"ccsd_gen", 2}, {"ccsd(t)", 2},
                                  {"cc3", 3}, {"ccsdt_gen", 3},
                                  {"ccsdtq", 4}, {"cc4", 4},
                                  {"ccsdtqp", 5}, {"cc5", 5},

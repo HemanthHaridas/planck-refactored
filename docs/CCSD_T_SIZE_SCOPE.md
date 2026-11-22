@@ -1,157 +1,118 @@
 # What limits the size of a CCSD(T) calculation, and what removes it?
 
-Scope, opened 2026-11-20. Nothing here is built or measured yet. It expires
-when the limit is moved; rewrite it then as the answer. Status lives in
-`vault/Status/Open Work.md` (priority 1). Parent scope:
-`docs/CCSD_T_SCOPE.md` ("What remains", step 3).
+Scope, opened 2026-11-20. The first limit, the hand-written spin-orbital
+RCCSD, is removed. The next one is not yet measured. Status lives in
+`vault/Status/Open Work.md` (priority 1). Parent: `docs/CCSD_T_SCOPE.md`.
 
-## Why it matters
+## Where it stands (2026-11-22)
 
-`correlation ccsd(t)` equals PySCF, but on small molecules only. The
-largest gate, C1 H2O2 6-31G (o = 9, v = 13 spatial), takes 31 s, and
-almost all of it is the CCSD:
+`correlation ccsd(t)` runs the generated spatial RCCSD (`cc2`), which is
+built, and dressed, in every build. Against the hand-written spin-orbital
+RCCSD it replaced (HEAD `a1692526`, 4 threads, 3 repeats each, run one at a
+time; whole-run wall and peak RSS; the generated column is the same in a
+default build and a fully dressed one):
 
-| C1 H2O2 6-31G, 4 threads | |
-|---|---|
-| RCCSD (hand-written, spin-orbital) | 22 iterations × 1.39 s ≈ 30.6 s |
-| (T) (batched) | 0.27 s |
-
-The (T) is therefore not the limit at these sizes. Users want CCSD(T) on
-something like a water dimer in cc-pVTZ.
-
-## What the hand-written RCCSD costs, on paper
-
-`run_rccsd` (`src/post_hf/cc/ccsd.cpp`) works in spin orbitals: 2o
-occupied and 2v virtual. It stores seven antisymmetrized blocks
-(`SpinOrbitalBlocks`, oooo through vvvv) and spin-orbital t1/t2. The
-spatial equations need far less:
-
-| | spin-orbital (now) | spatial |
+| | hand-written RCCSD + (T) | generated RCCSD + (T) |
 |---|---|---|
-| `vvvv` storage | (2v)⁴ = 16 v⁴ | v⁴ |
-| t2 storage | (2o)²(2v)² = 16 o²v² | o²v² |
-| leading contraction (`vvvv` × τ) | (2o)²(2v)⁴ = 64 o²v⁴ | o²v⁴ |
+| C1 H2O2 6-31G | 32.0–32.4 s, 83–86 MiB, 22 iter | 0.54–0.58 s, 21 MiB, 26 iter |
+| water cc-pVDZ spherical | 14.5–14.8 s, 100–106 MiB, 15 iter | 0.30–0.31 s, 37–40 MiB, 19 iter |
 
-At water cc-pVTZ (o = 5, v = 53), the spin-orbital `vvvv` is 1.0 GB against
-63 MB spatial. That 16× in memory and 64× in leading FLOPs is the size
-limit. It is an upper bound on the gain: the hand-written code may already
-skip zero spin blocks inside its loops. Step 0 measures it.
+- 48–59× faster end to end and 2.5–4× less memory, despite 4 more
+  iterations. Per iteration, about 1.45 s against 0.02 s on H2O2.
+- E(T) agrees to every printed digit (E_corr to 1e-10 on H2O2), and both
+  totals equal the PySCF-pinned gates.
+- (T) is 0.06 s of the 0.54 s on H2O2.
 
-The integral side may bind first. Checked in the code:
-- `prepare_rccsd` calls `build_mo_block_cache`, which takes the conventional
-  AO ERI tensor (`ensure_eri`, nb⁴) and also keeps a full MO-basis (pq|rs)
-  tensor (`MOBlockCache::full`, n_mo⁴) "for the pedagogical path".
-- (T) then builds a second, spatial block cache
-  (`build_tensor_cc_block_cache`, through
-  `prepare_generated_arbitrary_order_state`) from the same AO tensor.
+Plain `ccsd` still runs the hand-written RCCSD.
 
-So a `ccsd(t)` run holds at least two nb⁴-sized tensors at once. At
-nb = 150 each is 4.1 GB, past this machine's 8 GiB together. Step 0 also
-finds out whether these bind before the amplitudes do.
+**Not yet measured:** how large a `ccsd(t)` now runs, and which object
+binds first. That is step 0 below.
 
-## Routes
+## What may bind next
 
-### A. Generated spatial RCCSD (recommended to try first)
+The generated route stores spatial t1/t2 and the seven spatial MO blocks
+(`TensorCCBlockCache`, `vvvv` = v⁴), built from the conventional AO ERI
+tensor (`ensure_eri`, nb⁴) through `prepare_generated_arbitrary_order_state`.
+The hand-written path's extra full MO tensor (`MOBlockCache::full`, n_mo⁴)
+is no longer on the `ccsd(t)` path.
 
-The spatial rank-2 kernel already exists. With
-`-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`, ccgen emits
-`ccsd_arbitrary_planck_generated.cpp`: a spatial CCSD residual on
-`ArbitraryOrderRCCAmplitudes`. Nothing runs it, because the generated floor
-is 3 (`generated_kernel_registry.cpp`, `rccgen.cpp`). The arbitrary-order
-harness already solves rank 2 for UCC (`ucc2`), so that is proven. What
-route A needs:
-- **Floor.** Lower the RCC generated floor to 2 when the companion is
-  built, and include it in the registry.
-- **Keyword.** Add a rank-2 RCC keyword. The teaching guide says "there is
-  no generated rank-2 RCC keyword, because hand-written RCCSD covers it — a
-  generated `cc2` would have no consumer". (T) is now that consumer, so the
-  premise has changed.
-- **Feeding (T).** Point `ccsd(t)` at the generated route.
-  `compute_rccsd_t_energy` already takes spatial `ArbitraryOrderRCCAmplitudes`,
-  so no projection step is needed.
-- **Build cost.** Decide whether the companion is generated in every build,
-  as the (T) TU is (84 KB), or only with the lower-ranks option.
-
-The known risk is the generated route's cost.
-`docs/CCGEN_GENERATED_CC_COST.md` sets the terms:
-- The generated and hand-written paths are different solvers (dense versus
-  packed storage, different intermediates and iteration counts). Their
-  wall-clock ratio is an end-to-end cost, never "the generated kernel is N×
-  slower". The rank-3 CCSDT end-to-end gap was 93–151× with dressing, on BH3
-  and CH4.
-- Generated-kernel OpenMP has been on by default since 2026-11-20
-  (`PLANCK_CC_OMP_COLLAPSE`, default 3; `docs/CCGEN_GENERATED_CC_COST.md`).
-- Rank 2 has never been measured, generated against hand-written.
-
-Until 2026-11-20 the generated kernels had no `#pragma omp`, so `ucc2`
-and route A ran on one core. With the option wired through CMake and on by
-default, `oh_uccsd_t_631g` went from 12.25 s to 3.59 s at 4 threads, with
-results bitwise unchanged. Even threaded, spherical water⁺ cc-pVDZ UCCSD
-takes 9.4 s per iteration: the generated route's cost is real and has to
-be measured against the hand-written one before route A is chosen.
-
-A 64× FLOP reduction could be eaten by that gap. The answer is a profile
-and a measurement, not a model: the profile-first rule in that doc.
-
-### B. Hand-written spatial RCCSD
-
-This is the PySCF `rccsd` form: spatial t2 with the closed-shell spin sum
-written out. It would be fast per operation, but it is new hand-written
-solver code, which goes against the project's direction (generated kernels
-replace hand-written ones). Take it only if A is measured too slow.
-
-### C. The (T) kernel
-
-The block kernels loop one term at a time through generic accessors; they
-are not BLAS-shaped. Each (a,b,c) block is o³·(o + v) work over 30 terms.
-Reshaping them (an occupied-index GEMM per term) only matters once the CCSD
-fits larger systems. Measure (T)'s share after A or B first.
+So the candidates are:
+- **The AO ERI tensor**, nb⁴: 4.1 GB at nb = 150, half of this machine's
+  8 GiB.
+- **`vvvv`**, v⁴: 63 MB at water cc-pVTZ (v = 53), 1.2 GB at v = 110.
+- **CCSD time.** The leading contraction is o²v⁴ per iteration.
 
 ## Steps
 
-### 0. Measure the current limit
+### 0. Measure the limit on the generated route
 
 Ladder: water cc-pVDZ, water cc-pVTZ, water dimer cc-pVDZ, water dimer
 cc-pVTZ, `ccsd(t)` at 4 threads. For each, record:
 - peak RSS, split into AO ERI, MO blocks and amplitudes (from the memory
   report the CC setup prints, or by instrumenting);
-- RCCSD seconds per iteration and iteration count, recorded separately;
+- CCSD seconds per iteration and iteration count, separately;
 - (T) seconds.
 
 A run that does not fit in 8 GiB is recorded as "does not run", not left to
-swap (`benchmark_ladder_design` memory). Larger rungs go to the cluster.
+swap. Larger rungs go to the cluster. This step decides which object binds.
 
-This step decides which object binds: the AO tensor, the MO blocks, or the
-spin-orbital amplitudes and blocks.
+### 1. If the AO tensor binds
 
-### 1. Route A on the same ladder
+Build the MO blocks from a direct or RI transform without storing the AO
+tensor. RI-CCSD would be its own scope. Record the limit and stop.
 
-Lower the floor and add the keyword, then compare:
-- **Energy.** The generated rank-2 E_corr must equal the hand-written RCCSD
-  to every printed digit on the three `*_rccsd_t_*` inputs and the spherical
-  case.
-- **Cost.** Seconds per iteration, iteration count and peak RSS, rung by
-  rung.
+### 2. If CCSD time binds
 
-Decide from the numbers. If A wins at the larger rungs, `ccsd(t)` switches
-to it. If A loses by a constant that grows with size, open B.
+Profile first. Known levers, unmeasured at rank 2:
+- the doubles residual is symmetric under (ia)(jb) (5.6e-16), an order-2
+  group the external-symmetry fold could use;
+- loop order in the generated nests (summed index innermost and strided;
+  up to 1.7× in a one-nest benchmark, `docs/CCGEN_GENERATED_CC_COST.md`).
 
-### 2. If an nb⁴ tensor binds
+A hand-written spatial RCCSD (PySCF `rccsd` form) is the fallback only if
+the generated route loses by a factor that grows with size; it goes against
+the project direction of generated kernels replacing hand-written ones.
 
-A spatial RCCSD does not help if the integrals bind first. Route A already
-drops the hand-written path's `MOBlockCache::full`, because the generated
-path uses only the seven `TensorCCBlockCache` blocks. The AO tensor stays.
-Beyond that, the work is to build the MO blocks from a direct or RI
-transform without storing the AO tensor. RI-CCSD is out of scope here; it
-would be its own scope. Record the limit and stop.
+### 3. If (T) becomes a measurable share
 
-### 3. (T) BLAS shaping
+Reshape the (T) block kernels (an occupied-index GEMM per term; today they
+loop one term at a time through generic accessors). Gate: the
+batched-vs-full-tensor check (`ccsd_t_oracle_diff`) and thread invariance,
+both unchanged.
 
-Only if step 1 moves the limit enough that (T) becomes a measurable share.
-Gate: the batched-vs-full-tensor check (`ccsd_t_oracle_diff`) and thread
-invariance, both unchanged.
+## Findings
+
+- **The spin-orbital RCCSD was the first limit.** `run_rccsd` works in 2o
+  occupied and 2v virtual spin orbitals: (2v)⁴ = 16 v⁴ `vvvv`, 16 o²v² t2,
+  and a 64 o²v⁴ leading contraction (1.0 GB of `vvvv` at water cc-pVTZ,
+  against 63 MB spatial). Moving `ccsd(t)` to the generated spatial RCCSD
+  removed it.
+- **The generated route's cost was the risk, and it turned out not to bind.**
+  Its first timing, before fixed-rank amplitude views, factored builders and
+  threaded generated kernels, was slower than hand-written (55.4 s against
+  32.1 s on C1 H2O2, 19.6 s against 14.8 s on spherical water). After those
+  changes it is the table above. Generated and hand-written are different
+  solvers (dense against packed storage, different iteration counts), so
+  only end-to-end ratios are meaningful.
+- **The speed is the dressing, measured with only that changed.** The
+  table above is a dressed build. In a default build (every option at its
+  default), the undressed rank-2 kernel ran the same 26 iterations to the
+  same energy in 45.5 s on C1 H2O2, slower than the hand-written route.
+  Emitting only rank 2 with `--dressing derived` in that same build brought
+  it to 0.54–0.55 s. The derived dressing makes every residual term a binary
+  contraction; the plain emit keeps n-ary terms. So the rank-2 companion is
+  emitted dressed in every build, by its own generator call, while higher
+  ranks in a default build stay undressed. With that, the default and fully
+  dressed builds emit byte-identical rank-2 files and run `ccsd(t)` in the
+  same time (H2O2 0.54–0.55 s in both; spherical water 0.30–0.32 s), and
+  the hand-written `ccsd` control takes 32.2 s in both, so the other build
+  options do not move the timing.
+- **The generated route had printed the wrong label.** It printed
+  `Total RCCSD Energy` for a total including (T), which the runner metric
+  `rccsd_t_total_energy` would not parse. The driver now prints
+  `Total RCCSD(T) Energy`.
 
 ## Not in this scope
 
 RI-CCSD and RI-(T), frozen core, MPI distribution of the CC solve, and the
-generated rank-3 CCSDT's scaling defect (its own scope).
+generated rank-3 CCSDT's cost (`docs/CCGEN_GENERATED_CC_COST.md`).

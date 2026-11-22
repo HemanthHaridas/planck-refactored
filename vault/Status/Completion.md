@@ -451,6 +451,27 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **`ccsd(t)` runs the generated spatial RCCSD (2026-11-22,
+  `docs/CCSD_T_SIZE_SCOPE.md`).** Re-timed at HEAD, 4 threads, the
+  generated rank-2 RCCSD was 48–59× faster end to end than the hand-written
+  spin-orbital one, with 2.5–4× less memory: C1 H2O2/6-31G 0.54 s against
+  32.0 s, spherical water/cc-pVDZ 0.30 s against 14.5 s. E(T) is identical to
+  every printed digit. So:
+  - the rank-2 companion is emitted, dressed (`derived`), and linked in
+    every build, by its own generator call (rank 3 still needs
+    `PLANCK_CC_ARBITRARY_LOWER_RANKS`). Undressed it took 45.5 s on H2O2 in
+    a default build; dressing only rank 2 in that build gives 0.54 s, the
+    same as a fully dressed build. The hand-written `ccsd` control is 32.2 s
+    in both builds;
+  - `ccsd(t)` maps to generated rank 2; `ccsd(t)_gen` is gone, and `cc2` /
+    `ccsd_gen` give the generated CCSD alone;
+  - the hand-written (T) branch in `run_rccsd` is deleted; plain `ccsd`
+    still runs the hand-written solver;
+  - the driver prints `Total RCCSD(T) Energy` on the generated route, which
+    had printed `Total RCCSD Energy` for a total including (T).
+
+  The four `*_rccsd_t_*` gates are unchanged.
+
 - **Derived CC operators on the generated UCC kernels (2026-11-22,
   `docs/CCGEN_UNRESTRICTED_CC.md`, "the derived operators reach UCC").**
   A dressed build (`-DPLANCK_CC_DRESS_OPERATORS=ON`) dressed only the RCC
@@ -489,8 +510,9 @@ historical design context, but they are no longer the source of truth for
     all eight UCC regression cases.
 
 - **CCSD(T), restricted and unrestricted (2026-11-20,
-  `docs/CCSD_T_SCOPE.md`).** `correlation ccsd(t)` runs the
-  hand-written RCCSD. At convergence it adds (T) from the ccgen-generated W
+  `docs/CCSD_T_SCOPE.md`).** `correlation ccsd(t)` ran the
+  hand-written RCCSD (the generated one since 2026-11-22, entry above). At
+  convergence it adds (T) from the ccgen-generated W
   and V builders (`ccsd_t_planck_generated.cpp`, generated in every build),
   evaluated on the aab|aab block.
   - **Energy formula.** E(T) = S_aaa/18 + S_aab/2. The aaa block is half

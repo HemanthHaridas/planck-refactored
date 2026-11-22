@@ -742,16 +742,16 @@ add_executable(planck-dft
 
 if(Python3_Interpreter_FOUND)
     # RCC methods to emit. The plain <method>_planck_generated.cpp TU is consumed
-    # only at rank >= 4 (generated_kernel_registry.cpp); rank 2/3 run through
-    # their arbitrary-order companions, so they are passed only when those are
-    # requested.
-    # ponytail: with ARBITRARY_LOWER_RANKS the script still writes the unused
-    # plain ccsd/ccsdt TUs as a side effect; add a generator flag if that
-    # generation time ever matters.
+    # only at rank >= 4 (generated_kernel_registry.cpp); rank 3 runs through its
+    # arbitrary-order companion, emitted only with PLANCK_CC_ARBITRARY_LOWER_RANKS.
+    # Rank 2 (ccsd) has its own invocation below, in every build.
+    # ponytail: the script still writes the unused plain ccsdt TU as a side
+    # effect; add a generator flag if that generation time ever matters.
     set(_ccgen_rcc_methods "")
     foreach(_planck_cc_method ${PLANCK_CC_METHODS})
         list(FIND _planck_cc_method_by_rank ${_planck_cc_method} _planck_cc_method_rank_idx)
-        if(_planck_cc_method_rank_idx GREATER_EQUAL 2 OR PLANCK_CC_ARBITRARY_LOWER_RANKS)
+        if(_planck_cc_method_rank_idx GREATER_EQUAL 2 OR
+           (_planck_cc_method_rank_idx EQUAL 1 AND PLANCK_CC_ARBITRARY_LOWER_RANKS))
             list(APPEND _ccgen_rcc_methods ${_planck_cc_method})
         endif()
     endforeach()
@@ -768,8 +768,21 @@ if(Python3_Interpreter_FOUND)
     if(PLANCK_CC_ARBITRARY_LOWER_RANKS)
         list(APPEND _ccgen_planck_kernel_args --arbitrary-lower-ranks)
     endif()
+
+    # Rank 2: the spatial RCCSD behind `ccsd(t)` (docs/CCSD_T_SIZE_SCOPE.md).
+    # Emitted in every build and always dressed (derived), whatever
+    # PLANCK_CC_DRESS_OPERATORS says: undressed it is ~85x slower (C1 H2O2/6-31G
+    # 45.5 s against 0.54 s) and slower than the hand-written RCCSD it replaced.
+    set(_ccgen_rank2_kernel_args
+        --output-dir ${CMAKE_BINARY_DIR}/generated/cc
+        --methods ccsd
+        --engine ${PLANCK_CC_ENGINE}
+        --arbitrary-lower-ranks
+        --dressing derived
+    )
     if(PLANCK_CC_SPIN_ADAPT)
         list(APPEND _ccgen_planck_kernel_args --spin-adapt)
+        list(APPEND _ccgen_rank2_kernel_args --spin-adapt)
     endif()
     # W3.1: the emitter now takes one dressing axis with a value. The option name
     # stays PLANCK_CC_DRESS_OPERATORS (an existing, documented switch), but the
@@ -832,8 +845,8 @@ if(Python3_Interpreter_FOUND)
         if(_planck_cc_method_rank_idx GREATER_EQUAL 2)
             list(APPEND _ccgen_planck_outputs
                 ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_planck_generated.cpp)
-        elseif(PLANCK_CC_ARBITRARY_LOWER_RANKS)
-            # Lower-rank arbitrary-order companions, RCC side only -- the UCC
+        elseif(_planck_cc_method_rank_idx EQUAL 1 AND PLANCK_CC_ARBITRARY_LOWER_RANKS)
+            # Rank-3 arbitrary-order companion, RCC side only -- the UCC
             # invocation never passes --arbitrary-lower-ranks, so it emits none.
             list(APPEND _ccgen_planck_outputs
                 ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_arbitrary_planck_generated.cpp)
@@ -873,7 +886,22 @@ if(Python3_Interpreter_FOUND)
             ${_ccgen_omp_stamp}
         COMMENT "Generating CCSD(T) kernels with ccgen")
 
-    add_custom_target(ccgen-planck-kernels DEPENDS ${_ccgen_planck_outputs} ${_ccgen_ccsd_t_output})
+    set(_ccgen_rank2_output ${CMAKE_BINARY_DIR}/generated/cc/ccsd_arbitrary_planck_generated.cpp)
+    add_custom_command(
+        OUTPUT ${_ccgen_rank2_output}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
+        COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                ${_ccgen_rank2_kernel_args}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+        DEPENDS
+            ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+            ${_ccgen_package_sources}
+            ${_ccgen_omp_stamp}
+        COMMENT "Generating the dressed rank-2 RCCSD kernel with ccgen")
+
+    add_custom_target(ccgen-planck-kernels
+        DEPENDS ${_ccgen_planck_outputs} ${_ccgen_ccsd_t_output} ${_ccgen_rank2_output})
 
     # The UCC emit is a separate add_custom_command with its own OUTPUT, not a
     # POST_BUILD step on the target above: POST_BUILD commands are tied to

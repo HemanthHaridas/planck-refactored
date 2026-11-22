@@ -1,5 +1,4 @@
 #include "post_hf/cc/ccsd.h"
-#include "post_hf/cc/ccsd_t.h"
 
 #include <Eigen/Core>
 
@@ -660,26 +659,6 @@ namespace HartreeFock::Correlation::CC
                     HartreeFock::LogLevel::Info,
                     "RCCSD :",
                     std::format("Converged in {} iterations.", iter));
-
-                // (T) on the spatial projection of the converged spin-orbital
-                // amplitudes (docs/CCSD_T_SCOPE.md step 2).
-                if (calculator._scf._cc_triples)
-                {
-                    auto spatial_t = project_rccsd_amplitudes_to_spatial(so_amps);
-                    if (!spatial_t)
-                        return std::unexpected("RCCSD(T): " + spatial_t.error());
-                    const auto t_start = std::chrono::steady_clock::now();
-                    auto e_t = compute_rccsd_t_energy(calculator, shell_pairs, *spatial_t);
-                    if (!e_t)
-                        return std::unexpected(e_t.error());
-                    const double t_sec = std::chrono::duration<double>(
-                        std::chrono::steady_clock::now() - t_start).count();
-                    HartreeFock::Logger::logging(
-                        HartreeFock::LogLevel::Info, "RCCSD(T) :",
-                        std::format("E_corr(CCSD) = {:.10f}  E(T) = {:.10f}  t={:.3f}s",
-                                    energy, *e_t, t_sec));
-                    calculator._correlation_energy = energy + *e_t;
-                }
 
                 // X5.1: persist the converged amplitudes to a .ccamp sidecar,
                 // projected to the spatial layout the generated arbitrary-order

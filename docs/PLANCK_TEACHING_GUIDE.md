@@ -6115,7 +6115,9 @@ member and no new driver branch. The ceiling is `PLANCK_CC_MAXORDER` alone.
 
 | `correlation` keyword | rank | route |
 |---|---|---|
-| `cc3` / `ccsdt_gen` | 3 | generated **R**CC — needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` |
+| `cc2` / `ccsd_gen` | 2 | generated **R**CC, in every build |
+| `ccsd(t)` | 2 + (T) | `cc2`, then the restricted perturbative triples |
+| `cc3` / `ccsdt_gen` | 3 | generated RCC — needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` |
 | `ccsdtq` / `cc4` | 4 | generated RCC (the usual entry) |
 | `ccsdtqp` / `cc5`, `cc6` | 5, 6 | generated RCC |
 | `ucc2` / `uccsd_gen` | 2 | generated **U**CC — needs `-DPLANCK_CC_UCC=ON` |
@@ -6124,10 +6126,15 @@ member and no new driver branch. The ceiling is `PLANCK_CC_MAXORDER` alone.
 
 Two asymmetries that look like oversights and are not:
 
-- **There is no generated rank-2 RCC keyword**, because the hand-written RCCSD
-  already covers it — a generated `cc2` would have no consumer. `ucc2` *does*
-  exist, because it is the comparison against hand-written UCCSD that validated
-  the UCC route (it matches exactly).
+- **Both `ccsd` and `cc2` exist.** `ccsd` runs the hand-written
+  spin-orbital RCCSD; `cc2` runs the generated spatial one, built in every
+  build. For a long time there was no generated rank 2, because the
+  hand-written RCCSD covered it and a generated `cc2` had no consumer. (T)
+  became that consumer: the generated route hands spatial t1/t2 straight to
+  the triples kernel, and it is 48–59× faster, so `ccsd(t)` runs it. `ucc2`
+  exists in every UCC build, because it is the comparison against
+  hand-written UCCSD that validated the UCC route (it matches exactly), and
+  it feeds `uccsd(t)`.
 - **`cc3` is not the same as `ccsdt`.** `ccsdt` runs the hand-written solver;
   `cc3` runs the generated one, which produces *spatial* amplitudes and can
   therefore write a `.ccamp` seed that a later `cc4` run warm-starts from.
@@ -7234,10 +7241,13 @@ the two differ by the SCF residual. Using `mf.mo_energy` on C1 H\(_2\)O\(_2\)
 Compare like with like: the denominator must come from the same orbital
 energies the CCSD amplitudes were solved with.
 
-**Running it.** `correlation ccsd(t)` runs the hand-written RCCSD. At
-convergence, the driver projects the amplitudes to the spatial layout and
-calls `compute_rccsd_t_energy` (`src/post_hf/cc/ccsd_t.cpp`), which evaluates
-the generated \(W\) and \(V\) kernels from `ccsd_t_planck_generated.cpp`.
+**Running it.** `correlation ccsd(t)` runs the generated spatial RCCSD
+(`cc2`). At convergence `run_rccgen` passes its t1/t2 to
+`compute_rccsd_t_energy` (`src/post_hf/cc/ccsd_t.cpp`), which evaluates the
+generated \(W\) and \(V\) kernels from `ccsd_t_planck_generated.cpp`. Until
+2026-11-22 it ran the hand-written spin-orbital RCCSD and projected its
+amplitudes to the spatial layout. Both routes give the same E(T) to every
+printed digit, but the spin-orbital solver was 48–59× slower.
 
 It matches PySCF's CCSD(T) to every printed digit on water (STO-3G and 6-31G)
 and C1 H\(_2\)O\(_2\) 6-31G (`*_rccsd_t_*`). One trap appeared while setting

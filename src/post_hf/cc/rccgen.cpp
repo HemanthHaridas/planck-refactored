@@ -236,12 +236,13 @@ namespace HartreeFock::Correlation::CC
         // registry are both rank-generic, so a single call site serves every rank
         // the build generated. Rank 3 through this path (Route B) is what lets a
         // ccsdt_gen run write a SPATIAL .ccamp that a later cc4 run seeds from.
-        constexpr int generated_floor = PLANCK_CC_ARBITRARY_LOWER_RANKS ? 2 : 4;
+        // Rank 2 is generated in every build; the registry refuses ranks this
+        // build did not generate (rank 3 without the companion, rank > MAXORDER).
         const int rank = calculator._scf._cc_generated_rank;
-        if (rank < generated_floor)
+        if (rank < 2)
             return std::unexpected(std::format(
-                "run_rccgen: generated arbitrary-order RCC path requires rank >= {}, got {}.",
-                generated_floor, rank));
+                "run_rccgen: generated arbitrary-order RCC path requires rank >= 2, got {}.",
+                rank));
 
         const std::string method = rcc_method_label(rank);
         const std::string tag = method + " :";
@@ -286,7 +287,7 @@ namespace HartreeFock::Correlation::CC
 
         calculator._correlation_energy = solve_res->correlation_energy;
 
-        // (T) on the converged spatial t1/t2 (ccsd(t)_gen, docs/CCSD_T_SIZE_SCOPE.md).
+        // (T) on the converged spatial t1/t2 (correlation ccsd(t), docs/CCSD_T_SCOPE.md).
         if (calculator._scf._cc_triples)
         {
             if (rank != 2)

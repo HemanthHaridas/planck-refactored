@@ -23,9 +23,10 @@
 #ifndef PLANCK_CC_ARBITRARY_LOWER_RANKS
 #define PLANCK_CC_ARBITRARY_LOWER_RANKS 0
 #endif
-#if PLANCK_CC_ARBITRARY_LOWER_RANKS
-// Rank 2: spatial RCCSD for ccsd_gen / ccsd(t) (docs/CCSD_T_SIZE_SCOPE.md route A).
+// Rank 2: spatial RCCSD behind ccsd(t) / cc2, generated in every build
+// (docs/CCSD_T_SIZE_SCOPE.md route A).
 #include "generated/cc/ccsd_arbitrary_planck_generated.cpp"
+#if PLANCK_CC_ARBITRARY_LOWER_RANKS
 #include "generated/cc/ccsdt_arbitrary_planck_generated.cpp"
 #endif
 #if PLANCK_CC_MAXORDER >= 4
@@ -119,22 +120,25 @@ namespace HartreeFock::Correlation::CC
     std::expected<GeneratedArbitraryOrderKernels, std::string>
     make_generated_rcc_kernels(int rank)
     {
-        // The generated tensor path normally begins at CCSDTQ (rank 4); ranks 2/3
-        // use the hand-written backends. When the rank-3 arbitrary companion is
-        // built (-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON) rank 3 also routes here as
-        // a spatial seed source for the cc4 warm-start.
-        constexpr int generated_floor = PLANCK_CC_ARBITRARY_LOWER_RANKS ? 2 : 4;
-        if (rank < generated_floor)
+        // Rank 2 (the CCSD behind ccsd(t)) is generated in every build. Rank 3
+        // needs the arbitrary companion (-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON);
+        // without it CCSDT uses the hand-written backends. Ranks >= 4 follow
+        // PLANCK_CC_MAXORDER.
+        if (rank < 2)
             return std::unexpected(std::format(
                 "make_generated_rcc_kernels: rank {} has no generated tensor "
-                "kernel path (below the generated floor {}).",
-                rank, generated_floor));
+                "kernel path (the generated floor is 2).",
+                rank));
+        if (rank == 3 && !PLANCK_CC_ARBITRARY_LOWER_RANKS)
+            return std::unexpected(
+                "Generated rank-3 CC kernels are not available in this build. "
+                "Reconfigure with -DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON and rebuild.");
 
         switch (rank)
         {
-#if PLANCK_CC_ARBITRARY_LOWER_RANKS
         case 2:
             return make_generated_ccsd_kernels();
+#if PLANCK_CC_ARBITRARY_LOWER_RANKS
         case 3:
             return make_generated_ccsdt_kernels();
 #endif

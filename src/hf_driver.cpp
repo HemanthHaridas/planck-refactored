@@ -1340,8 +1340,9 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                     const std::string method_label =
                         (calculator._correlation == HartreeFock::PostHF::RMP2)      ? "MP2"
                         : (calculator._correlation == HartreeFock::PostHF::UMP2)    ? "MP2"
-                        : (calculator._correlation == HartreeFock::PostHF::RCCSD)
-                            ? (calculator._scf._cc_triples ? "RCCSD(T)" : "RCCSD")
+                        : (calculator._correlation == HartreeFock::PostHF::RCCSDTQ &&
+                           calculator._scf._cc_triples)                             ? "RCCSD(T)"
+                        : (calculator._correlation == HartreeFock::PostHF::RCCSD)   ? "RCCSD"
                         : (calculator._correlation == HartreeFock::PostHF::UCCSD)   ? "UCCSD"
                         : (calculator._correlation == HartreeFock::PostHF::RCCSDT)  ? "RCCSDT"
                         : (calculator._correlation == HartreeFock::PostHF::UCCSDT)  ? "UCCSDT"

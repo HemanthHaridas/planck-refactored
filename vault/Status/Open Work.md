@@ -40,9 +40,10 @@ teaching code) reorders it.
 
 1. **CCSD(T).** It is the benchmark method users ask for first.
    Restricted and UHF (T) landed 2026-11-20, batched and threaded, and equal
-   PySCF in Cartesian and spherical bases. Remaining: a faster CCSD for
-   larger systems (the spin-orbital RCCSD and the generated UCCSD limit
-   size, not (T)), and ROHF-(T).
+   PySCF in Cartesian and spherical bases. Since 2026-11-22 `ccsd(t)` runs
+   the generated spatial RCCSD (48–59× faster than the spin-orbital one).
+   Remaining: the size ladder (where the generated RCCSD and UCCSD stop),
+   and ROHF-(T).
    Scope: `docs/CCSD_T_SCOPE.md`.
 2. **SCF robustness on medium systems.** 32-water RKS hits `max_cycles`
    (§2, DFT). Scope: `docs/SCF_CONVERGENCE_MEDIUM_SYSTEMS_SCOPE.md`.
@@ -202,9 +203,11 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   `-DPLANCK_CC_UCC=ON`. System size is now limited by the CCSD, not by (T).
   Open:
   - ROHF-(T), after semicanonical ROHF-CC;
-  - a spatial RCCSD for larger `ccsd(t)` systems (`docs/CCSD_T_SIZE_SCOPE.md`:
-    try the generated rank-2 RCC route first; it is already emitted, but the
-    generated floor is 3, so nothing runs it).
+  - the size ladder for `ccsd(t)` (`docs/CCSD_T_SIZE_SCOPE.md` step 0).
+    Since 2026-11-22 `ccsd(t)` runs the generated spatial RCCSD (built in
+    every build), 48–59× faster than the hand-written spin-orbital one;
+    where it now stops, and whether the AO ERI tensor binds first, is
+    unmeasured.
   - CCSD[T], CCSDT(Q), CCSDTQ(P) and the Λ variants
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen
     today; (Q) is limited by the generated CCSDT's cost, and Λ needs new
