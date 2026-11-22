@@ -203,19 +203,18 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   `-DPLANCK_CC_UCC=ON`. System size is now limited by the CCSD, not by (T).
   Open:
   - ROHF-(T), after semicanonical ROHF-CC;
-  - size (`docs/CCSD_T_SIZE_SCOPE.md`). Step 0 (2026-11-22): the AO ERI
-    tensor binds first, through its copies, not the CC: `run_rhf` held it
-    twice, and the spherical transform held its Cartesian input to the end
-    (~2.7 nc⁴). Step 1 (in progress, uncommitted) builds the SCF tensor
-    straight into `calculator._eri` and lets the transform free its input;
-    the Cartesian SCF peak drops by one tensor, 46 regression cases pass.
-    The water dimer / cc-pVTZ still does not fit: footprint peak 6.7 GB,
-    paged (RSS hid it). An allocation profile puts the peak in the CC
-    integral-block build: the AO tensor plus `transform_eri`'s full nb³v and
-    nb²v² intermediates plus `vvvv` (~5 GB there). Next: batch that
-    transform, let (T) reuse the CCSD's blocks (it rebuilds them), and free
-    the ~112 MiB of thread-local ERI scratch. (T) is now ~42 % of the CC
-    time.
+  - size (`docs/CCSD_T_SIZE_SCOPE.md`). The AO integral handling binds,
+    not the CC. Water dimer / cc-pVTZ `ccsd(t)` now completes on this
+    8 GiB machine (694 s, footprint peak 5.5 GB, still paging); it did not
+    fit before steps 1–2. Done: 0 measure; 1 one SCF copy of the ERI
+    tensor, transform frees its input (`885109ce`); 2 batched
+    `transform_eri` (uncommitted, bitwise identical, no time cost; its
+    114-case regression pass is running). Next: 3 (T) reuses the CCSD's
+    blocks (its rebuild set the 5.5 GB peak); 4 free the ~112 MiB of
+    thread-local ERI scratch; 5 free the AO tensor once the blocks exist
+    (needs 3); 7 re-measure (needs 3–5). 6 (direct spherical ERI build),
+    8 ((T) kernels; (T) is 42–57 % of the CC time) and 9 (CCSD time) are
+    conditional on 7.
   - CCSD[T], CCSDT(Q), CCSDTQ(P) and the Λ variants
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen
     today; (Q) is limited by the generated CCSDT's cost, and Λ needs new

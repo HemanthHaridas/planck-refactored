@@ -80,41 +80,38 @@ namespace HartreeFock::Correlation
         const std::size_t n3 = static_cast<std::size_t>(C3.cols());
         const std::size_t n4 = static_cast<std::size_t>(C4.cols());
 
-        // Keep the intermediates as flat buffers so every quarter transform uses
-        // the same row-major indexing convention as the source AO tensor.
+        // Flat row-major buffers, same indexing convention as the AO tensor.
         const std::size_t nb2 = nb * nb;
         const std::size_t nb3 = nb * nb2;
 
-        // T1[i,ν,λ,σ] = Σ_μ C1(μ,i) * eri[μνλσ]   shape: n1 × nb × nb × nb
+        // Batched over the leading index i: each i runs all four quarter
+        // transforms into its own output slice, so the intermediates are slabs
+        // (nb³ + n2·nb² + n2·n3·nb doubles) instead of full n1-sized tensors.
+        // Building the CC vvvv block kept n1·nb³ and n1·n2·nb² alive at once
+        // (1.3 + 1.2 GB on water dimer / cc-pVTZ; docs/CCSD_T_SIZE_SCOPE.md).
+        // Every element still sums its contracted index in ascending order, so
+        // the result is bitwise identical to the unbatched form.
         //
-        // Each quarter transform is parallelized over its two leading indices,
-        // which stride whole disjoint output slices. No thread shares a write
-        // target and the inner accumulation order is unchanged, so the result is
-        // identical to the serial version — this is a scheduling change only.
-        // transform_eri is never called from inside an OpenMP parallel region
-        // (all call sites are serial), so there is no nesting / over-subscription
-        // concern.
-        //
-        // collapse(2) + schedule(dynamic): the leading index alone is the number
-        // of occupied MOs (n1), which is O(10) — too few work units to fill 8+
-        // threads without leaving cores idle at the barrier (profiled at ~38% idle
-        // on the MP2 transform). Collapsing the first two loops widens the
-        // iteration space (n1·n2, n1·nb, …) so dynamic scheduling can balance it.
-        std::vector<double> T1(n1 * nb * nb * nb, 0.0);
-#ifdef USE_OPENMP
-#pragma omp parallel for collapse(2) schedule(dynamic)
-#endif
-        //
-        // The contracted index sits outside the contiguous sigma loop, so both
-        // tensors stream with unit stride; each element still sums over the
-        // contracted index in ascending order, so the result is unchanged. With
-        // mu innermost the AO read strode nb^3 and this quarter was 37 % of a
-        // water/cc-pVTZ CASSCF run. Quarters 2 and 3 have the same shape.
+        // Within one i, each quarter is parallelized over two output indices
+        // that stride disjoint slices; no thread shares a write target.
+        // transform_eri is never called from inside an OpenMP parallel region.
+        // The contracted index sits outside the contiguous inner loop so both
+        // tensors stream with unit stride (with mu innermost the AO read strode
+        // nb³ and quarter 1 was 37 % of a water/cc-pVTZ CASSCF run).
+        std::vector<double> out(n1 * n2 * n3 * n4, 0.0);
+        std::vector<double> T1(nb3), T2(n2 * nb2), T3(n2 * n3 * nb);
+
         for (std::size_t i = 0; i < n1; ++i)
+        {
+            // T1[ν,λ,σ] = Σ_μ C1(μ,i) eri[μνλσ]   shape nb × nb × nb
+            std::fill(T1.begin(), T1.end(), 0.0);
+#ifdef USE_OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
             for (std::size_t nu = 0; nu < nb; ++nu)
                 for (std::size_t lam = 0; lam < nb; ++lam)
                 {
-                    double *t = T1.data() + i * nb3 + nu * nb2 + lam * nb;
+                    double *t = T1.data() + nu * nb2 + lam * nb;
                     for (std::size_t mu = 0; mu < nb; ++mu)
                     {
                         const double c = C1(mu, i);
@@ -124,62 +121,54 @@ namespace HartreeFock::Correlation
                     }
                 }
 
-        // T2[i,a,λ,σ] = Σ_ν C2(ν,a) * T1[i,ν,λ,σ]   shape: n1 × n2 × nb × nb
-        std::vector<double> T2(n1 * n2 * nb * nb, 0.0);
+            // T2[a,λ,σ] = Σ_ν C2(ν,a) T1[ν,λ,σ]   shape n2 × nb × nb
+            std::fill(T2.begin(), T2.end(), 0.0);
 #ifdef USE_OPENMP
-#pragma omp parallel for collapse(2) schedule(dynamic)
+#pragma omp parallel for collapse(2) schedule(static)
 #endif
-        for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
                 for (std::size_t lam = 0; lam < nb; ++lam)
                 {
-                    double *t = T2.data() + i * n2 * nb * nb + a * nb * nb + lam * nb;
+                    double *t = T2.data() + a * nb2 + lam * nb;
                     for (std::size_t nu = 0; nu < nb; ++nu)
                     {
                         const double c = C2(nu, a);
-                        const double *e = T1.data() + i * nb3 + nu * nb2 + lam * nb;
+                        const double *e = T1.data() + nu * nb2 + lam * nb;
                         for (std::size_t sig = 0; sig < nb; ++sig)
                             t[sig] += c * e[sig];
                     }
                 }
 
-        T1.clear();
-        T1.shrink_to_fit();
-
-        // T3[i,a,j,σ] = Σ_λ C3(λ,j) * T2[i,a,λ,σ]   shape: n1 × n2 × n3 × nb
-        std::vector<double> T3(n1 * n2 * n3 * nb, 0.0);
+            // T3[a,j,σ] = Σ_λ C3(λ,j) T2[a,λ,σ]   shape n2 × n3 × nb
+            std::fill(T3.begin(), T3.end(), 0.0);
 #ifdef USE_OPENMP
-#pragma omp parallel for collapse(2) schedule(dynamic)
+#pragma omp parallel for collapse(2) schedule(static)
 #endif
-        for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
                 for (std::size_t j = 0; j < n3; ++j)
                 {
-                    double *t = T3.data() + i * n2 * n3 * nb + a * n3 * nb + j * nb;
+                    double *t = T3.data() + a * n3 * nb + j * nb;
                     for (std::size_t lam = 0; lam < nb; ++lam)
                     {
                         const double c = C3(lam, j);
-                        const double *e = T2.data() + i * n2 * nb * nb + a * nb * nb + lam * nb;
+                        const double *e = T2.data() + a * nb2 + lam * nb;
                         for (std::size_t sig = 0; sig < nb; ++sig)
                             t[sig] += c * e[sig];
                     }
                 }
 
-        T2.clear();
-        T2.shrink_to_fit();
-
-        // out[i,a,j,b] = Σ_σ C4(σ,b) * T3[i,a,j,σ]   shape: n1 × n2 × n3 × n4
-        std::vector<double> out(n1 * n2 * n3 * n4, 0.0);
+            // out[i,a,j,b] = Σ_σ C4(σ,b) T3[a,j,σ]
+            double *o = out.data() + i * n2 * n3 * n4;
 #ifdef USE_OPENMP
-#pragma omp parallel for collapse(2) schedule(dynamic)
+#pragma omp parallel for collapse(2) schedule(static)
 #endif
-        for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
                 for (std::size_t j = 0; j < n3; ++j)
                     for (std::size_t b = 0; b < n4; ++b)
                         for (std::size_t sig = 0; sig < nb; ++sig)
-                            out[i * n2 * n3 * n4 + a * n3 * n4 + j * n4 + b] +=
-                                C4(sig, b) * T3[i * n2 * n3 * nb + a * n3 * nb + j * nb + sig];
+                            o[a * n3 * n4 + j * n4 + b] +=
+                                C4(sig, b) * T3[a * n3 * nb + j * nb + sig];
+        }
 
         return out;
     }
