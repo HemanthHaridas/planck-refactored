@@ -240,6 +240,40 @@ namespace
         return level_shift * (S - S * density * S);
     }
 
+    // The conventional ERI tensor, built once into calculator._eri: the SCF
+    // reads it there and post-HF reuses it, so there is one copy, not a local
+    // plus a cached one. The integral engine works in the Cartesian basis
+    // (nbasis_cart); in spherical mode the tensor is transformed with the same
+    // S-normalized C applied to S/H, and the Cartesian tensor is moved in so the
+    // transform frees it after its first quarter step.
+    std::expected<void, std::string> build_conventional_eri(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        std::size_t nbasis, std::size_t nbasis_cart)
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
+                                     std::format("Building ERI tensor ({:.1f} MB)",
+                                                 nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
+        calculator._eri.clear();
+        calculator._eri.shrink_to_fit();
+        std::vector<double> eri = _compute_2e(
+            shell_pairs, nbasis_cart, calculator._integral._engine,
+            HartreeFock::ERIKernel::Coulomb, 0.0, calculator._integral._tol_eri,
+            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        if (calculator._shells._spherical)
+        {
+            auto eri_sph = HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+                std::move(eri), calculator._shells._cart_to_sph, nbasis_cart);
+            if (!eri_sph)
+                return std::unexpected(eri_sph.error());
+            eri = std::move(*eri_sph);
+        }
+        calculator._eri = std::move(eri);
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
+        HartreeFock::Logger::blank();
+        return {};
+    }
+
 } // namespace
 
 // ─── Orthogonalization ────────────────────────────────────────────────────────
@@ -661,33 +695,10 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
                                      "RI-JK: density-fitted Fock build (dense ERI tensor skipped)");
     }
 
-    std::vector<double> eri;
     if (use_conventional && !calculator._scf._ri_jk)
-    {
-        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
-                                     std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
-        // The integral engine works in the Cartesian basis (nbasis_cart). In spherical
-        // mode the tensor is then transformed with the same (S-normalized) C applied to
-        // S/H, so every quantity SCF sees is consistently spherical. In Cartesian mode
-        // nbasis_cart == nbasis and no transform is applied.
-        eri = _compute_2e(shell_pairs, nbasis_cart, calculator._integral._engine,
-                          HartreeFock::ERIKernel::Coulomb, 0.0,
-                          calculator._integral._tol_eri,
-                          calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-
-        if (calculator._shells._spherical)
-        {
-            auto eri_sph = HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
-                eri, calculator._shells._cart_to_sph, nbasis_cart);
-            if (!eri_sph)
-                return std::unexpected(eri_sph.error());
-            eri = std::move(*eri_sph);
-        }
-
-        calculator._eri = eri; // persist for post-HF use
-        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
-        HartreeFock::Logger::blank();
-    }
+        if (auto built = build_conventional_eri(calculator, shell_pairs, nbasis, nbasis_cart); !built)
+            return std::unexpected(built.error());
+    const std::vector<double> &eri = calculator._eri; // read only on the conventional path
 
     const double tol_eri = calculator._integral._tol_eri;
 
@@ -1281,33 +1292,10 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
                                      "RI-JK: density-fitted Fock build (dense ERI tensor skipped)");
     }
 
-    std::vector<double> eri;
     if (use_conventional && !calculator._scf._ri_jk)
-    {
-        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
-                                     std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
-        // The integral engine works in the Cartesian basis (nbasis_cart). In spherical
-        // mode the tensor is then transformed with the same (S-normalized) C applied to
-        // S/H, so every quantity SCF sees is consistently spherical. In Cartesian mode
-        // nbasis_cart == nbasis and no transform is applied.
-        eri = _compute_2e(shell_pairs, nbasis_cart, calculator._integral._engine,
-                          HartreeFock::ERIKernel::Coulomb, 0.0,
-                          calculator._integral._tol_eri,
-                          calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-
-        if (calculator._shells._spherical)
-        {
-            auto eri_sph = HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
-                eri, calculator._shells._cart_to_sph, nbasis_cart);
-            if (!eri_sph)
-                return std::unexpected(eri_sph.error());
-            eri = std::move(*eri_sph);
-        }
-
-        calculator._eri = eri; // persist for post-HF use
-        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
-        HartreeFock::Logger::blank();
-    }
+        if (auto built = build_conventional_eri(calculator, shell_pairs, nbasis, nbasis_cart); !built)
+            return std::unexpected(built.error());
+    const std::vector<double> &eri = calculator._eri; // read only on the conventional path
 
     // ── Combined-spin DIIS ────────────────────────────────────────────────────
     // Alpha and beta Fock are coupled through the shared Coulomb term, so they are
@@ -2127,29 +2115,10 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
                                      "RI-JK: density-fitted Fock build (dense ERI tensor skipped)");
     }
 
-    std::vector<double> eri;
     if (use_conventional && !calculator._scf._ri_jk)
-    {
-        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
-                                     std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
-        // Built in the Cartesian basis (nbasis_cart), then transformed to spherical
-        // with the same S-normalized C used for S/H. Cartesian mode: no transform.
-        eri = _compute_2e(shell_pairs, nbasis_cart, calculator._integral._engine,
-                          HartreeFock::ERIKernel::Coulomb, 0.0,
-                          calculator._integral._tol_eri,
-                          calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-        if (calculator._shells._spherical)
-        {
-            auto eri_sph = HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
-                eri, calculator._shells._cart_to_sph, nbasis_cart);
-            if (!eri_sph)
-                return std::unexpected(eri_sph.error());
-            eri = std::move(*eri_sph);
-        }
-        calculator._eri = eri;
-        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
-        HartreeFock::Logger::blank();
-    }
+        if (auto built = build_conventional_eri(calculator, shell_pairs, nbasis, nbasis_cart); !built)
+            return std::unexpected(built.error());
+    const std::vector<double> &eri = calculator._eri; // read only on the conventional path
 
     HartreeFock::DIISState diis;
     diis.max_vecs = calculator._scf._DIIS_dim;

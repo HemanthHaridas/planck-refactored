@@ -203,11 +203,19 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   `-DPLANCK_CC_UCC=ON`. System size is now limited by the CCSD, not by (T).
   Open:
   - ROHF-(T), after semicanonical ROHF-CC;
-  - the size ladder for `ccsd(t)` (`docs/CCSD_T_SIZE_SCOPE.md` step 0).
-    Since 2026-11-22 `ccsd(t)` runs the generated spatial RCCSD (built in
-    every build), 48–59× faster than the hand-written spin-orbital one;
-    where it now stops, and whether the AO ERI tensor binds first, is
-    unmeasured.
+  - size (`docs/CCSD_T_SIZE_SCOPE.md`). Step 0 (2026-11-22): the AO ERI
+    tensor binds first, through its copies, not the CC: `run_rhf` held it
+    twice, and the spherical transform held its Cartesian input to the end
+    (~2.7 nc⁴). Step 1 (in progress, uncommitted) builds the SCF tensor
+    straight into `calculator._eri` and lets the transform free its input;
+    the Cartesian SCF peak drops by one tensor, 46 regression cases pass.
+    The water dimer / cc-pVTZ still does not fit: footprint peak 6.7 GB,
+    paged (RSS hid it). An allocation profile puts the peak in the CC
+    integral-block build: the AO tensor plus `transform_eri`'s full nb³v and
+    nb²v² intermediates plus `vvvv` (~5 GB there). Next: batch that
+    transform, let (T) reuse the CCSD's blocks (it rebuilds them), and free
+    the ~112 MiB of thread-local ERI scratch. (T) is now ~42 % of the CC
+    time.
   - CCSD[T], CCSDT(Q), CCSDTQ(P) and the Λ variants
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen
     today; (Q) is limited by the generated CCSDT's cost, and Λ needs new

@@ -64,6 +64,15 @@ namespace HartreeFock
             std::size_t n_cart,
             std::size_t max_n_cart = 150);
 
+        // Same transform for a caller that no longer needs the Cartesian tensor:
+        // it is freed after the first quarter transform, which lowers the peak
+        // from n_cart⁴(1 + f + f²) to n_cart⁴(1 + f), f = n_sph / n_cart.
+        std::expected<std::vector<double>, std::string> transform_eri_cart_to_sph(
+            std::vector<double> &&eri_cart,
+            const Eigen::MatrixXd &C,
+            std::size_t n_cart,
+            std::size_t max_n_cart = 150);
+
         // ── Density / energy-weighted density: spherical → Cartesian lift ─────────
         //
         // Given an AO-basis matrix M_sph defined in the spherical (2L+1 per shell)

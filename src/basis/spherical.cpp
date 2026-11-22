@@ -274,9 +274,14 @@ HartreeFock::BasisFunctions::build_cart_to_sph(const HartreeFock::Basis &basis)
     return C;
 }
 
-std::expected<std::vector<double>, std::string>
-HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+namespace
+{
+// One implementation for both overloads. `release` is the caller's Cartesian
+// tensor when the caller is done with it (the rvalue overload): it is freed
+// right after step 1, so the peak is the input plus t1, not input + t1 + t2.
+std::expected<std::vector<double>, std::string> transform_eri_cart_to_sph_impl(
     const std::vector<double> &eri_cart,
+    std::vector<double> *release,
     const Eigen::MatrixXd &C,
     std::size_t n_cart,
     std::size_t max_n_cart)
@@ -324,6 +329,11 @@ HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
             for (std::size_t k = 0; k < nc * nc * nc; ++k)
                 dst[k] += c * src[k];
         }
+    if (release)
+    {
+        release->clear();
+        release->shrink_to_fit();
+    }
 
     // Step 2: t2[p,q,λ,σ] = Σ_ν C[q,ν] t1[p,ν,λ,σ]   shape ns·ns·nc·nc
     std::vector<double> t2(ns * ns * nc * nc, 0.0);
@@ -384,6 +394,27 @@ HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
     }
 
     return out;
+}
+} // namespace
+
+std::expected<std::vector<double>, std::string>
+HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+    const std::vector<double> &eri_cart,
+    const Eigen::MatrixXd &C,
+    std::size_t n_cart,
+    std::size_t max_n_cart)
+{
+    return transform_eri_cart_to_sph_impl(eri_cart, nullptr, C, n_cart, max_n_cart);
+}
+
+std::expected<std::vector<double>, std::string>
+HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+    std::vector<double> &&eri_cart,
+    const Eigen::MatrixXd &C,
+    std::size_t n_cart,
+    std::size_t max_n_cart)
+{
+    return transform_eri_cart_to_sph_impl(eri_cart, &eri_cart, C, n_cart, max_n_cart);
 }
 
 std::expected<Eigen::MatrixXd, std::string>
