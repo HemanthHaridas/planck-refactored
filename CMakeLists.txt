@@ -790,6 +790,11 @@ if(Python3_Interpreter_FOUND)
         --engine ${PLANCK_CC_ENGINE}
         --ucc
     )
+    # Same dressing axis as the RCC emit: the derived route factorizes whatever
+    # manifold reaches it, spin-resolved UCC terms included.
+    if(PLANCK_CC_DRESS_OPERATORS)
+        list(APPEND _ccgen_ucc_kernel_args --dressing ${PLANCK_CC_DRESSING})
+    endif()
 
     # Every ccgen python source the generator can reach, so an edit anywhere in
     # the package invalidates the generated TUs. CONFIGURE_DEPENDS matches the

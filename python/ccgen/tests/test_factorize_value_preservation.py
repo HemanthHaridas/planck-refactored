@@ -708,3 +708,137 @@ class SharedRepresentativeIsTheDefectTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- UCC -------------------------------------------------------------------
+#
+# O6 named this gate as the precondition for trusting the derived route on
+# spin-blocked input. Every orbital count differs (noa != nva != nob != nvb),
+# so a slot read with the wrong spin or space raises or mismatches instead of
+# silently staying in bounds -- the same reason the GCC fixture is 3x4.
+UCC_DIMS = {"noa": 3, "nva": 5, "nob": 4, "nvb": 6}
+
+
+def _ucc_eval(term, tensors, operators):
+    """`ucc_residual_einsum` with derived operators resolved by name.
+
+    Operators are stored in their declared slot order and read directly;
+    everything else goes through `ucc_resolve_factor`, which slices `v`/`f`
+    by each slot's (space, spin)."""
+    import string
+
+    from ccgen.tests.residual_eval import ucc_resolve_factor
+
+    pool = iter(string.ascii_letters)
+    letters = {}
+    for idx in list(term.free_indices) + list(term.summed_indices):
+        letters[idx] = next(pool)
+    subs, ops = [], []
+    for f in term.factors:
+        subs.append("".join(letters[i] for i in f.indices))
+        ops.append(operators[f.name] if f.name in operators
+                   else ucc_resolve_factor(f, tensors, UCC_DIMS))
+    ext = ([i for i in term.free_indices if i.space == "vir"]
+           + [i for i in term.free_indices if i.space == "occ"])
+    out = np.einsum(",".join(subs) + "->" + "".join(letters[i] for i in ext),
+                    *ops, optimize=True)
+    return out * float(term.coeff)
+
+
+def _ucc_build_operators(specs, tensors):
+    built = {}
+    for spec in specs:          # dependency-ordered, like the emitter's builders
+        arr = None
+        for dt in spec.definition_terms:
+            part = _ucc_eval(dt, tensors, built)
+            ext = ([i for i in dt.free_indices if i.space == "vir"]
+                   + [i for i in dt.free_indices if i.space == "occ"])
+            pos = {idx: k for k, idx in enumerate(ext)}
+            assert set(pos) == set(spec.indices), spec.name
+            part = np.transpose(part, [pos[i] for i in spec.indices])
+            arr = part if arr is None else arr + part
+        built[spec.name] = arr
+    return built
+
+
+def _ucc_disagreements(method, mutate=None):
+    """(bad, rewritten, total) for the production UCC composition:
+    `ucc_adapt_equations` -> `factorize_equations(spatial=False,
+    merge_transposes=True)`, exactly what `print_cpp_planck` runs."""
+    from ccgen.optimization.factorize import factorize_equations
+    from ccgen.spin import ucc_adapt_equations
+    from ccgen.tests.residual_eval import ucc_random_tensors
+
+    eqs = ucc_adapt_equations(
+        generate_cc_equations(method, engine="diagram", canonical_fock=True))
+    rewritten, specs = factorize_equations(
+        eqs, spatial=False, merge_transposes=True)
+    specs = list(specs or [])
+    if mutate is not None:
+        specs = mutate(specs)
+    tensors = ucc_random_tensors(UCC_DIMS["noa"], UCC_DIMS["nva"],
+                                 UCC_DIMS["nob"], UCC_DIMS["nvb"], seed=0)
+    built = _ucc_build_operators(specs, tensors)
+    bad, n_rewritten, total = [], 0, 0
+    for target, terms in eqs.items():
+        assert len(terms) == len(rewritten[target]), target
+        for t, r in zip(terms, rewritten[target]):
+            total += 1
+            if any(f.name in built for f in r.factors):
+                n_rewritten += 1
+            src, ksrc = _canon(t, _ucc_eval(t, tensors, {}))
+            got, kgot = _canon(r, _ucc_eval(r, tensors, built))
+            if ksrc != kgot or src.shape != got.shape:
+                bad.append((target, t, f"layout {kgot} != {ksrc}"))
+                continue
+            d = float(np.linalg.norm(src - got))
+            if d > 1e-10 * max(1.0, float(np.linalg.norm(src))):
+                bad.append((target, t, f"||diff|| = {d:.3e}"))
+    return bad, n_rewritten, total
+
+
+class UCCRewritePreservesValueTests(unittest.TestCase):
+    """The derived route on spin-blocked UCC terms, with transpose merging on.
+
+    UCC factor names carry their spin block (`v_abab`), which
+    `tensor_symmetries` does not list, so merging treats them as opaque: it
+    can miss a merge, never make one across blocks. This gate is what checks
+    that claim, and the rest of the rewrite, by value."""
+
+    def _assert_clean(self, method, min_rewritten):
+        bad, n_rewritten, total = _ucc_disagreements(method)
+        self.assertGreater(n_rewritten, min_rewritten,
+                           f"{method}: too few rewritten terms -- gate is vacuous")
+        self.assertEqual(
+            bad, [],
+            f"UCC {method}: {len(bad)}/{total} terms do not reproduce:\n"
+            + "\n".join(f"  {tg} {why}: {t!r}" for tg, t, why in bad[:5]))
+
+    def test_ccsd_rewrite_is_value_preserving(self):
+        self._assert_clean("ccsd", 200)
+
+    def test_ccsdt_rewrite_is_value_preserving(self):
+        self._assert_clean("ccsdt", 1500)
+
+    def test_gate_catches_a_transposed_operator(self):
+        """Mutation control: swap two same-spin, same-space slots of one
+        operator's declared order, so every shape stays legal and only the
+        values move. The gate must report it as a disagreement."""
+        from ccgen.spin import ucc_term_index_spins
+
+        def swap_one(specs):
+            for k, s in enumerate(specs):
+                idx = list(s.indices)
+                spin = ucc_term_index_spins(s.definition_terms[0])
+                for a in range(len(idx)):
+                    for b in range(a + 1, len(idx)):
+                        if (idx[a].space == idx[b].space
+                                and spin[idx[a].name] == spin[idx[b].name]):
+                            idx[a], idx[b] = idx[b], idx[a]
+                            import dataclasses
+                            specs = list(specs)
+                            specs[k] = dataclasses.replace(s, indices=tuple(idx))
+                            return specs
+            raise AssertionError("no operator with two same-space slots")
+        bad, _, _ = _ucc_disagreements("ccsd", mutate=swap_one)
+        self.assertGreater(len(bad), 0, "a transposed operator went unnoticed")

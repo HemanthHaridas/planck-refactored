@@ -23,7 +23,8 @@ contractions are the same operator exactly when they are transpose-equivalent un
 sign-preserving permutation, decided symbolically (not by comparing arrays), and this now merges
 end to end in the emitted C++ (27→19 builders on `ccsd`, 254→69 at rank 4), value-gated at 0/2536
 disagreements on quadruples. The merge ratio **grows with rank** (1.4x → 2.1x → 3.7x). **O6 (UCC
-carry-over) is measured and open**: naive tag-blind matching is unsound.
+carry-over), derivation route: wired 2026-11-22** and value-gated (see the O6 section); naive
+tag-blind *recognition* matching stays unsound.
 
 ## Where the logic lives
 
@@ -397,11 +398,19 @@ symmetry there and not for `abab`). Not a correctness defect — the redundant a
 values — but it is the same spin-blocked ERI question, and fixing it before O6 means guessing at
 the fold rule. Pre-existing at `b82fc69`. An unexpected pass means the fold landed.
 
-When O6 is started, it needs a spin-resolved fingerprint set recognizing the seeded operators per
-block, with **zero** cases of one emitted name covering two spin-tagged contractions — the
-`test_one_name_one_contraction_shape` invariant extended to spin tags. No UCC numeric gate for the
-factorizer exists yet; `test_factorize_value_preservation` would need a UCC evaluator
-(`ucc_residual_einsum` + `ucc_closed_shell_tensors`'s block bundle) before any of this is trusted.
+**Answered for the derivation route (2026-11-22).** The seeded fingerprints turned out not to be
+needed: the derivation route keys operators on contraction shape with the factors' full tagged
+names, so it never needed a spin-resolved fingerprint set. Measured on UCC CCSDT, 333 operators:
+zero names covering two spin-tagged contractions, zero operators whose indices change spin between
+definition terms. Merging is sound by construction here — `tensor_symmetries` lists only the bare
+`v`/`t2`, so tagged names are opaque (a missed merge, never a false one). The UCC value gate
+(`UCCRewritePreservesValueTests`, built on `ucc_residual_einsum`'s resolver with `ucc_random_tensors`,
+not the closed-shell bundle) is clean at CCSD and CCSDT and mutation-checked. Emitter work and
+end-to-end status: `docs/CCGEN_UNRESTRICTED_CC.md`, "the derived operators reach UCC".
+
+Still open: spin-resolved symmetry entries for `tensor_symmetries` (`v_aaaa` has `v`'s even
+permutations; `v_abab` only the bra↔ket swap) — this would add merges, not correctness. Recognition
+on UCC stays retired with the rest of recognition.
 
 ## Related but separate outcome: why this is coupled to, not merged into, the dressing scope
 

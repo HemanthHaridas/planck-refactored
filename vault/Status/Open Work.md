@@ -477,8 +477,18 @@ None of these blocks correctness. Take each up only with a current profile.
 ## 6. ccgen
 
 - UCC: `wick`-engine coverage and a durable amplitude-antisymmetry gate.
-- O6: spin-tag-aware operator reuse and dressing, with numeric UCC
-  validation.
+- **Derived operators on UCC (O6), wired 2026-11-22**
+  (`docs/CCGEN_UNRESTRICTED_CC.md`, "the derived operators reach UCC"). A
+  dressed build now dresses the UCC emit too, and the factorizer's UCC output
+  is value-gated (`UCCRewritePreservesValueTests`); the UCC regression
+  gates pass on the dressed build. Open:
+  - a timing against an undressed build of the same commit;
+  - the external-symmetry orbit fold for UCC, scoped in
+    `docs/CCGEN_UCC_ORBIT_FOLD_SCOPE.md`: every same-spin doubles and all
+    four triples blocks fold (CCSDT 2484 → 802 terms, derived residual
+    3.5× fewer modelled FLOPs); RCC folds `aab` only;
+  - spin-resolved `tensor_symmetries` entries (`v_aaaa`, `v_abab`), which
+    would add merges.
 - Hand-written tensor-solver DIIS fragility, and a review of the small Be
   rank-4 reference offset before changing its pin.
 - Factorizer: decide whether a canonical tie-break should make factorization

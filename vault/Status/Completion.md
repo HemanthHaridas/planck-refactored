@@ -451,6 +451,26 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Derived CC operators on the generated UCC kernels (2026-11-22,
+  `docs/CCGEN_UNRESTRICTED_CC.md`, "the derived operators reach UCC").**
+  A dressed build (`-DPLANCK_CC_DRESS_OPERATORS=ON`) dressed only the RCC
+  emit; the UCC emit command passed no `--dressing`. It now does, and the
+  builders are spin-resolved:
+  - **Spin-resolved builders.** Four-count preamble, per-spin extents, no
+    closed-shell lowering.
+  - **Untagged factors.** One `factor_spins` slot table gives spins to
+    derived operators and scratch arrays.
+  - **Cost model.** Modelled CCSDT residual cost falls 224× (o = 5, v = 20),
+    the same as RCC.
+  - **O6 invariant.** It holds on all 333 operators (one name, one
+    spin-tagged contraction). Merging cannot cross spin blocks, because
+    tagged names have no symmetry entries.
+  - **Gates.** New `UCCRewritePreservesValueTests` (CCSD and CCSDT, every
+    rewritten term exact to 1e-10, mutation-checked). All eight UCC regression
+    cases pass, including `ucc4 == FCI` and `uccsd(t)` against PySCF.
+  - **Open.** A same-commit timing, and the orbit fold
+    (`docs/CCGEN_UCC_ORBIT_FOLD_SCOPE.md`).
+
 - **CCSD(T), restricted and unrestricted (2026-11-20,
   `docs/CCSD_T_SCOPE.md`).** `correlation ccsd(t)` runs the
   hand-written RCCSD. At convergence it adds (T) from the ccgen-generated W

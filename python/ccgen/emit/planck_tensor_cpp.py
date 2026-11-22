@@ -697,6 +697,7 @@ def _emit_terms(
     fuse_loops: int = 0,
     annotate: bool = True,
     omp_collapse: int = 0,
+    factor_spins: dict[str, tuple[str, ...]] | None = None,
 ) -> list[str]:
     """Emit the term bodies of a residual kernel.
 
@@ -721,7 +722,7 @@ def _emit_terms(
                 term, lhs="result", indent=4,
                 intermediate_names=intermediate_names,
                 arbitrary_amplitudes=arbitrary, ucc=ucc,
-                omp_collapse=omp_collapse))
+                omp_collapse=omp_collapse, factor_spins=factor_spins))
             if annotate:
                 lines.append("")
         return lines
@@ -757,7 +758,7 @@ def _emit_terms(
             term, lhs="result", indent=4,
             intermediate_names=intermediate_names,
             arbitrary_amplitudes=arbitrary, ucc=ucc,
-            omp_collapse=omp_collapse))
+            omp_collapse=omp_collapse, factor_spins=factor_spins))
         if annotate:
             lines.append("")
     return lines
@@ -918,8 +919,13 @@ def emit_planck_term(
     arbitrary_amplitudes: bool = False,
     ucc: bool = False,
     omp_collapse: int = 0,
+    factor_spins: dict[str, tuple[str, ...]] | None = None,
 ) -> str:
     """Emit a single algebraic term using Planck tensor accessors.
+
+    ``factor_spins`` (UCC only) gives the slot spins of factors whose names carry
+    no spin tag: derived operators (`W_...`) and a builder's scratch arrays. An
+    index that meets only such factors gets its spin from here.
 
     ``intermediate_names`` lists the materialized intermediates in scope (the
     kernel's specs) so their factors resolve as local references (D7.3).
@@ -952,7 +958,7 @@ def emit_planck_term(
     # `test_spin_adapted_ccsdtq_compiles_with_sector_accessor`, not by the RCC
     # SHA-256 pin -- that pin emits with spin_adapt=False and never sees this
     # path).
-    index_spins = ucc_term_index_spins(term) if ucc else {}
+    index_spins = _term_index_spins(term, factor_spins) if ucc else {}
 
     pad = " " * indent
     lines: list[str] = []
@@ -1271,7 +1277,8 @@ def _emit_kernel(
             lines.extend(bindings)
     lines.extend(_emit_terms(
         emitted_terms, intermediate_names, arbitrary, ucc, _fuse_loops_setting(),
-        omp_collapse=_omp_collapse_setting()))
+        omp_collapse=_omp_collapse_setting(),
+        factor_spins=_operator_slot_spins(required_intermediates) if ucc else None))
     lines.extend(_symmetrize_lines(result_type, free_indices, symmetrizer))
     lines.append("    return result;")
     lines.append("}")
@@ -1395,7 +1402,9 @@ def _emit_chunked_kernel(
             out.extend(bindings)
         out.extend(_emit_terms(
             chunk, intermediate_names, arbitrary, ucc, fuse, annotate=False,
-            omp_collapse=_omp_collapse_setting()))
+            omp_collapse=_omp_collapse_setting(),
+            factor_spins=(_operator_slot_spins(required_intermediates)
+                          if ucc else None)))
         out.append("}")
         out.append("")
 
@@ -1421,6 +1430,51 @@ def _emit_chunked_kernel(
     return "\n".join(out + body)
 
 
+def _term_index_spins(term, factor_spins) -> dict[str, str]:
+    """`ucc_term_index_spins`, plus positional spins from ``factor_spins`` for
+    untagged factors. A conflict means a slot table is wrong; refuse it."""
+    spins = dict(ucc_term_index_spins(term))
+    for factor in term.factors:
+        slots = (factor_spins or {}).get(_source_tensor(factor).name)
+        if slots is None:
+            continue
+        for idx, spin in zip(_access_indices(factor), slots):
+            if spins.setdefault(idx.name, spin) != spin:
+                raise ValueError(
+                    f"index {idx.name!r} is spin {spins[idx.name]!r} in the term "
+                    f"but {spin!r} in slot table of {_source_tensor(factor).name}")
+    return spins
+
+
+def _operator_slot_spins(specs) -> dict[str, tuple[str, ...]]:
+    """Slot spins of each derived operator, read off its own definition."""
+    table = {}
+    for spec in specs or ():
+        if not spec.definition_terms:
+            continue
+        spins = _builder_index_spins(spec, ())
+        table[spec.name] = tuple(spins[i.name] for i in spec.indices)
+    return table
+
+
+def _builder_index_spins(spec: IntermediateSpec, steps) -> dict[str, str]:
+    """One spin per index name across a UCC builder's definition and steps.
+
+    A factored step's scratch arrays are untagged, so an index that meets only
+    scratch (and the result) gets no spin from its own step. All steps come from
+    the builder's own definition, so its index names are shared; a name with two
+    spins would mean that assumption broke, and is refused rather than guessed.
+    """
+    merged: dict[str, str] = {}
+    for term in list(spec.definition_terms) + [s for _, s in steps]:
+        for name, spin in ucc_term_index_spins(term).items():
+            if merged.setdefault(name, spin) != spin:
+                raise ValueError(
+                    f"{spec.name}: index {name!r} is both spin {merged[name]!r} "
+                    f"and {spin!r} across the builder's terms")
+    return merged
+
+
 def _emit_intermediate_builder(
     method: str,
     spec: IntermediateSpec,
@@ -1429,14 +1483,19 @@ def _emit_intermediate_builder(
     stride_order: bool = False,
     force_arbitrary: bool = False,
     sibling_specs: dict[str, IntermediateSpec] | None = None,
+    ucc: bool = False,
 ) -> str:
     result_type = _tensor_type(spec.rank)
     amplitude_type = _amplitude_type(method, force_arbitrary)
     denominator_type = _denominator_type(method, force_arbitrary)
-    lowered_definition_terms = tuple(
+    # UCC definition terms are already spin-resolved AlgebraTerms, like the UCC
+    # residual terms `_emit_kernel` receives: the closed-shell lowering must not
+    # run on them, or their `v` reads skip the canonical spin-block resolution.
+    lowered_definition_terms = () if ucc else tuple(
         lower_term_restricted_closed_shell(term, "reference")
         for term in spec.definition_terms
     )
+    definition_terms = lowered_definition_terms or tuple(spec.definition_terms)
     if lowered_definition_terms:
         builder_indices = lowered_definition_terms[0].canonical_free_indices
     else:
@@ -1449,10 +1508,13 @@ def _emit_intermediate_builder(
     lines.append(f"    const {denominator_type} &denominators,")
     lines.append(f"    const {amplitude_type} &amplitudes)")
     lines.append("{")
-    lines.append("    const int no = reference.orbital_partition.n_occ;")
-    lines.append("    const int nv = reference.orbital_partition.n_virt;")
+    lines.extend(_orbital_count_preamble(ucc))
+    from ..optimization.factorize import factored_builder_steps
+    steps = factored_builder_steps(spec, stride_order=stride_order)
+    result_spins = (_builder_index_spins(spec, steps)
+                    if (ucc and spec.definition_terms) else None)
     lines.append(
-        f"    {result_type} result({_dims_expr(builder_indices, result_type)});"
+        f"    {result_type} result({_dims_expr(builder_indices, result_type, result_spins)});"
     )
     lines.append("")
     lines.append(
@@ -1493,14 +1555,12 @@ def _emit_intermediate_builder(
     # below the flat cost. Cuts the builder's own FLOP scaling (e.g.
     # W_t1t2v_oooovv o^5v^3 -> o^5v^2) at ~0.3x scratch memory. Falls back to the
     # flat lowered emit for single-step (<=2-factor) definitions.
-    from ..optimization.factorize import factored_builder_steps
-    steps = factored_builder_steps(spec, stride_order=stride_order)
     arbitrary = amplitude_type == "ArbitraryOrderRCCAmplitudes"
     if arbitrary:
         # bind amplitude views once; the factored steps and the flat definition
         # both reference the same leaf amplitudes, so bind from the definition.
         binding_terms = ([s for _, s in steps] if (factor_body and len(steps) > 1)
-                         else lowered_definition_terms)
+                         else definition_terms)
         bindings = (_amplitude_view_bindings(binding_terms)
                     + _eri_view_bindings(binding_terms)
                     + _fock_view_bindings(binding_terms))
@@ -1511,25 +1571,30 @@ def _emit_intermediate_builder(
         scratch_names = frozenset(
             lhs for lhs, _ in steps if lhs != "result")
         names_in_scope = (sibling_names or frozenset()) | scratch_names
+        factor_spins = (_operator_slot_spins(sibling_specs.values())
+                        if (ucc and sibling_specs) else {})
         for lhs, step in steps:
             if lhs != "result":
                 stype = _tensor_type(len(step.free_indices))
                 lines.append(
-                    f"    {stype} {lhs}({_dims_expr(step.free_indices, stype)});")
+                    f"    {stype} {lhs}({_dims_expr(step.free_indices, stype, result_spins)});")
             # Builders thread like the residual nests: each nest writes disjoint
             # elements of its lhs, and each step is its own parallel region, so
             # the barrier orders a scratch write before the next step reads it.
             lines.append(emit_planck_term(
                 step, lhs=lhs, indent=4, intermediate_names=names_in_scope,
-                arbitrary_amplitudes=arbitrary,
-                omp_collapse=_omp_collapse_setting()))
+                arbitrary_amplitudes=arbitrary, ucc=ucc,
+                omp_collapse=_omp_collapse_setting(), factor_spins=factor_spins))
+            if ucc and lhs != "result":
+                factor_spins[lhs] = tuple(
+                    result_spins[i.name] for i in step.free_indices)
             lines.append("")
     else:
-        for i, term in enumerate(lowered_definition_terms, start=1):
+        for i, term in enumerate(definition_terms, start=1):
             lines.append(f"    // Definition term {i}")
             lines.append(emit_planck_term(
                 term, lhs="result", indent=4, intermediate_names=sibling_names,
-                arbitrary_amplitudes=arbitrary,
+                arbitrary_amplitudes=arbitrary, ucc=ucc,
                 omp_collapse=_omp_collapse_setting()))
             lines.append("")
     lines.append("    return result;")
@@ -1657,7 +1722,7 @@ def emit_planck_translation_unit(
             lines.append(_emit_intermediate_builder(
                 method, spec, sibling_names, factor_body=factor_builder_bodies,
                 stride_order=factor_builder_bodies, force_arbitrary=force_arbitrary,
-                sibling_specs=sibling_spec_map))
+                sibling_specs=sibling_spec_map, ucc=ucc))
             lines.append("")
 
     for target, terms in equations.items():
