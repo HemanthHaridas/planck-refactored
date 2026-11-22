@@ -1108,12 +1108,18 @@ def _denominator_type(method: str, force_arbitrary: bool = False) -> str:
     return "DenominatorCache"
 
 
-def _target_expr(lhs: str, indices: Sequence[Index]) -> str:
-    if not indices:
+def _accessor(lhs: str, names: Sequence[str]) -> str:
+    """`lhs(i, j, ...)` for the fixed-rank types (rank 2/4/6), the braced
+    `lhs({i, j, ...})` for TensorND. One rule for every emitted element access."""
+    if not names:
         return lhs
-    if len(indices) in (2, 4, 6):
-        return f"{lhs}({', '.join(idx.name for idx in indices)})"
-    return f"{lhs}({{{', '.join(idx.name for idx in indices)}}})"
+    if len(names) in (2, 4, 6):
+        return f"{lhs}({', '.join(names)})"
+    return f"{lhs}({{{', '.join(names)}}})"
+
+
+def _target_expr(lhs: str, indices: Sequence[Index]) -> str:
+    return _accessor(lhs, [idx.name for idx in indices])
 
 
 def _kernel_name(method: str, target: str, ucc: bool = False) -> str:
@@ -1266,7 +1272,8 @@ def _emit_kernel(
         return _emit_chunked_kernel(
             method, target, lines, emitted_terms, result_type, free_indices,
             denominator_type, amplitude_type, required_intermediates,
-            intermediate_names, arbitrary, ucc, symmetrizer=symmetrizer)
+            intermediate_names, arbitrary, ucc, symmetrizer=symmetrizer,
+            result_spins=result_spins)
 
     if arbitrary:
         bindings = (_amplitude_view_bindings(emitted_terms)
@@ -1279,15 +1286,20 @@ def _emit_kernel(
         emitted_terms, intermediate_names, arbitrary, ucc, _fuse_loops_setting(),
         omp_collapse=_omp_collapse_setting(),
         factor_spins=_operator_slot_spins(required_intermediates) if ucc else None))
-    lines.extend(_symmetrize_lines(result_type, free_indices, symmetrizer))
+    lines.extend(_symmetrize_lines(result_type, free_indices, symmetrizer,
+                                   result_spins))
     lines.append("    return result;")
     lines.append("}")
     return "\n".join(lines)
 
 
-def _symmetrize_lines(result_type, free_indices, symmetrizer) -> list[str]:
+def _symmetrize_lines(result_type, free_indices, symmetrizer,
+                      spins=None) -> list[str]:
     """R = sum_g s_g g(X), for a kernel whose terms were folded to X by
     `fold_external_symmetry`. One o^n pass over a copy of X.
+
+    ``spins`` (UCC) sizes each loop by its index's spin; None keeps the RCC
+    `no`/`nv` bounds.
 
     The comment line is read by the numpy evaluator in ccgen/tests, so the
     value gates apply the same pass the C++ does.
@@ -1300,15 +1312,15 @@ def _symmetrize_lines(result_type, free_indices, symmetrizer) -> list[str]:
         args = [mapping.get(n, n) for n in names]
         images.append(("+" if sign > 0 else "-", args))
     tag = " ".join(f"{sg}{''.join(a)}" for sg, a in images)
-    rhs = " ".join(f"{sg} x({', '.join(a)})" for sg, a in images)
+    rhs = " ".join(f"{sg} {_accessor('x', a)}" for sg, a in images)
     out = ["", f"    // symmetrize {''.join(names)}: {tag}", "    {",
            f"        const {result_type} x = result;"]
     collapse = _omp_collapse_setting()
     if collapse > 0 and len(free_indices) >= collapse:
         out.append(f"        #pragma omp parallel for collapse({collapse}) schedule(static)")
     for idx in free_indices:
-        out.append(f"        for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, None)}; ++{idx.name})")
-    out.append(f"            result({', '.join(names)}) = {rhs.lstrip('+ ')};")
+        out.append(f"        for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, (spins or {}).get(idx.name))}; ++{idx.name})")
+    out.append(f"            {_accessor('result', names)} = {rhs.lstrip('+ ')};")
     out.append("    }")
     return out
 
@@ -1325,6 +1337,7 @@ def _emit_chunked_kernel(
     method, target, header_lines, emitted_terms, result_type, free_indices,
     denominator_type, amplitude_type, required_intermediates,
     intermediate_names, arbitrary, ucc=False, symmetrizer=None,
+    result_spins=None,
 ):
     """Emit a large residual kernel as `_partN` sub-functions accumulating into a
     by-reference `result`, plus the main kernel that allocates `result`, calls
@@ -1424,7 +1437,8 @@ def _emit_chunked_kernel(
         body.append(
             f"    {kernel}_part{p}(result, reference, mo_blocks, denominators, amplitudes"
             f"{call_tail}")
-    body.extend(_symmetrize_lines(result_type, free_indices, symmetrizer))
+    body.extend(_symmetrize_lines(result_type, free_indices, symmetrizer,
+                                  result_spins))
     body.append("    return result;")
     body.append("}")
     return "\n".join(out + body)

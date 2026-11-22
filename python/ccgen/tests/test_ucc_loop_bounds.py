@@ -84,15 +84,20 @@ class UccLoopBoundsAreSpinResolvedTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r"< nv(?![ab])", self.src)), 0)
 
     def test_every_bound_is_accounted_for(self):
-        """The spin-resolved bounds sum to the pre-fix spin-blind totals.
+        """Every emitted loop carries exactly one spin-resolved bound.
 
         Catches a fix that DROPS loops rather than routing them -- zero spin-blind
-        bounds is also achievable by emitting nothing.
+        bounds is also achievable by emitting nothing. This used to pin the
+        pre-fix totals (1182 `< no` / 1192 `< nv`), which stopped meaning
+        anything once the orbit fold (docs/CCGEN_UCC_ORBIT_FOLD.md) legitimately
+        removed terms; the per-loop statement is the invariant it stood for.
         """
-        total_o = sum(len(re.findall(r"< " + s + r"\b", self.src)) for s in ("noa", "nob"))
-        total_v = sum(len(re.findall(r"< " + s + r"\b", self.src)) for s in ("nva", "nvb"))
-        self.assertEqual(total_o, 1182)
-        self.assertEqual(total_v, 1192)
+        loops = re.findall(r"^\s*for \(int \w+ = 0; \w+ < (\w+);", self.src,
+                           flags=re.MULTILINE)
+        self.assertGreater(len(loops), 100)
+        self.assertEqual(sorted(set(loops)), ["noa", "nob", "nva", "nvb"])
+        self.assertEqual(len(loops), len(re.findall(r"^\s*for \(", self.src,
+                                                    flags=re.MULTILINE)))
 
     def test_same_spin_blocks_are_exact_mirrors(self):
         """`aa`<->`bb` and `aaaa`<->`bbbb` must reflect under a<->b.
@@ -163,14 +168,23 @@ class UccPreambleAndShapeTests(unittest.TestCase):
 class UccChunkedKernelTests(unittest.TestCase):
     """The `_partN` preamble is a SECOND emission site that CCSD never reaches.
 
-    At rank 2 no kernel exceeds the 256-term chunk threshold; at rank 3 all four
-    triples blocks do (597/486/486/597 terms). A CCSD-only gate therefore passes
-    with every `_part` preamble still spin-blind.
+    At rank 2 no kernel exceeds the 256-term chunk threshold. At rank 3 all four
+    triples blocks used to (597/486/486/597 terms), but the orbit fold
+    (docs/CCGEN_UCC_ORBIT_FOLD.md) brings them to 72-202, under it. So the
+    threshold is lowered here to keep the `_part` emission site exercised; a
+    gate relying on natural chunking would pass with every `_part` preamble
+    still spin-blind.
     """
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.src = print_cpp_planck("ccsdt", ucc=True)
+        from ccgen.emit import planck_tensor_cpp
+        saved = planck_tensor_cpp._KERNEL_CHUNK_TERMS
+        planck_tensor_cpp._KERNEL_CHUNK_TERMS = 32
+        try:
+            cls.src = print_cpp_planck("ccsdt", ucc=True)
+        finally:
+            planck_tensor_cpp._KERNEL_CHUNK_TERMS = saved
 
     def test_chunking_actually_fires(self):
         """Guards the guard: if chunking stops firing, the assertions below go

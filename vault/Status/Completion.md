@@ -468,8 +468,25 @@ historical design context, but they are no longer the source of truth for
   - **Gates.** New `UCCRewritePreservesValueTests` (CCSD and CCSDT, every
     rewritten term exact to 1e-10, mutation-checked). All eight UCC regression
     cases pass, including `ucc4 == FCI` and `uccsd(t)` against PySCF.
-  - **Open.** A same-commit timing, and the orbit fold
-    (`docs/CCGEN_UCC_ORBIT_FOLD_SCOPE.md`).
+  - **Open.** A timing of dressed against undressed UCC from the same
+    commit.
+
+- **UCC residuals folded by their external symmetry (2026-11-22,
+  `docs/CCGEN_UCC_ORBIT_FOLD.md`).**
+  - **What it does.** Every UCC block with two free indices of the same
+    space and spin is emitted as one term per orbit, then one symmetrize pass.
+    That covers same-spin doubles, all triples and all quadruples. The group
+    comes from the indices' spins (`spin_class_group`), not from a table.
+  - **Size.** CCSDT 2,484 → 802 terms; rank 4 18,131 → 2,230.
+  - **Speed** (against an unfolded build of the same commit, 4 threads):
+    `b_ucc4_sto3g` 5.04 → 1.13 s (4.5×), `b_ucc3_sto3g` 1.9×, `uccsd(t)`
+    cases about 1.25×. Energies are identical except `ucc3`, which moves by
+    1e-10.
+  - **Found on the way.** The symmetrize pass wrote rank ≥ 7 element access
+    in the fixed-rank form, so the first rank-4 fold failed to compile. One
+    `_accessor` rule now serves the pass and term emission.
+  - **Gates.** `UCCOrbitFoldTests` (exact to 1e-10, mutation-checked) and
+    all eight UCC regression cases.
 
 - **CCSD(T), restricted and unrestricted (2026-11-20,
   `docs/CCSD_T_SCOPE.md`).** `correlation ccsd(t)` runs the

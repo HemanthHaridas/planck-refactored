@@ -842,3 +842,106 @@ class UCCRewritePreservesValueTests(unittest.TestCase):
             raise AssertionError("no operator with two same-space slots")
         bad, _, _ = _ucc_disagreements("ccsd", mutate=swap_one)
         self.assertGreater(len(bad), 0, "a transposed operator went unnoticed")
+
+
+def _ucc_block(terms, tensors, operators):
+    """Sum of `terms` in one layout, keyed by free-index name (sorted)."""
+    total, key = None, None
+    for t in terms:
+        arr, k = _canon(t, _ucc_eval(t, tensors, operators))
+        assert key in (None, k), (key, k)
+        key = k
+        total = arr if total is None else total + arr
+    return total, key
+
+
+def _apply_group_element(arr, names, mapping):
+    """g(R)[names] = R[mapping(names)], the C++ symmetrize pass's reading."""
+    src = [mapping.get(n, n) for n in names]
+    return np.transpose(arr, [names.index(s) for s in src])
+
+
+def _ucc_fold_disagreements(method, corrupt=None):
+    """(bad, folded_targets, terms_before, terms_after) for the production UCC
+    composition with the orbit fold: adapt -> fold -> factorize -> symmetrize,
+    compared per block against the unfolded residual."""
+    from ccgen.optimization.factorize import factorize_equations
+    from ccgen.optimization.permutation import (
+        fold_external_symmetry, spin_class_group)
+    from ccgen.spin import ucc_adapt_equations
+    from ccgen.tests.residual_eval import ucc_random_tensors
+
+    eqs = ucc_adapt_equations(
+        generate_cc_equations(method, engine="diagram", canonical_fock=True))
+    folded, groups = dict(eqs), {}
+    for target, terms in eqs.items():
+        if terms and terms[0].free_indices:
+            g = spin_class_group(terms[0])
+            if len(g) > 1:
+                folded[target] = fold_external_symmetry(terms, g)
+                groups[target] = list(g)
+    if corrupt is not None:
+        groups = corrupt(groups)
+    rewritten, specs = factorize_equations(
+        folded, spatial=False, merge_transposes=True)
+    tensors = ucc_random_tensors(UCC_DIMS["noa"], UCC_DIMS["nva"],
+                                 UCC_DIMS["nob"], UCC_DIMS["nvb"], seed=0)
+    built = _ucc_build_operators(list(specs or []), tensors)
+    bad = []
+    for target, terms in eqs.items():
+        if target not in groups:
+            continue
+        ref, names = _ucc_block(terms, tensors, {})
+        x, xnames = _ucc_block(rewritten[target], tensors, built)
+        assert names == xnames, (target, names, xnames)
+        got = sum(s * _apply_group_element(x, list(names), m)
+                  for m, s in groups[target])
+        d = float(np.linalg.norm(got - ref))
+        if d > 1e-10 * max(1.0, float(np.linalg.norm(ref))):
+            bad.append((target, f"||diff|| = {d:.3e}"))
+    before = sum(len(eqs[t]) for t in groups)
+    after = sum(len(rewritten[t]) for t in groups)
+    return bad, sorted(groups), before, after
+
+
+class UCCOrbitFoldTests(unittest.TestCase):
+    """The UCC external-symmetry fold (docs/CCGEN_UCC_ORBIT_FOLD.md),
+    composed with the derived operators exactly as `print_cpp_planck` runs it.
+    The fixture's amplitudes are antisymmetric within each same-spin class,
+    which is the property the fold's exactness rests on."""
+
+    def test_group_orders_follow_spin_classes(self):
+        from ccgen.optimization.permutation import spin_class_group
+        from ccgen.spin import ucc_adapt_equations
+        eqs = ucc_adapt_equations(generate_cc_equations(
+            "ccsdt", engine="diagram", canonical_fock=True))
+        orders = {t: len(spin_class_group(eqs[t][0]))
+                  for t in eqs if eqs[t] and eqs[t][0].free_indices}
+        self.assertEqual(orders, {
+            "singles_aa": 1, "singles_bb": 1,
+            "doubles_aaaa": 4, "doubles_abab": 1, "doubles_bbbb": 4,
+            "triples_aaaaaa": 36, "triples_aabaab": 4,
+            "triples_abbabb": 4, "triples_bbbbbb": 36})
+
+    def test_ccsd_fold_is_value_preserving(self):
+        bad, targets, before, after = _ucc_fold_disagreements("ccsd")
+        self.assertEqual(targets, ["doubles_aaaa", "doubles_bbbb"])
+        self.assertLess(after, before)
+        self.assertEqual(bad, [])
+
+    def test_ccsdt_fold_is_value_preserving(self):
+        bad, targets, before, after = _ucc_fold_disagreements("ccsdt")
+        self.assertEqual(len(targets), 6)
+        self.assertLess(after, before / 2)
+        self.assertEqual(bad, [])
+
+    def test_gate_catches_a_wrong_sign(self):
+        """Mutation control: flip the sign of one odd element of the
+        order-36 group. The block must go red."""
+        def flip(groups):
+            g = list(groups["triples_aaaaaa"])
+            k = next(i for i, (_m, s) in enumerate(g) if s < 0)
+            g[k] = (g[k][0], 1)
+            return {**groups, "triples_aaaaaa": g}
+        bad, _, _, _ = _ucc_fold_disagreements("ccsdt", corrupt=flip)
+        self.assertEqual([t for t, _ in bad], ["triples_aaaaaa"])

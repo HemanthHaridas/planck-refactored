@@ -376,8 +376,11 @@ def fold_external_symmetry(
     Exact given that symmetry of R, with no requirement that the terms come in
     complete orbits: |G| R = sum_g s_g g(R), and for T = h(rep),
     sum_g s_g g(T) = s_h sum_g s_g g(rep). So each orbit contributes
-    (sum_T c_T s_h / |G|) rep. ``group`` must be closed, with g its own inverse
-    and s a homomorphism (true for AAB_TRIPLES_GROUP). Orbits are matched on the
+    (sum_T c_T s_h / |G|) rep. ``group`` must be closed under composition and
+    inverse, with s a homomorphism and s_{g^-1} = s_g (true for
+    AAB_TRIPLES_GROUP and for every `spin_class_group`, whose 3-cycles are not
+    their own inverses: whether the rename below is g or g^-1 does not matter,
+    since both are in the group with the same sign). Orbits are matched on the
     term's text with dummies left as named, which finds fewer orbits than full
     canonicalization would but never a wrong one.
     """
@@ -400,3 +403,46 @@ def fold_external_symmetry(
     n = len(group)
     return [reps[k].scaled(kappa[k] / (n * reps[k].coeff))
             for k in order if kappa[k] != 0]
+
+
+def spin_class_group(term: AlgebraTerm) -> tuple[tuple[dict[str, str], int], ...]:
+    """The external symmetry group of a UCC residual block, from its spins.
+
+    Free indices of the same space AND spin are identical particles, so the
+    block is antisymmetric under any permutation within such a class. The group
+    is the product of the classes' symmetric groups, each element signed by
+    parity: order 4 for `doubles_aaaa` or `triples_aabaab`, 36 for
+    `triples_aaaaaa`, 1 for `doubles_abab`. Never written by hand
+    (docs/CCGEN_UCC_ORBIT_FOLD.md, invariant 1), and never swaps two
+    indices of different spin: `abab` -> `baba` is a different block.
+
+    Identity first, so a trivial group is ``(({}, 1),)``.
+    """
+    from ..spin import ucc_term_index_spins
+
+    spins = ucc_term_index_spins(term)
+    classes: dict[tuple[str, str], list[str]] = {}
+    for idx in term.free_indices:
+        if idx.name not in spins:
+            raise ValueError(f"free index {idx.name!r} has no spin in {term!r}")
+        classes.setdefault((idx.space, spins[idx.name]), []).append(idx.name)
+
+    def _parity(perm: tuple[int, ...]) -> int:
+        seen, sign = set(), 1
+        for start in range(len(perm)):
+            k, length = start, 0
+            while k not in seen:
+                seen.add(k)
+                k = perm[k]
+                length += 1
+            if length and length % 2 == 0:
+                sign = -sign
+        return sign
+
+    group: list[tuple[dict[str, str], int]] = [({}, 1)]
+    for names in classes.values():
+        factor = [({names[k]: names[p[k]] for k in range(len(names))
+                    if p[k] != k}, _parity(p))
+                  for p in permutations(range(len(names)))]
+        group = [({**m1, **m2}, s1 * s2) for m1, s1 in group for m2, s2 in factor]
+    return tuple(group)

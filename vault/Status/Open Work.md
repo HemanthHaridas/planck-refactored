@@ -481,12 +481,11 @@ None of these blocks correctness. Take each up only with a current profile.
   (`docs/CCGEN_UNRESTRICTED_CC.md`, "the derived operators reach UCC"). A
   dressed build now dresses the UCC emit too, and the factorizer's UCC output
   is value-gated (`UCCRewritePreservesValueTests`); the UCC regression
-  gates pass on the dressed build. Open:
-  - a timing against an undressed build of the same commit;
-  - the external-symmetry orbit fold for UCC, scoped in
-    `docs/CCGEN_UCC_ORBIT_FOLD_SCOPE.md`: every same-spin doubles and all
-    four triples blocks fold (CCSDT 2484 → 802 terms, derived residual
-    3.5× fewer modelled FLOPs); RCC folds `aab` only;
+  gates pass on the dressed build. The UCC orbit fold landed on top of it
+  (`docs/CCGEN_UCC_ORBIT_FOLD.md`). Open:
+  - a timing of dressed against undressed UCC from the same commit;
+  - the order-576 symmetrize pass (rank-4 same-spin quadruples) profiled
+    on a system larger than B/STO-3G;
   - spin-resolved `tensor_symmetries` entries (`v_aaaa`, `v_abab`), which
     would add merges.
 - Hand-written tensor-solver DIIS fragility, and a review of the small Be

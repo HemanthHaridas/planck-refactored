@@ -1180,6 +1180,24 @@ def print_cpp_planck(
         eqs = dict(eqs)
         eqs["triples"] = fold_external_symmetry(eqs["triples"], AAB_TRIPLES_GROUP)
         symmetrizers = {"triples": AAB_TRIPLES_GROUP}
+    if ucc:
+        # Same fold on every UCC block whose free indices include two of one
+        # (space, spin): same-spin doubles and all four triples blocks. CCSDT
+        # 2484 -> 802 terms (docs/CCGEN_UCC_ORBIT_FOLD.md). Exact because
+        # UCC amplitudes stay antisymmetric within each same-spin class: they
+        # start at zero or from a .ccamp this solver wrote, and Jacobi/DIIS take
+        # linear combinations.
+        from .optimization.permutation import (
+            fold_external_symmetry, spin_class_group)
+        eqs = dict(eqs)
+        symmetrizers = {}
+        for target, terms in eqs.items():
+            if not terms or not terms[0].free_indices:
+                continue
+            group = spin_class_group(terms[0])
+            if len(group) > 1:
+                eqs[target] = fold_external_symmetry(terms, group)
+                symmetrizers[target] = group
 
     if ucc and include_intermediates:
         # Same reasoning as the spin_adapt force-off above: CSE was built for the

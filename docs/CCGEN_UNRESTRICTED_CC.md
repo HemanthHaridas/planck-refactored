@@ -160,4 +160,4 @@ With `-DPLANCK_CC_DRESS_OPERATORS=ON` (derived), the UCC emit now gets the same 
 
 **Cost model** (o = 5, v = 20, modelled FLOPs per residual evaluation, CCSDT): UCC undressed 1.05e13 → derived 4.7e10 (224×), against RCC's 222×. The emitted loop count barely falls (22,630 → 19,924 `for` lines), because the number of terms is unchanged and each still loops over its free indices; what falls is the number of contracted indices per term (o⁵v⁵ → at most o³v⁵ / o⁴v⁴). UCC stays ~5.7× RCC: 2,484 terms against RCC's 509 after the orbit fold.
 
-**Not carried over: the triples orbit fold.** `fold_external_symmetry` is wired for the spin-adapted `aab` block only. UCC's four triples blocks each have their own group (`aaaaaa` the full S3 × S3, `aabaab` RCC's group, `abbabb` its mirror); folding them is open.
+**The orbit fold, added on top (2026-11-22).** UCC blocks are now also folded by their external symmetry: same-spin doubles, all triples and all quadruples, with each group derived from spins. CCSDT 2,484 → 802 terms; `b_ucc4_sto3g` runs 4.5× faster. See `docs/CCGEN_UCC_ORBIT_FOLD.md`.
