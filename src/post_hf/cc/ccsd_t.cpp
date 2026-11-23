@@ -58,7 +58,9 @@ namespace HartreeFock::Correlation::CC
         }
 
         // The six orderings of (a, b, c) as positions into it, with the
-        // permutation sign: abc, bca, cab even; bac, acb, cba odd.
+        // permutation sign: abc, bca, cab even; bac, acb, cba odd. The same
+        // order as TRIPLE_ORDERINGS in python/ccgen/methods/ccsd_t.py, which
+        // compute_ccsd_t_W_triple writes its six blocks in.
         constexpr std::array<std::array<int, 3>, 6> kPerms{{
             {0, 1, 2}, {1, 2, 0}, {2, 0, 1}, {1, 0, 2}, {0, 2, 1}, {2, 1, 0}}};
         constexpr std::array<double, 6> kSigns{1.0, 1.0, 1.0, -1.0, -1.0, -1.0};
@@ -94,12 +96,14 @@ namespace HartreeFock::Correlation::CC
                 for (std::ptrdiff_t t = 0; t < static_cast<std::ptrdiff_t>(triples.size()); ++t)
                 {
                     const std::array<int, 3> abc = triples[static_cast<std::size_t>(t)];
+                    // W for all six orderings at once: they share 24 elementary
+                    // contractions, which a per-ordering kernel would compute six times.
+                    compute_ccsd_t_W_triple(abc[0], abc[1], abc[2], state.reference,
+                                            state.mo_blocks, state.amplitudes, w.data());
                     std::array<std::array<int, 3>, 6> ord{};
                     for (int p = 0; p < 6; ++p)
                     {
                         ord[p] = {abc[kPerms[p][0]], abc[kPerms[p][1]], abc[kPerms[p][2]]};
-                        compute_ccsd_t_W_block(ord[p][0], ord[p][1], ord[p][2], state.reference,
-                                               state.mo_blocks, state.amplitudes, &w[p * o3]);
                         compute_ccsd_t_V_block(ord[p][0], ord[p][1], ord[p][2], state.reference,
                                                state.mo_blocks, state.amplitudes, &v[p * o3]);
                     }

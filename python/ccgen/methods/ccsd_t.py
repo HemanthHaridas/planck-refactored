@@ -12,6 +12,8 @@ with a canonical reference (f_ov = 0) so F_N contributes only through D.
 
 from __future__ import annotations
 
+import re
+
 from ..algebra import multiply
 from ..cluster import build_tn
 from ..generate import _generate_manifold_equation
@@ -124,9 +126,11 @@ def emit_planck_ccsd_t_translation_unit() -> str:
     for target in ("W", "V"):
         parts.append(_emit_kernel("ccsd", f"t_{target}", eqs[target], force_arbitrary=True))
         parts.append("")
-    for target in ("W", "V"):
-        parts.append(_emit_block_kernel(target, eqs[target]))
-        parts.append("")
+    # W for all six orderings of a triple at once (production); V per ordering.
+    parts.append(_emit_triple_kernel("W", eqs["W"]))
+    parts.append("")
+    parts.append(_emit_block_kernel("V", eqs["V"]))
+    parts.append("")
     # Unrestricted (UCCSD(T)): the same two shapes per t3 block. The types they
     # use exist in every build; only running ucc2 needs -DPLANCK_CC_UCC=ON.
     ueqs = build_ccsd_t_unrestricted()
@@ -137,6 +141,103 @@ def emit_planck_ccsd_t_translation_unit() -> str:
         parts.append("")
     parts.append("} // namespace HartreeFock::Correlation::CC")
     return "\n".join(parts)
+
+
+# The six orderings of a virtual triple (v0, v1, v2), as positions into it:
+# ordering p binds (a, b, c) = (v[P[0]], v[P[1]], v[P[2]]). Must match kPerms in
+# src/post_hf/cc/ccsd_t.cpp, which reads block p as that ordering.
+TRIPLE_ORDERINGS = ((0, 1, 2), (1, 2, 0), (2, 0, 1), (1, 0, 2), (0, 2, 1), (2, 1, 0))
+
+_INDEX_TOKEN = re.compile(r"\b([ijkabcdl])\b")
+
+
+def _emit_triple_kernel(target: str, terms) -> str:
+    """W (or V) for all six orderings of one virtual triple, into out[6 * o^3].
+
+    Each ordering's block is the same 24 terms with (a, b, c) bound to a
+    different arrangement of the triple, and each term is an o^3 elementary
+    block (one contraction of two factors) up to a renaming of i, j, k. Over
+    the six orderings the 144 term evaluations hit only 24 distinct elementary
+    blocks, so each is computed once and every (ordering, term) adds it with
+    its occupied indices transposed. Each elementary block is the same
+    summation, in the same order, as the term's accumulator in the per-ordering
+    kernel, and the terms are added in the same order, so the result is the
+    per-ordering kernel's bitwise.
+    """
+    from ..emit.planck_tensor_cpp import (
+        _amplitude_view_bindings, _coeff_literal, _map_factor, _orbital_count_preamble)
+
+    keys: dict[tuple, int] = {}  # elementary block -> slot
+    key_text: list[tuple] = []   # per slot: (factor texts, summed bound)
+    adds: list[list[tuple]] = [[] for _ in TRIPLE_ORDERINGS]  # per ordering: (slot, coeff, occ map)
+    for p, perm in enumerate(TRIPLE_ORDERINGS):
+        vmap = {"a": f"v{perm[0]}", "b": f"v{perm[1]}", "c": f"v{perm[2]}"}
+        for term in terms:
+            assert len(term.summed_indices) == 1 and len(term.factors) == 2, term
+            s = term.summed_indices[0]
+            assert s.name in "dl", s
+            sign, exprs = 1, []
+            for f in term.factors:
+                fs, e = _map_factor(f, None, True)
+                sign *= fs
+                exprs.append(e)
+            # Occupied externals renamed u0, u1, u2 by first appearance, so terms
+            # equal up to an i, j, k renaming share one block.
+            occ: list[str] = []
+            for e in exprs:
+                occ += [x for x in _INDEX_TOKEN.findall(e) if x in "ijk" and x not in occ]
+            assert sorted(occ) == ["i", "j", "k"], occ
+            rename = {x: f"u{n}" for n, x in enumerate(occ)} | vmap | {s.name: s.name}
+            key = tuple(_INDEX_TOKEN.sub(lambda m: rename[m.group(1)], e) for e in exprs)
+            if key not in keys:
+                keys[key] = len(key_text)
+                key_text.append((key, s.name, "nv" if s.name == "d" else "no"))
+            adds[p].append((keys[key], term.coeff * sign, occ))
+
+    lines = [
+        f"void compute_ccsd_t_{target}_triple(",
+        "    int v0, int v1, int v2,",
+        "    const CanonicalRHFCCReference &reference,",
+        "    const TensorCCBlockCache &mo_blocks,",
+        "    const ArbitraryOrderRCCAmplitudes &amplitudes,",
+        "    double *out)",
+        "{",
+    ]
+    lines += _orbital_count_preamble(False)
+    lines.append("    (void)nv;")
+    lines.append("    const std::size_t o3 = static_cast<std::size_t>(no) * no * no;")
+    lines.append(f"    std::fill(out, out + {len(TRIPLE_ORDERINGS)} * o3, 0.0);")
+    lines += _amplitude_view_bindings(terms)
+    lines.append("    static thread_local std::vector<double> e;")
+    lines.append(f"    if (e.size() < {len(key_text)} * o3) e.resize({len(key_text)} * o3);")
+    for slot, (exprs, s, bound) in enumerate(key_text):
+        lines += [
+            f"    // Elementary block {slot}: {' * '.join(exprs)}",
+            "    for (int u0 = 0; u0 < no; ++u0)",
+            "    for (int u1 = 0; u1 < no; ++u1)",
+            "    for (int u2 = 0; u2 < no; ++u2)",
+            "    {",
+            "        double acc = 0.0;",
+            f"        for (int {s} = 0; {s} < {bound}; ++{s})",
+            f"            acc += {' * '.join(exprs)};",
+            f"        e[{slot} * o3 + (static_cast<std::size_t>(u0) * no + u1) * no + u2] = acc;",
+            "    }",
+        ]
+    for p, perm in enumerate(TRIPLE_ORDERINGS):
+        lines.append(f"    // Ordering {p}: (a, b, c) = (v{perm[0]}, v{perm[1]}, v{perm[2]})")
+        lines += [
+            "    for (int i = 0; i < no; ++i)",
+            "    for (int j = 0; j < no; ++j)",
+            "    for (int k = 0; k < no; ++k)",
+            "    {",
+            "        double &w = out[" + str(p) + " * o3 + (static_cast<std::size_t>(i) * no + j) * no + k];",
+        ]
+        for slot, coeff, occ in adds[p]:
+            u = f"(static_cast<std::size_t>({occ[0]}) * no + {occ[1]}) * no + {occ[2]}"
+            lines.append(f"        w += {_coeff_literal(coeff)}e[{slot} * o3 + {u}];")
+        lines.append("    }")
+    lines.append("}")
+    return "\n".join(lines)
 
 
 def _emit_block_kernel(target: str, terms, ucc: bool = False) -> str:
