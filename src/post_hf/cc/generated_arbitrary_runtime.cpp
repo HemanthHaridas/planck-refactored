@@ -294,8 +294,11 @@ namespace HartreeFock::Correlation::CC
             return std::unexpected(initial_energy_res.error());
         double previous_energy = *initial_energy_res;
 
+        // Moved, not copied: the state holds every integral block (vvvv is
+        // 0.96 GB on the water dimer in cc-pVTZ), and `state` is not used
+        // again below.
         GeneratedArbitraryOrderSolveResult result{
-            .state = state,
+            .state = std::move(state),
             .correlation_energy = previous_energy,
         };
 
