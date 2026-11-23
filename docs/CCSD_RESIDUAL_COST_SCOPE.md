@@ -67,22 +67,64 @@ the 6× redundancy that was the real lever.
 
 | # | Step | Expected | Needs |
 |---|---|---|---|
-| R0 | Census and measurement | decides the order of R1–R3 | — |
+| R0 | Census and measurement | done: 4.5× arithmetic × 8.1× rate; R1, R2, then R3 | — |
 | R1 | (ia)(jb) fold of the doubles residual | up to 2× on non-symmetric nests | R0 |
-| R2 | Merge terms sharing a t2 read | 31 → ≤ 18 o³v³ contractions, fewer with t2 symmetry | R0 |
-| R3 | GEMM lowering of the contractions | the constant factor PySCF gets from BLAS | R0 |
+| R2 | Merge terms sharing a t2 read | 31 → 15 o³v³ contractions (≈ 8 with R1) | R0 |
+| R3 | GEMM lowering of the contractions | the 8.1× rate gap | R1, R2 |
 | R4 | Re-measure the ladder against PySCF | decides on the last resort | R1–R3 |
 
-### R0. Census and measurement
+### R0. Census and measurement — done
 
-- Per-iteration time on both sides (PySCF prints its iteration count at
-  `verbose ≥ 4`); the ratios above are totals and include iteration count.
-- Arithmetic per iteration from the generated nests' loop bounds, and the
-  same from PySCF `rccsd.update_amps`' einsums, at the dimer cc-pVTZ sizes.
-  That separates "more arithmetic" (R1, R2) from "slower arithmetic" (R3).
-- A profile at the dimer in cc-pVTZ (v = 106), not only cc-pVDZ: the ladder
-  is o²v⁴ against o³v³ and gains share with v.
-- The R2 count with t2's (ia)(jb) symmetry applied.
+**The 36× is two factors of similar size: 4.5× more arithmetic and 8.1×
+slower arithmetic.** Iteration counts are not the cause.
+
+| Water dimer, per iteration, 4 threads | Planck | PySCF 2.15 | ratio |
+|---|---|---|---|
+| cc-pVTZ iterations × time | 18 × 11.8 s | 23 × 0.32 s | 36× per iteration |
+| cc-pVTZ multiply-adds | 6.24 × 10¹⁰ | 1.38 × 10¹⁰ | 4.5× |
+| cc-pVTZ rate | 5.3 G/s | 43 G/s | 8.1× |
+| cc-pVDZ iterations × time | 20 × 0.45 s | 21 × 0.019 s | 24× |
+| cc-pVDZ multiply-adds | 2.69 × 10⁹ | 4.6 × 10⁸ | 5.9× |
+| cc-pVDZ rate | 6.0 G/s | 24 G/s | 4.0× |
+
+Water cc-pVTZ: 16 × 0.19 s against 14 × 0.021 s, 9× per iteration.
+
+**How counted.** Planck: `tests/benchmarks/ccsd_residual/
+count_generated_fma.py` multiplies the loop bounds around every
+accumulation statement in the generated rank-2 TU (doubles and singles
+residuals and every `build_W_*` builder). PySCF (`cc.RCCSD` is the
+optimized `ccsd.CCSD`): `tests/pyscf/ccsd_update_amps_count.py` wraps
+`lib.einsum`, `lib.ddot`, `lib.dot`, `numpy.dot` and `numpy.einsum` over
+one `update_amps` and adds the C `vvvv` ladder from its formula
+o(o+1)/2·v⁴.
+
+**The count is a good model of the time.** Shares of the Planck CCSD:
+
+| | dimer cc-pVTZ count | profile | dimer cc-pVDZ count | profile |
+|---|---|---|---|---|
+| 31 o³v³ nests | 59 % | 60.4 % | 63 % | ~67 % |
+| `vvvv` ladder (o²v⁴) | 20 % | 20.1 % | 7.7 % | ~9 % |
+| builders | 14 % | 9.6 % | 17 % | ~12 % |
+| other residual terms | 5.5 % | 4.2 % | | |
+
+**Where the extra arithmetic is** (dimer cc-pVTZ):
+- Ladder: 1.26 × 10¹⁰ against PySCF's 6.9 × 10⁹. PySCF contracts i ≥ j
+  only, which is the (ia)(jb) symmetry: R1 closes this 1.8×.
+- o³v³: 3.7 × 10¹⁰ in 31 statements, and builders 8.8 × 10⁹, against
+  6.8 × 10⁹ for everything else in PySCF.
+- The 31 o³v³ statements fall into **15 merge groups** once t2 reads are
+  compared modulo t2(p,q,r,s) = t2(q,p,s,r) (18 on literal reads). Many
+  groups pair up under (ia)(jb) on the output, so R1 + R2 should leave
+  about 8 o³v³ contractions.
+
+**Projection after R1 + R2:** o³v³ ~0.95 × 10¹⁰, ladder 0.63 × 10¹⁰,
+other residual ~0.18 × 10¹⁰, builders 0.88 × 10¹⁰ (untouched): about
+2.6 × 10¹⁰, 1.9× PySCF. The builders are then the largest remaining excess
+(four `build_W_t2v_oovv_*` at 1.19 × 10⁹ each).
+
+**Order decided:** R1 and R2 first, since they remove arithmetic R3 would
+otherwise lower; then R3 for the 8.1× rate gap, which grows with v (4.0×
+at cc-pVDZ, 8.1× at cc-pVTZ), as expected of GEMM against scalar loops.
 
 ### R1. Fold the doubles residual over (ia)(jb)
 
@@ -119,8 +161,7 @@ the 6× redundancy that was the real lever.
   (`USE_BLAS` is the open B1 item in `docs/ERI_FOCK_BLAS_SCOPE.md`).
 - `python/ccgen/tensor_ir.py` has an unused contraction-order / GEMM
   analysis; start there.
-- Order relative to R1 and R2 is R0's call: if R0 shows the arithmetic
-  count is close to PySCF's, R3 comes first.
+- After R1 and R2 (R0).
 - Gate: as R1; the summation order changes, so ≤ 1e-12 relative, not
   bitwise.
 

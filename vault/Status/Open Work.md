@@ -220,9 +220,12 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     orderings (24 distinct contractions instead of 144 evaluations), (T)
     5–6× faster: dimer 283 → 49.9 s, 8× behind PySCF; whole run 278 s.
     Next: 9 CCSD time (213 s vs 7.4 s, now 77 % of the run), scoped in
-    `docs/CCSD_RESIDUAL_COST_SCOPE.md`: 31 separate o³v³ contractions in the
-    doubles residual. Generator fixes only (fold, merge terms sharing a t2
-    read, GEMM lowering); hand-written code is the last resort. Then the
+    `docs/CCSD_RESIDUAL_COST_SCOPE.md`. R0 (census) done: the 36× per
+    iteration is 4.5× more arithmetic (31 separate o³v³ contractions, an
+    unfolded vvvv ladder) × 8.1× slower arithmetic (scalar loops against
+    BLAS). Generator fixes only, in order: R1 (ia)(jb) fold, R2 merge
+    terms sharing a t2 read (31 → 15 groups), R3 GEMM lowering;
+    hand-written code is the last resort. Then the
     remaining (T) 8× (t2 symmetry, GEMM-shaped blocks).
   - CCSD[T], CCSDT(Q), CCSDTQ(P) and the Λ variants
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen
