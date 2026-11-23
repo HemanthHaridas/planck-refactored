@@ -204,7 +204,7 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   Open:
   - ROHF-(T), after semicanonical ROHF-CC;
   - size (`docs/CCSD_T_SIZE_SCOPE.md`). Memory binds, not the CC algebra.
-    Water dimer / cc-pVTZ `ccsd(t)` peak footprint 5.5 → 3.93 GB on this
+    Water dimer / cc-pVTZ `ccsd(t)` peak footprint 5.5 → 2.83 GB on this
     8 GiB machine, energy identical. The changes: one SCF tensor copy,
     batched `transform_eri`, (T) reusing the CCSD's blocks, re-exec with
     macOS `MallocLargeCache=0` (libmalloc reused freed large blocks whole),

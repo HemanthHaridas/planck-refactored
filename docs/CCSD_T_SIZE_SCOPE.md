@@ -17,16 +17,15 @@ is left, on the water dimer in cc-pVTZ:
 | 963 | `vvvv` block | needed by the CCSD |
 | ~600 | other CC blocks, amplitudes, DIIS | — |
 
-The CC phase then needs roughly 1.5–2 GB on the dimer, down from 5.5 GB.
-That figure is extrapolated: the last dimer run (3.93 GB peak) predates the
-move fix in the table below, which removed a second 963 MiB `vvvv`.
+The dimer's peak footprint is now 2.83 GB, down from 5.5 GB; step 5 would
+take the CC phase to about 1.4 GB.
 
 | Water dimer / cc-pVTZ `ccsd(t)` (nb 116 sph / 130 cart, o 10, v 106) | |
 |---|---|
 | Total energy | −152.7012785674 Eh (no PySCF reference yet) |
 | E_corr(CCSD), E(T) | −0.5642828768, −0.0160404999 |
-| Peak footprint | 6.7 GB (did not finish) → 5.5 GB → **3.93 GB** (before the move fix) |
-| Whole run | 519 s, 4 threads, still compressing ~2.5 GB of other processes' memory |
+| Peak footprint | 6.7 GB (did not finish) → 5.5 GB → 3.93 GB → **2.83 GB** |
+| CCSD / (T) / whole run | 18 × 11.75 s / 283 s / 512 s, 4 threads |
 | (T) | 42–57 % of the CC time on the measured rungs: the next time lever |
 
 ## What changed
@@ -176,7 +175,8 @@ Live blocks ≥ 1 MiB during the CCSD, from the profiler:
 | 963 | `vvvv` copy, `TensorCCBlockCache` copy in the solver | 963 | gone |
 | 91 + 91 | `ovvv` and its copy | 91 + 91 | 91 |
 | ~140 | thread-local ERI scratch | gone | gone |
-| | **peak live / footprint** | 3.89 / 3.93 GB | not re-run |
+| | **peak live / footprint** | 3.89 / 3.93 GB | 2.80 / 2.83 GB |
+| | **through (T)** | 2.49 GB live | 2.49 GB live |
 
 Before 3b–6 the SCF also held the Cartesian tensor (2179 MiB) with the
 transform's first quarter (1944 MiB), 4.26 GB at ~23 s.
