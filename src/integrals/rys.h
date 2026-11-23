@@ -54,6 +54,9 @@ namespace HartreeFock
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
+        // Free the calling thread's ERI scratch (see release in base.h).
+        void release_thread_scratch() noexcept;
+
         Eigen::MatrixXd _compute_2e_fock(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const Eigen::MatrixXd &density,

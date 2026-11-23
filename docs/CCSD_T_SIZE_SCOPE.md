@@ -3,7 +3,7 @@
 Scope, opened 2026-11-20. Status lives in `vault/Status/Open Work.md`
 (priority 1). Parent: `docs/CCSD_T_SCOPE.md`.
 
-## Current result (2026-11-22)
+## Current result (2026-11-23)
 
 - **The CCSD is no longer the limit.** `correlation ccsd(t)` runs the
   generated spatial RCCSD, 48–59× faster than the hand-written spin-orbital
@@ -13,12 +13,18 @@ Scope, opened 2026-11-20. Status lives in `vault/Status/Open Work.md`
 - **Water dimer / cc-pVTZ now completes on this 8 GiB machine**, but only
   just: footprint peak 5.5 GB, with ~3.5 GB of it paged out. Before steps 1
   and 2 it did not fit (6.7 GB, stopped).
-- **Which phase sets that 5.5 GB peak is not known.** Step 3 removed
-  (T)'s duplicate block build and the peak did not move; the step-3 run
-  reached 5.3 GB in its first 73 s, before (T). The largest known transient
-  is the SCF's Cartesian→spherical transform (~4.3 GB of tensors, step 6),
-  but footprint also counts freed-but-cached heap and compressor accounting,
-  so the next measurement is an allocation profile of the dimer itself.
+- **The macOS allocator was holding up to half the footprint** (step 3b).
+  libmalloc kept freed large blocks dirty and handed them back whole for
+  smaller requests: the freed 2.18 GB Cartesian tensor became the 1.45 GB
+  spherical tensor's block, pinning a 0.73 GB tail for the whole run. Both
+  binaries now re-exec themselves with `MallocLargeCache=0`. Water cc-pVTZ
+  `ccsd(t)` peak footprint 624 → 262 MiB, same energy and time. Not yet
+  re-measured on the dimer (step 7).
+- **Thread-local ERI scratch is freed after the tensor build** (step 4),
+  ~130 MiB on water cc-pVTZ.
+- **The remaining live-tensor peak is the SCF's Cartesian→spherical
+  transform**: Cartesian tensor 2.18 GB + first quarter-transformed tensor
+  1.94 GB at once (step 6 removes it).
 - **(T) is now 42–57 % of the CC time**, so once memory is settled (T)'s
   kernels are the next time lever.
 
@@ -27,8 +33,8 @@ Scope, opened 2026-11-20. Status lives in `vault/Status/Open Work.md`
 | Total energy | −152.7012785674 Eh (no PySCF reference yet) |
 | E_corr(CCSD), E(T) | −0.5642828768, −0.0160404999 |
 | SCF / CCSD / (T) | 20 iterations / 18 × 15.3 s = 276 s / 354 s (after step 3; 379 s before) |
-| Whole run | 661 s (inflated: watchdog pauses and paging) |
-| Footprint peak | 5.5 GB, both before and after step 3; phase not known |
+| Whole run | 542 s without the watchdog (661–694 s with it) |
+| Footprint, before step 3b | 4.3 GB at the SCF transform (~23 s), 5.2–5.5 GB through the CCSD (44–251 s), 3.7 GB through (T) |
 
 ## Steps
 
@@ -40,12 +46,13 @@ the steps that must land first.
 | 0 | Measure the limit on the generated route | done | — |
 | 1 | One SCF copy of the ERI tensor; transform consumes its input | done, `885109ce` | 0 |
 | 2 | Batch `transform_eri` over its leading index | done, `25714026` | 0 |
-| 3 | (T) reuses the CCSD's integral blocks | done, uncommitted | — |
-| 3a | Allocation profile of the dimer in cc-pVTZ: which phase sets the peak | next | 3 |
-| 4 | Free the thread-local ERI scratch after the build | open | — |
+| 3 | (T) reuses the CCSD's integral blocks | done, `94fb61b5` | — |
+| 3a | Allocation profile of the dimer in cc-pVTZ: which phase sets the peak | done (corrected by 3b) | 3 |
+| 3b | Find what fills the CCSD-phase footprint; re-exec with `MallocLargeCache=0` | done | 3a |
+| 4 | Free the thread-local ERI scratch after the build | done | — |
+| 6 | Direct spherical ERI build (per-block transform) | next; removes the live-tensor peak | 3a |
 | 5 | Free the AO tensor once the CC blocks exist | open | 3 |
-| 6 | Direct spherical ERI build (per-block transform) | open, conditional | 3a, 7 |
-| 7 | Re-measure the ladder, footprint-watched, clean timings | open | 3, 4, 5 |
+| 7 | Re-measure the ladder, footprint-watched, clean timings | open | 3b, 4, 5, 6 |
 | 8 | Reshape the (T) kernels | open, conditional | 7 |
 | 9 | CCSD time levers | open, conditional | 7 |
 
@@ -86,7 +93,7 @@ copies, not the CC.
   stability, TDDFT, double hybrids) pass on the fully featured `build/`;
   the other four are the known `rccsdt` routing cases.
 
-### 3. (T) reuses the CCSD's integral blocks — done, uncommitted
+### 3. (T) reuses the CCSD's integral blocks — done (`94fb61b5`)
 
 - **Before:** `compute_rccsd_t_energy` called
   `prepare_generated_arbitrary_order_state` again and rebuilt the
@@ -104,54 +111,116 @@ copies, not the CC.
   after). The earlier attribution of that peak to the rebuild was wrong: the
   step-3 run reached 5.3 GB within 73 s, before (T). That is step 3a.
 
-### 3a. Allocation profile of the dimer in cc-pVTZ — next
+### 3a. Allocation profile of the dimer in cc-pVTZ — done
 
-- **Why:** the small-rung profile located the live tensors, but on the dimer
-  the footprint also counts freed-but-cached heap and compressor
-  accounting, and the peak phase is unknown.
-- **How:** the same interposed allocator (every live allocation ≥ 1 MiB,
-  with backtraces, at the moment their total peaks), on the dimer, without
-  the `vmmap` watchdog. Its live-peak total against the 5.5 GB footprint
-  also says how much of the footprint is heap overhead rather than live
-  tensors.
-- **Decides** between step 6 (if the SCF transform holds the peak) and
-  steps 4–5 (if later phases do).
+- Same interposed allocator, dimer cc-pVTZ, footprint polled every 20 s,
+  no watchdog. (A first attempt launched the binary through `/usr/bin/time`;
+  macOS SIP strips `DYLD_INSERT_LIBRARIES` from system binaries and their
+  children, so the profiler never loaded. Launch the binary directly.)
+- **Live allocations ≥ 1 MiB peaked at 4.26 GB, in the SCF:**
 
-### 4. Free the thread-local ERI scratch — open
+  | MiB | Object |
+  |---|---|
+  | 2179 | Cartesian AO ERI tensor (`_compute_2e_auto` in `build_conventional_eri`), 130⁴ |
+  | 1944 | first quarter-transformed tensor (`transform_eri_cart_to_sph`), 116·130³ |
+  | ~140 | six thread-local `EriScratch` buffers |
 
-- Six thread-local `EriScratch` buffers from the ERI build, ~112 MiB on
-  water cc-pVTZ, stay alive for the whole run. Their size is set by the
-  basis's angular momentum and contraction, not by the system size.
-- Release them after the tensor build (or shrink them on exit from the
-  build). Independent of the other steps.
+- **Footprint timeline:** 2.3 GB at 2 s, 4.3 GB peak by ~23 s (the
+  transform), 5.2–5.3 GB from 44 s to 251 s (the CC block build and the
+  CCSD iterations), 3.7 GB from ~270 s to the end ((T)). Wall 542 s;
+  energy unchanged.
+- **So:** the live-tensor peak is the SCF transform (step 6 removes it);
+  the footprint peak is the CCSD phase, and at least ~1 GB of it is not
+  large live tensors. Step 3b finds it.
+- **Corrected by 3b:** "the CCSD's ≥ 1 MiB allocations sum to less than
+  4.26 GB" was wrong. They sum to 5.34 GB, because the spherical tensor's
+  block is 2179 MiB, not 1448 (below).
+
+### 3b. What fills the CCSD-phase footprint — done
+
+- **Tool:** a rewritten interposer (`DYLD_INSERT_LIBRARIES`, built with
+  gcc-15: the system clang's linker cannot read the macOS 27 SDK). Every
+  5 s it logs live malloc bytes by log2 size class, the malloc zone's
+  in-use and allocated bytes, and the physical footprint from `task_info`,
+  so nothing pauses the process. At exit it writes the backtraces of the
+  ≥ 1 MiB blocks alive at the live peak, with requested and actual sizes.
+- **Not small allocations, not a leak.** Through the CCSD: 5.36 GB live in
+  ~16 k blocks, under 20 MiB of it below 1 MiB; footprint 5.49 GB; the zone
+  holds only ~40 MB more than is in use.
+- **The allocator reused a freed block whole.** The spherical tensor (1448
+  MiB requested) sat in a 2179 MiB block allocated inside
+  `transform_eri_cart_to_sph`: libmalloc kept the freed Cartesian tensor's
+  block dirty in its large-block cache and returned it for the smaller
+  request. The 731 MiB tail, still dirty with Cartesian data, counted in
+  the footprint until the end of the run. Same on water cc-pVTZ (86.3 MiB
+  in a 136.2 MiB block; a 78.9 MiB request in 121.5 MiB).
+- **A standalone test reproduces it without Planck.** `free` of a touched
+  1000 MiB block leaves the footprint at 1001 MiB, and a 632 MiB request
+  gets the same pointer back at 1000 MiB.
+  - `malloc_zone_pressure_relief(NULL, 0)` releases 0 bytes.
+  - `madvise(MADV_FREE_REUSABLE)` or `MADV_FREE` before the `free` leaves
+    the footprint unchanged.
+  - `MallocXzoneEnabled=0` changes nothing.
+  - `MallocLargeCache=0` returns the block on `free` (footprint 1 MiB), and
+    the smaller request gets its own block.
+- **Fix:** libmalloc reads `MallocLargeCache` only at process start, so
+  `HartreeFock::reexec_without_malloc_large_cache` (`src/base/malloc_env.h`),
+  called first in the `hartree-fock` and `planck-dft` `main`s, sets it to 0
+  and re-execs. A value the user set is kept, a failed exec continues
+  unchanged, and `planck-mpi` does not call it (re-exec under an MPI
+  launcher is unsafe). It is a no-op off macOS. glibc serves blocks above
+  its mmap threshold (at most 32 MiB) with `mmap` and returns them on
+  `free`; that is from glibc's documented defaults, not measured on Linux.
+- **Result**, water cc-pVTZ `ccsd(t)`: peak footprint 624 → 262 MiB, end
+  footprint 624 → 187 MiB. Energy identical. Wall time, 3 runs each,
+  alternated: 5.82–5.86 s with the cache, 5.87–5.92 s without.
+
+### 4. Free the thread-local ERI scratch — done
+
+- **Before:** grow-only thread-local scratch (OS `_eri_scratch`, HGP
+  `g_hgp_scratch` and `g_hgp_hoist_comp_scratch`, Rys `g_rys_scratch`)
+  stayed at its largest quartet's size for the whole run. That was ~140 MiB
+  over six threads on the dimer in cc-pVTZ.
+- **Change:** each engine has `release_thread_scratch()`. The dispatcher
+  `_compute_2e` (`src/integrals/base.h`), the one-shot full-tensor build
+  behind the SCF, `ensure_eri` and TDDFT, frees it in a short
+  `#pragma omp parallel` after the build, so each pool thread frees its own.
+  A thread the pool did not reuse only keeps its scratch, as before. Direct
+  Fock builds do not go through `_compute_2e` and keep their scratch across
+  SCF iterations.
+- **Result**, water cc-pVTZ `ccsd(t)`: live bytes ~130 MiB lower from the
+  tensor build on, with no `EriScratch` blocks left at the peak. Energy
+  identical.
+- **Regression** (steps 3b and 4 together): core suite 178/178 on
+  `build-default`.
 
 ### 5. Free the AO tensor once the CC blocks exist — open
 
 - The spherical AO tensor (nb⁴, 1.45 GB on the dimer in cc-pVTZ) is not
-  read by the CCSD iterations or by (T) once step 3 lands.
-- **Needs step 3**: today (T)'s rebuild reads it.
+  read by the CCSD iterations, and since step 3 not by (T) either: (T)
+  takes the CCSD's integral blocks instead of rebuilding them.
 - Check every later reader before freeing it (post-CC properties,
   checkpoint, anything calling `ensure_eri` after the CC). If one exists,
   free it only on the `ccsd(t)` path.
 
-### 6. Direct spherical ERI build — conditional
+### 6. Direct spherical ERI build — open
 
 - The SCF's Cartesian→spherical transform holds the Cartesian tensor plus
   the first quarter-transformed one, nc⁴(1 + f) with f = ns/nc, ≈ 4.3 GB
-  on the dimer in cc-pVTZ. After steps 3–5 this is the largest transient
-  there.
+  on the dimer in cc-pVTZ. Step 3a measured it as the largest live-tensor
+  peak of the whole run (4.26 GB at ~23 s).
 - Transforming each Cartesian shell-quartet block to spherical as it is
   computed never holds the Cartesian tensor; the peak is the ns⁴ output
   (1.45 GB).
-- **Needs step 7**: take it only if the re-measured ladder shows the SCF
-  transform still binding at the sizes that matter.
+- **Needs step 3a** (done), which showed this peak binds now; no need to
+  wait for step 7.
 
-### 7. Re-measure the ladder — after 3, 4, 5
+### 7. Re-measure the ladder — after 3b, 4, 5, 6
 
 - Same rungs, footprint-watched (`vmmap` "Physical footprint (peak)"), and
   timed in a separate run without the watchdog, which pauses the process.
 - Add a PySCF CCSD(T) reference for the dimer in cc-pVTZ if it fits there.
-- This decides whether step 6, 8 or 9 comes next.
+- This decides whether step 8 or 9 comes next.
 
 ### 8. Reshape the (T) kernels — conditional
 

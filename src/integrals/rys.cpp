@@ -1803,3 +1803,8 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_auto_direct(
     return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term, auto_block_kernel(), density_screen);
 }
 
+
+void HartreeFock::RysQuad::release_thread_scratch() noexcept
+{
+    g_rys_scratch = RysScratch{};
+}

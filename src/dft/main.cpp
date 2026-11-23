@@ -3,6 +3,7 @@
 #include <fstream>
 #include <string>
 
+#include "base/malloc_env.h"
 #include "driver.h"
 
 #include "base/types.h"
@@ -18,6 +19,8 @@
 // HF vs DFT on calculator.is_dft_run().
 int main(int argc, const char *argv[])
 {
+    HartreeFock::reexec_without_malloc_large_cache(argv);
+
     // Gate on a valid license before doing anything else — no point parsing
     // an input file for a calculation that can't run boys() anyway.
     {

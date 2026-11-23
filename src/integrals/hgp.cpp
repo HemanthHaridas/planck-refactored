@@ -1831,3 +1831,9 @@ std::array<double, 12> HartreeFock::HeadGordonPople::_compute_eri_deriv_elem_nat
 
     return result;
 }
+
+void HartreeFock::HeadGordonPople::release_thread_scratch() noexcept
+{
+    g_hgp_scratch = EriScratch{};
+    g_hgp_hoist_comp_scratch = EriScratch{};
+}

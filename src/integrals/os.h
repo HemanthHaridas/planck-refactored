@@ -92,6 +92,9 @@ namespace HartreeFock
                                         double tol_eri = 1e-10,
                                         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
+        // Free the calling thread's grow-only ERI scratch (see release in base.h).
+        void release_thread_scratch() noexcept;
+
         // Contracted shell-quartet ERI for explicit angular-momentum components.
         double _contracted_eri_elem(
             const HartreeFock::ShellPair &spAB,

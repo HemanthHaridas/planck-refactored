@@ -2836,3 +2836,8 @@ std::pair<Eigen::MatrixXd, Eigen::MatrixXd> HartreeFock::ObaraSaika::_compute_fo
 
     return {Ga, Gb};
 }
+
+void HartreeFock::ObaraSaika::release_thread_scratch() noexcept
+{
+    _eri_scratch = EriScratch{};
+}
