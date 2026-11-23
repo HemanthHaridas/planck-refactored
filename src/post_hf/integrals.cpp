@@ -61,6 +61,17 @@ namespace HartreeFock::Correlation
         return eri_local;
     }
 
+    void release_eri(HartreeFock::Calculator &calc, const std::string &tag)
+    {
+        if (calc._eri.empty())
+            return;
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, tag,
+            std::format("Releasing the AO ERI tensor ({:.1f} MB)", calc._eri.size() * 8.0 / 1e6));
+        calc._eri.clear();
+        calc._eri.shrink_to_fit();
+    }
+
     // ── transform_eri ─────────────────────────────────────────────────────────────
 
     std::vector<double> transform_eri(

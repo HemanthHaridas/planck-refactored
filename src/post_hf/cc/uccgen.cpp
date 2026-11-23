@@ -22,6 +22,7 @@
 #include "post_hf/cc/ccsd_t.h"
 #include "post_hf/cc/generated_arbitrary_runtime.h"
 #include "post_hf/cc/generated_kernel_registry.h"
+#include "post_hf/integrals.h"
 #include "post_hf/cc/solver_arbitrary.h"
 #include "io/logging.h"
 
@@ -187,6 +188,9 @@ namespace HartreeFock::Correlation::CC
             return std::unexpected("run_uccgen: tol_density must be positive.");
         if (damping < 0.0 || damping > 1.0)
             return std::unexpected("run_uccgen: cc_damping must be between 0 and 1.");
+
+        // The iterations and (T) read only the CC blocks.
+        HartreeFock::Correlation::release_eri(calculator, "UCC[GENERATED] :");
 
         auto solve_res = run_generated_arbitrary_order_iterations(
             std::move(*state_res), *kernels_res,

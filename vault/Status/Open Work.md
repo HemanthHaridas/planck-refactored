@@ -204,15 +204,15 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   Open:
   - ROHF-(T), after semicanonical ROHF-CC;
   - size (`docs/CCSD_T_SIZE_SCOPE.md`). Memory binds, not the CC algebra.
-    Water dimer / cc-pVTZ `ccsd(t)` peak footprint 5.5 → 2.83 GB on this
+    Water dimer / cc-pVTZ `ccsd(t)` peak footprint 5.5 → 1.43 GB on this
     8 GiB machine, energy identical. The changes: one SCF tensor copy,
     batched `transform_eri`, (T) reusing the CCSD's blocks, re-exec with
     macOS `MallocLargeCache=0` (libmalloc reused freed large blocks whole),
     freed ERI thread scratch, a spherical tensor built per shell quartet
-    (never the Cartesian one), and the CC solver moving its state instead
-    of copying every integral block. Left on the dimer: the 1.38 GB AO
-    tensor through the CC, and `vvvv` (0.96 GB). Next: 5 free the AO
-    tensor after the CC block build; 7 re-measure the ladder; then 8 ((T)
+    (never the Cartesian one), the CC solver moving its state instead of
+    copying every integral block, and the AO tensor freed before the CC
+    iterations. Each phase now holds one large object: the ns⁴ AO tensor
+    (SCF) or v⁴ `vvvv` (CCSD). Next: 7 re-measure the ladder, then 8 ((T)
     kernels, 42–57 % of the CC time) or 9 (CCSD time).
   - CCSD[T], CCSDT(Q), CCSDTQ(P) and the Λ variants
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen

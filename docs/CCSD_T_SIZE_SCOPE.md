@@ -5,27 +5,28 @@ Scope, opened 2026-11-20. Status lives in `vault/Status/Open Work.md`
 
 ## Answer (2026-11-23)
 
-Memory, not the CC algebra, limits the size. The generated spatial RCCSD
-that `correlation ccsd(t)` runs is 48–59× faster than the hand-written
-spin-orbital one with 2.5–4× less memory. What filled memory was the AO
-integral handling and avoidable copies around it. Most of that is gone. What
-is left, on the water dimer in cc-pVTZ:
+Memory, not the CC algebra, limited the size, and it no longer binds at the
+water dimer in cc-pVTZ. The generated spatial RCCSD that `correlation
+ccsd(t)` runs is 48–59× faster than the hand-written spin-orbital one with
+2.5–4× less memory. What filled memory was the AO integral handling and
+avoidable copies around it. Each phase now holds one large object:
 
-| MiB | Object | Removed by |
+| Phase | Largest object | Peak footprint |
 |---|---|---|
-| 1381 | spherical AO ERI tensor, alive through the whole CC | step 5 (open) |
-| 963 | `vvvv` block | needed by the CCSD |
-| ~600 | other CC blocks, amplitudes, DIIS | — |
+| SCF | spherical AO ERI tensor, 1.38 GB (ns⁴) | 1.31 GB |
+| CCSD | `vvvv`, 0.96 GB (v⁴), with the other blocks and amplitudes | 1.43 GB |
+| (T) | `vvvv` and blocks, kept by the state | 1.14 GB |
 
-The dimer's peak footprint is now 2.83 GB, down from 5.5 GB; step 5 would
-take the CC phase to about 1.4 GB.
+The next memory wall is the ns⁴ AO tensor in the SCF and v⁴ `vvvv` in the
+CCSD. Removing either is a different method (direct or RI integrals, an
+AO-driven or RI `vvvv` contraction), not a fix.
 
 | Water dimer / cc-pVTZ `ccsd(t)` (nb 116 sph / 130 cart, o 10, v 106) | |
 |---|---|
 | Total energy | −152.7012785674 Eh (no PySCF reference yet) |
 | E_corr(CCSD), E(T) | −0.5642828768, −0.0160404999 |
-| Peak footprint | 6.7 GB (did not finish) → 5.5 GB → 3.93 GB → **2.83 GB** |
-| CCSD / (T) / whole run | 18 × 11.75 s / 283 s / 512 s, 4 threads |
+| Peak footprint | 6.7 GB (did not finish) → 5.5 GB → 3.93 GB → 2.83 GB → **1.43 GB** |
+| CCSD / (T) / whole run | 18 × 11.73 s / 284 s / 512 s, 4 threads |
 | (T) | 42–57 % of the CC time on the measured rungs: the next time lever |
 
 ## What changed
@@ -38,10 +39,20 @@ take the CC phase to about 1.4 GB.
 | 3b | Re-exec with libmalloc's large-block cache off | `src/base/malloc_env.h`, both `main`s | `22589e59`. Water cc-pVTZ peak footprint 624 → 262 MiB |
 | 4 | Free the engines' thread-local ERI scratch after a one-shot tensor build | `_compute_2e` in `src/integrals/base.h` | `22589e59`. ~130 MiB on water cc-pVTZ |
 | 6 | Spherical tensor built per shell quartet, never the Cartesian one | `RysQuad::_compute_2e_spherical` (`src/integrals/rys.cpp`) | SCF peak nc⁴ + ns·nc³ (4.1 GB on the dimer) → ns⁴ (1.38 GB) |
-| — | CC solver moves its state instead of copying it | `run_generated_arbitrary_order_iterations` | One copy of every integral block fewer (963 + 91 MiB on the dimer). Water cc-pVTZ peak live 245 → 186 MiB |
+| — | CC solver moves its state instead of copying it | `run_generated_arbitrary_order_iterations` | `5be4a29e`. One copy of every integral block fewer (963 + 91 MiB on the dimer). Water cc-pVTZ peak live 245 → 186 MiB |
+| 5 | Free the AO tensor before the CC iterations | `Correlation::release_eri`, called in `rccgen.cpp` and `uccgen.cpp` | Dimer peak footprint 2.83 → 1.43 GB |
 
 Energies are identical to every printed digit after every change. The core
 suite passes (178/178) with all of them.
+
+**Step 5** frees `calculator._eri` right before a generated CC route's
+iterations. The iterations and (T) read only the CC blocks, and every
+rank's `prepare`, the warm-start recursion's included, runs before any rank
+iterates. A later `ensure_eri` rebuilds the tensor, so a missed reader
+would cost time, not correctness. Both routes are single-point only.
+Gated by the RCC cases on `build-default` and the UCC and generated CCSDT
+cases (`b_ucc{2,3,4}`, `*_uccsd_t_*`, `*_rccsdt_generated_*`) on the fully
+featured `build/`.
 
 **Step 6** in detail. Each canonical shell quartet's Cartesian block comes
 from the same kernels `_compute_2e` uses (Auto per quartet, HGP or Rys
@@ -62,19 +73,15 @@ unwritten). The SCF's spherical build no longer has the transform's hidden
 
 ## Open, in order
 
-1. **Step 5: free the AO tensor once the CC blocks exist** (1.38 GB on the
-   dimer). Neither the CCSD iterations nor (T) read it. Check every later
-   reader first (post-CC properties, checkpoint, any `ensure_eri` after the
-   CC); if one exists, free it only on the `ccsd(t)` path.
-2. **Step 7: re-measure the ladder.** Footprint-watched and timed in
+1. **Step 7: re-measure the ladder.** Footprint-watched and timed in
    separate runs (`vmmap` pauses the process). Add a PySCF CCSD(T)
    reference for the dimer in cc-pVTZ if it fits there. Decides between 8
    and 9.
-3. **Step 8: reshape the (T) kernels.** The block kernels loop one term at a
+2. **Step 8: reshape the (T) kernels.** The block kernels loop one term at a
    time through generic accessors. Each (a, b, c) block is o³·(o + v) work
    over 30 terms; an occupied-index GEMM per term is the candidate. Gates:
    `ccsd_t_oracle_diff` and bitwise thread invariance.
-4. **Step 9: CCSD time.** Profile first. Known levers, unmeasured at rank 2:
+3. **Step 9: CCSD time.** Profile first. Known levers, unmeasured at rank 2:
    the doubles residual is symmetric under (ia)(jb) (5.6e-16), an order-2
    group the external-symmetry fold could use; loop order in the generated
    nests (up to 1.7× in a one-nest benchmark,
@@ -168,15 +175,15 @@ steps 3b–6; step 7 repeats it.
 
 Live blocks ≥ 1 MiB during the CCSD, from the profiler:
 
-| MiB | Object | After 3b, 4, 6 | After the move fix |
-|---|---|---|---|
-| 2179 | spherical AO tensor in the recycled Cartesian block (1448 requested) | 1381 | 1381 |
-| 963 | `vvvv`, `rebind_physicist` | 963 | 963 |
-| 963 | `vvvv` copy, `TensorCCBlockCache` copy in the solver | 963 | gone |
-| 91 + 91 | `ovvv` and its copy | 91 + 91 | 91 |
-| ~140 | thread-local ERI scratch | gone | gone |
-| | **peak live / footprint** | 3.89 / 3.93 GB | 2.80 / 2.83 GB |
-| | **through (T)** | 2.49 GB live | 2.49 GB live |
+| MiB | Object | After 3b, 4, 6 | + move fix | + step 5 |
+|---|---|---|---|---|
+| 2179 | spherical AO tensor in the recycled Cartesian block (1448 requested) | 1381 | 1381 | gone |
+| 963 | `vvvv`, `rebind_physicist` | 963 | 963 | 963 |
+| 963 | `vvvv` copy, `TensorCCBlockCache` copy in the solver | 963 | gone | gone |
+| 91 + 91 | `ovvv` and its copy | 91 + 91 | 91 | 91 |
+| ~140 | thread-local ERI scratch | gone | gone | gone |
+| | **peak live / footprint** | 3.89 / 3.93 GB | 2.80 / 2.83 GB | 1.41 / 1.43 GB |
+| | **through (T)** | 2.49 GB live | 2.49 GB live | 1.11 GB live |
 
 Before 3b–6 the SCF also held the Cartesian tensor (2179 MiB) with the
 transform's first quarter (1944 MiB), 4.26 GB at ~23 s.

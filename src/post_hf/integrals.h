@@ -34,6 +34,12 @@ namespace HartreeFock::Correlation
         std::vector<double> &eri_local,
         const std::string &tag);
 
+    // Free the cached AO ERI tensor (calc._eri). For a caller that has built
+    // everything it needs from it, such as the CC integral blocks (1.38 GB on
+    // the water dimer in cc-pVTZ, otherwise alive through the whole CC). A
+    // later ensure_eri rebuilds it, so this costs time, never correctness.
+    void release_eri(HartreeFock::Calculator &calc, const std::string &tag);
+
     // ── 4-index AO→MO transformation ──────────────────────────────────────────
     //
     // Performs successive quarter transforms:
