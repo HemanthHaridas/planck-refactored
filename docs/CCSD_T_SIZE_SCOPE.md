@@ -5,8 +5,8 @@ Scope, opened 2026-11-20. Status lives in `vault/Status/Open Work.md`
 
 ## Answer (2026-11-23)
 
-Memory, not the CC algebra, limited the size, and it no longer binds at the
-water dimer in cc-pVTZ. The generated spatial RCCSD that `correlation
+Memory limited the size first, and it no longer binds at the water dimer in
+cc-pVTZ; time does now (see "Open"). The generated spatial RCCSD that `correlation
 ccsd(t)` runs is 48–59× faster than the hand-written spin-orbital one with
 2.5–4× less memory. What filled memory was the AO integral handling and
 avoidable copies around it. Each phase now holds one large object:
@@ -26,8 +26,8 @@ AO-driven or RI `vvvv` contraction), not a fix.
 | Total energy | −152.7012785674 Eh, equal to PySCF 2.15 to every printed digit |
 | E_corr(CCSD), E(T) | −0.5642828768, −0.0160404999 |
 | Peak footprint | 6.7 GB (did not finish) → 5.5 GB → 3.93 GB → 2.83 GB → **1.43 GB** |
-| CCSD / (T) / whole run | 18 × 11.73 s / 284 s / 512 s, 4 threads |
-| Against PySCF 2.15 (4 threads) | CCSD 213 s vs 7.4 s (29×), (T) 283 s vs 6.0 s (47×); the gap grows with size (step 7) |
+| CCSD / (T) / whole run | 18 × 11.8 s / 49.9 s / 278 s, 4 threads |
+| Against PySCF 2.15 (4 threads) | CCSD 213 s vs 7.4 s (29×), (T) 49.9 s vs 6.0 s (8×; 47× before step 8) |
 
 ## What changed
 
@@ -38,9 +38,10 @@ AO-driven or RI `vvvv` contraction), not a fix.
 | 3 | (T) reuses the CCSD's converged integral blocks | `compute_rccsd_t_energy(calculator, state)` | `94fb61b5`. E(T) bitwise unchanged; dimer (T) 379 → 354 s |
 | 3b | Re-exec with libmalloc's large-block cache off | `src/base/malloc_env.h`, both `main`s | `22589e59`. Water cc-pVTZ peak footprint 624 → 262 MiB |
 | 4 | Free the engines' thread-local ERI scratch after a one-shot tensor build | `_compute_2e` in `src/integrals/base.h` | `22589e59`. ~130 MiB on water cc-pVTZ |
-| 6 | Spherical tensor built per shell quartet, never the Cartesian one | `RysQuad::_compute_2e_spherical` (`src/integrals/rys.cpp`) | SCF peak nc⁴ + ns·nc³ (4.1 GB on the dimer) → ns⁴ (1.38 GB) |
+| 6 | Spherical tensor built per shell quartet, never the Cartesian one | `RysQuad::_compute_2e_spherical` (`src/integrals/rys.cpp`) | `538430e9`. SCF peak nc⁴ + ns·nc³ (4.1 GB on the dimer) → ns⁴ (1.38 GB) |
 | — | CC solver moves its state instead of copying it | `run_generated_arbitrary_order_iterations` | `5be4a29e`. One copy of every integral block fewer (963 + 91 MiB on the dimer). Water cc-pVTZ peak live 245 → 186 MiB |
-| 5 | Free the AO tensor before the CC iterations | `Correlation::release_eri`, called in `rccgen.cpp` and `uccgen.cpp` | Dimer peak footprint 2.83 → 1.43 GB |
+| 5 | Free the AO tensor before the CC iterations | `Correlation::release_eri`, called in `rccgen.cpp` and `uccgen.cpp` | `d9f5fb69`. Dimer peak footprint 2.83 → 1.43 GB |
+| 8 | (T) W computed once per virtual triple for all six orderings | `_emit_triple_kernel` (`python/ccgen/methods/ccsd_t.py`), `compute_ccsd_t_W_triple` | (T) 5.0–5.7×: dimer cc-pVTZ 283 → 49.9 s |
 
 Energies are identical to every printed digit after every change. The core
 suite passes (178/178) with all of them.
@@ -53,6 +54,22 @@ would cost time, not correctness. Both routes are single-point only.
 Gated by the RCC cases on `build-default` and the UCC and generated CCSDT
 cases (`b_ucc{2,3,4}`, `*_uccsd_t_*`, `*_rccsdt_generated_*`) on the fully
 featured `build/`.
+
+**Step 8** in detail. A profile of the dimer in cc-pVDZ put 99 % of (T)
+in the W block kernel. The batched (T) evaluated W for each of the six
+orderings of every virtual triple a ≥ b ≥ c, 24 terms each. Every term is an
+elementary o³ block, one contraction of two factors, up to a renaming of
+i, j, k, and over the six orderings the 144 evaluations hit only 24
+distinct blocks (12 `t2 · ovvv`, o³v; 12 `t2 · ooov`, o⁴). The emitter
+canonicalizes each (ordering, term) to a block key (factor texts with
+occupied externals renamed by first appearance and virtuals by triple
+position), computes each block once, and adds it to every ordering with its
+occupied indices transposed. Each block is the same sum in the same order
+as the old per-term accumulator and the terms are added in the same order,
+so E(T) is unchanged (gates `ccsd_t_oracle_diff` and the four `*_rccsd_t_*`
+cases, 8 ccgen PySCF (T) tests). V stays per ordering (1 % of (T)). The
+UCC (T) does not have this redundancy: its work items are already one
+ordering per spin block.
 
 **Step 6** in detail. Each canonical shell quartet's Cartesian block comes
 from the same kernels `_compute_2e` uses (Auto per quartet, HGP or Rys
@@ -76,27 +93,29 @@ unwritten). The SCF's spherical build no longer has the transform's hidden
 Step 7 (the ladder re-measure, below) found time, not memory, is now the
 limit, and that Planck loses to PySCF 2.15 by a factor that grows with
 size: CCSD ~2× → 29×, (T) ~10× → 47× from water cc-pVDZ to the dimer in
-cc-pVTZ. On the dimer (T) is 55 % of the run.
+cc-pVTZ. Step 8 cut (T) to 8× behind; CCSD is now 77 % of the dimer run.
 
-1. **Step 8: reshape the (T) kernels.** The larger and faster-growing gap
-   (283 s against PySCF's 6.0 s on the dimer). The block kernels loop one
-   term at a time through generic accessors. Each (a, b, c) block is
-   o³·(o + v) work over 30 terms; an occupied-index GEMM per term is the
-   candidate. Profile first. Gates: `ccsd_t_oracle_diff` and bitwise thread
-   invariance.
-2. **Step 9: CCSD time** (213 s against 7.4 s on the dimer). Profile
-   first. Known levers, unmeasured at rank 2: the doubles residual is
-   symmetric under (ia)(jb) (5.6e-16), an order-2 group the
-   external-symmetry fold could use; loop order in the generated nests (up
-   to 1.7× in a one-nest benchmark, `docs/CCGEN_GENERATED_CC_COST.md`). The
-   gap grows with size, which was this scope's condition for a
-   hand-written spatial RCCSD (PySCF `rccsd` form) as the fallback; decide
-   after the profile whether the generated route can close a 29× gap.
+1. **Step 9: CCSD time** (213 s against 7.4 s on the dimer). Scoped in
+   `docs/CCSD_RESIDUAL_COST_SCOPE.md`: 31 separate o³v³ contractions in the
+   doubles residual, against PySCF's few GEMMs. Generator fixes only (fold,
+   merge terms sharing a t2 read, GEMM lowering); hand-written code is the
+   last resort, under the conditions stated there.
+2. **(T), the remaining 8×.** Two levers, unmeasured: the restricted t2
+   symmetry t2(i,j,a,b) = t2(j,i,b,a) would merge the 24 elementary blocks
+   into about 12; and each block is a small GEMM (o² × v by v × o) that
+   the scalar loop does not exploit. Gates as in step 8.
 
 Beyond these: build the MO blocks from a direct or RI transform without
 storing the AO tensor at all. RI-CCSD would be its own scope.
 
 ## Findings
+
+- **(T) was compute-bound, not memory-bound.** Gathering each W term's
+  operands into contiguous buffers (both were strided along the summed
+  index, by nv and nv² for `t2 · ovvv`) changed (T) by 0–4 % (water cc-pVTZ
+  1.92 s, dimer cc-pVDZ 4.04 → 3.88 s). Counting work explained it: ~34 G
+  multiply-adds on the dimer in cc-pVDZ, run at ~9 G/s, so the excess was
+  arithmetic. Reverted; the per-triple dedupe (step 8) removed 5/6 of it.
 
 - **macOS libmalloc held up to half the footprint.** It keeps a freed large
   block dirty in its large-block cache and returns it whole for a later,
@@ -195,6 +214,9 @@ times are wall clock to 0.1 s.
 | water cc-pVTZ | −76.3457669118 | 7e-10 | 3.1 / 0.2 s (~16×) | 1.9 / 0.2 s (~10×) |
 | water dimer cc-pVDZ | −152.4977225012 | 2e-10 | 9.1 / 0.4 s (~23×) | 4.0 / 0.2 s (~20×) |
 | water dimer cc-pVTZ | −152.7012785674 | 0 | 213 / 7.4 s (29×) | 283 / 6.0 s (47×) |
+
+After step 8, Planck's (T): water cc-pVTZ 0.37–0.41 s, dimer cc-pVDZ 0.80 s,
+dimer cc-pVTZ 49.9 s (whole run 278 s), energies unchanged.
 
 PySCF's peak footprint on the dimer in cc-pVTZ is 1.94 GB, against
 Planck's 1.43 GB. The Δ on the small rungs is CCSD convergence (Planck

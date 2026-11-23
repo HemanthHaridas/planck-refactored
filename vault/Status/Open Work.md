@@ -216,8 +216,14 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     equals PySCF 2.15 to every digit, but time is now the limit and the
     gap to PySCF grows with size, CCSD ~2× → 29× and (T) ~10× → 47× from
     water cc-pVDZ to the dimer in cc-pVTZ (213 / 283 s against 7.4 / 6.0 s).
-    Next: 8 reshape the (T) kernels (55 % of the dimer run), then 9 CCSD
-    time, where a hand-written spatial RCCSD is now a live option.
+    8: the restricted (T) computes W once per virtual triple for all six
+    orderings (24 distinct contractions instead of 144 evaluations), (T)
+    5–6× faster: dimer 283 → 49.9 s, 8× behind PySCF; whole run 278 s.
+    Next: 9 CCSD time (213 s vs 7.4 s, now 77 % of the run), scoped in
+    `docs/CCSD_RESIDUAL_COST_SCOPE.md`: 31 separate o³v³ contractions in the
+    doubles residual. Generator fixes only (fold, merge terms sharing a t2
+    read, GEMM lowering); hand-written code is the last resort. Then the
+    remaining (T) 8× (t2 symmetry, GEMM-shaped blocks).
   - CCSD[T], CCSDT(Q), CCSDTQ(P) and the Λ variants
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen
     today; (Q) is limited by the generated CCSDT's cost, and Λ needs new
