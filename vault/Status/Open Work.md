@@ -212,8 +212,12 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     (never the Cartesian one), the CC solver moving its state instead of
     copying every integral block, and the AO tensor freed before the CC
     iterations. Each phase now holds one large object: the ns⁴ AO tensor
-    (SCF) or v⁴ `vvvv` (CCSD). Next: 7 re-measure the ladder, then 8 ((T)
-    kernels, 42–57 % of the CC time) or 9 (CCSD time).
+    (SCF) or v⁴ `vvvv` (CCSD). 7 (ladder re-measure): the dimer energy
+    equals PySCF 2.15 to every digit, but time is now the limit and the
+    gap to PySCF grows with size, CCSD ~2× → 29× and (T) ~10× → 47× from
+    water cc-pVDZ to the dimer in cc-pVTZ (213 / 283 s against 7.4 / 6.0 s).
+    Next: 8 reshape the (T) kernels (55 % of the dimer run), then 9 CCSD
+    time, where a hand-written spatial RCCSD is now a live option.
   - CCSD[T], CCSDT(Q), CCSDTQ(P) and the Λ variants
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen
     today; (Q) is limited by the generated CCSDT's cost, and Λ needs new

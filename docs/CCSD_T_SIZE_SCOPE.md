@@ -23,11 +23,11 @@ AO-driven or RI `vvvv` contraction), not a fix.
 
 | Water dimer / cc-pVTZ `ccsd(t)` (nb 116 sph / 130 cart, o 10, v 106) | |
 |---|---|
-| Total energy | −152.7012785674 Eh (no PySCF reference yet) |
+| Total energy | −152.7012785674 Eh, equal to PySCF 2.15 to every printed digit |
 | E_corr(CCSD), E(T) | −0.5642828768, −0.0160404999 |
 | Peak footprint | 6.7 GB (did not finish) → 5.5 GB → 3.93 GB → 2.83 GB → **1.43 GB** |
 | CCSD / (T) / whole run | 18 × 11.73 s / 284 s / 512 s, 4 threads |
-| (T) | 42–57 % of the CC time on the measured rungs: the next time lever |
+| Against PySCF 2.15 (4 threads) | CCSD 213 s vs 7.4 s (29×), (T) 283 s vs 6.0 s (47×); the gap grows with size (step 7) |
 
 ## What changed
 
@@ -73,21 +73,25 @@ unwritten). The SCF's spherical build no longer has the transform's hidden
 
 ## Open, in order
 
-1. **Step 7: re-measure the ladder.** Footprint-watched and timed in
-   separate runs (`vmmap` pauses the process). Add a PySCF CCSD(T)
-   reference for the dimer in cc-pVTZ if it fits there. Decides between 8
-   and 9.
-2. **Step 8: reshape the (T) kernels.** The block kernels loop one term at a
-   time through generic accessors. Each (a, b, c) block is o³·(o + v) work
-   over 30 terms; an occupied-index GEMM per term is the candidate. Gates:
-   `ccsd_t_oracle_diff` and bitwise thread invariance.
-3. **Step 9: CCSD time.** Profile first. Known levers, unmeasured at rank 2:
-   the doubles residual is symmetric under (ia)(jb) (5.6e-16), an order-2
-   group the external-symmetry fold could use; loop order in the generated
-   nests (up to 1.7× in a one-nest benchmark,
-   `docs/CCGEN_GENERATED_CC_COST.md`). A hand-written spatial RCCSD is the
-   fallback only if the generated route loses by a factor that grows with
-   size.
+Step 7 (the ladder re-measure, below) found time, not memory, is now the
+limit, and that Planck loses to PySCF 2.15 by a factor that grows with
+size: CCSD ~2× → 29×, (T) ~10× → 47× from water cc-pVDZ to the dimer in
+cc-pVTZ. On the dimer (T) is 55 % of the run.
+
+1. **Step 8: reshape the (T) kernels.** The larger and faster-growing gap
+   (283 s against PySCF's 6.0 s on the dimer). The block kernels loop one
+   term at a time through generic accessors. Each (a, b, c) block is
+   o³·(o + v) work over 30 terms; an occupied-index GEMM per term is the
+   candidate. Profile first. Gates: `ccsd_t_oracle_diff` and bitwise thread
+   invariance.
+2. **Step 9: CCSD time** (213 s against 7.4 s on the dimer). Profile
+   first. Known levers, unmeasured at rank 2: the doubles residual is
+   symmetric under (ia)(jb) (5.6e-16), an order-2 group the
+   external-symmetry fold could use; loop order in the generated nests (up
+   to 1.7× in a one-nest benchmark, `docs/CCGEN_GENERATED_CC_COST.md`). The
+   gap grows with size, which was this scope's condition for a
+   hand-written spatial RCCSD (PySCF `rccsd` form) as the fallback; decide
+   after the profile whether the generated route can close a 29× gap.
 
 Beyond these: build the MO blocks from a direct or RI transform without
 storing the AO tensor at all. RI-CCSD would be its own scope.
@@ -161,15 +165,40 @@ gates. Plain `ccsd` still runs the hand-written RCCSD.
 
 ### The ladder
 
-`build-default`, spherical, conventional SCF, 4 threads. Measured before
-steps 3b–6; step 7 repeats it.
+Step 7, at HEAD `d9f5fb69`. `build-default`, spherical, conventional SCF,
+4 threads. Timing from plain runs (3 repeats; one for the dimer in cc-pVTZ,
+whose profiled run took the same 512 s); footprint from separate profiled
+runs. Energies identical across repeats and equal to the gates.
 
-| Rung | nb sph / cart | o / v | CCSD iters × s/iter | (T) |
+| Rung | nb sph / cart | o / v | CCSD | (T) | Whole run | Peak footprint |
+|---|---|---|---|---|---|---|
+| water cc-pVDZ | 24 / 25 | 5 / 19 | 19 × 0.010 s | 0.03 s | 0.26 s | ~33 MiB |
+| water cc-pVTZ | 58 / 65 | 5 / 53 | 16 × 0.19 s | 1.8–1.9 s | 5.8–6.1 s | 212 MiB |
+| water dimer cc-pVDZ | 48 / 50 | 10 / 38 | 20 × 0.45 s | 4.0–4.1 s | 13.4 s | 84 MiB |
+| water dimer cc-pVTZ | 116 / 130 | 10 / 106 | 18 × 11.8 s | 283 s | 512 s | 1.43 GB |
+
+Per-iteration times are unchanged by the memory work except on the dimer
+in cc-pVTZ, which no longer pages (CCSD 15.3 → 11.8 s per iteration, (T)
+354 → 283 s).
+
+### Against PySCF
+
+PySCF 2.15.0, RHF + RCCSD + `ccsd_t.kernel`, Planck's own GBS files through
+`parse_gaussian`, `cart=False`, `conv_tol` 1e-11, CCSD `conv_tol` 1e-10, 4
+threads (`OMP_NUM_THREADS=4`), same geometries. Script:
+`tests/pyscf/ccsd_t_ladder_reference.py <input> <gbs>`. PySCF
+times are wall clock to 0.1 s.
+
+| Rung | E total, PySCF | Δ Planck | CCSD Planck / PySCF | (T) Planck / PySCF |
 |---|---|---|---|---|
-| water cc-pVDZ | 24 / 25 | 5 / 19 | 19 × 0.010 s | 0.04 s |
-| water cc-pVTZ | 58 / 65 | 5 / 53 | 16 × 0.188 s | 1.8 s |
-| water dimer cc-pVDZ | 48 / 50 | 10 / 38 | 20 × 0.457 s | 4.0 s |
-| water dimer cc-pVTZ | 116 / 130 | 10 / 106 | 18 × 15.3 s | 354 s |
+| water cc-pVDZ | −76.2431380866 | 5e-10 | 0.19 / 0.1 s (~2×) | 0.03 / < 0.05 s |
+| water cc-pVTZ | −76.3457669118 | 7e-10 | 3.1 / 0.2 s (~16×) | 1.9 / 0.2 s (~10×) |
+| water dimer cc-pVDZ | −152.4977225012 | 2e-10 | 9.1 / 0.4 s (~23×) | 4.0 / 0.2 s (~20×) |
+| water dimer cc-pVTZ | −152.7012785674 | 0 | 213 / 7.4 s (29×) | 283 / 6.0 s (47×) |
+
+PySCF's peak footprint on the dimer in cc-pVTZ is 1.94 GB, against
+Planck's 1.43 GB. The Δ on the small rungs is CCSD convergence (Planck
+stops at `tol_energy`), not a defect.
 
 ### Dimer in cc-pVTZ: where the memory was
 
