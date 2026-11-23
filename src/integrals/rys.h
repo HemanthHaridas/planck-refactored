@@ -2,6 +2,8 @@
 #define HF_RYS_H
 
 #include <Eigen/Core>
+#include <expected>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -92,6 +94,24 @@ namespace HartreeFock
             double omega = 0.0,
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+
+        // The spherical AO ERI tensor (ns⁴, row-major), built without the
+        // Cartesian one: each canonical shell quartet's Cartesian block is
+        // transformed by the four shells' blocks of the block-diagonal
+        // `cart_to_sph` (ns × nbasis_cart) and scattered. Peak memory is the
+        // output alone, against nc⁴ + ns·nc³ for build-then-transform.
+        // `engine` picks the Cartesian block kernel as _compute_2e does (Auto
+        // per quartet). No integral-symmetry operations: those act on
+        // Cartesian AOs, so a caller using them builds Cartesian and
+        // transforms. Errors if `cart_to_sph` is not block-diagonal by shell.
+        std::expected<std::vector<double>, std::string> _compute_2e_spherical(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            std::size_t nbasis_cart,
+            const Eigen::MatrixXd &cart_to_sph,
+            HartreeFock::IntegralMethod engine,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10);
 
         Eigen::MatrixXd _compute_2e_fock_auto(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,

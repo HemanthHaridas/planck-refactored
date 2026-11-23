@@ -203,26 +203,17 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   `-DPLANCK_CC_UCC=ON`. System size is now limited by the CCSD, not by (T).
   Open:
   - ROHF-(T), after semicanonical ROHF-CC;
-  - size (`docs/CCSD_T_SIZE_SCOPE.md`). The AO integral handling binds,
-    not the CC. Water dimer / cc-pVTZ `ccsd(t)` now completes on this
-    8 GiB machine (694 s, footprint peak 5.5 GB, still paging); it did not
-    fit before steps 1–2. Done: 0 measure; 1 one SCF copy of the ERI
-    tensor, transform frees its input (`885109ce`); 2 batched
-    `transform_eri` (`25714026`, bitwise identical, no time cost, 110/114
-    transform-dependent cases pass, the rest the known rccsdt ones); 3 (T)
-    reuses the CCSD's blocks (`94fb61b5`; E(T) identical, (T) 379 → 354 s
-    on the dimer). 3a: the live-tensor peak is the SCF's
-    Cartesian→spherical transform (Cartesian tensor plus its first
-    transformed copy, 4.1 GB), which step 6 removes. 3b: the CCSD-phase
-    footprint was the macOS allocator. libmalloc reused the freed 2.18 GB
-    Cartesian block whole for the 1.45 GB spherical tensor, pinning a dirty
-    0.73 GB tail all run. Both binaries now re-exec with
-    `MallocLargeCache=0` (`src/base/malloc_env.h`): water cc-pVTZ
-    `ccsd(t)` peak footprint 624 → 262 MiB, same energy and time. 4: ERI
-    thread scratch freed after the tensor build (~130 MiB); core suite
-    178/178 with both. Next: 6, 5,
-    then 7 re-measure (the dimer has not been re-run since 3b). 8 ((T)
-    kernels; (T) is 42–57 % of the CC time) and 9 (CCSD time) depend on 7.
+  - size (`docs/CCSD_T_SIZE_SCOPE.md`). Memory binds, not the CC algebra.
+    Water dimer / cc-pVTZ `ccsd(t)` peak footprint 5.5 → 3.93 GB on this
+    8 GiB machine, energy identical. The changes: one SCF tensor copy,
+    batched `transform_eri`, (T) reusing the CCSD's blocks, re-exec with
+    macOS `MallocLargeCache=0` (libmalloc reused freed large blocks whole),
+    freed ERI thread scratch, a spherical tensor built per shell quartet
+    (never the Cartesian one), and the CC solver moving its state instead
+    of copying every integral block. Left on the dimer: the 1.38 GB AO
+    tensor through the CC, and `vvvv` (0.96 GB). Next: 5 free the AO
+    tensor after the CC block build; 7 re-measure the ladder; then 8 ((T)
+    kernels, 42–57 % of the CC time) or 9 (CCSD time).
   - CCSD[T], CCSDT(Q), CCSDTQ(P) and the Λ variants
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen
     today; (Q) is limited by the generated CCSDT's cost, and Λ needs new

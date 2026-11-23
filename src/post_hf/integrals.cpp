@@ -32,15 +32,11 @@ namespace HartreeFock::Correlation
             const std::size_t nb = calc._shells.nbasis();
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, tag,
                                          std::format("Building spherical AO ERI tensor from {} Cartesian AOs", nb));
-            std::vector<double> eri_cart =
-                _compute_2e(shell_pairs, nb, calc._integral._engine, HartreeFock::ERIKernel::Coulomb, 0.0, 1e-10,
-                            calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
-            // No size cap: the Cartesian n^4 tensor above is already the dominant
-            // cost, and none of the ~20 callers survives an empty return. Moved in,
-            // so the transform frees it after its first quarter step.
-            auto eri_sph = HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
-                std::move(eri_cart), calc._shells._cart_to_sph, nb,
-                std::numeric_limits<std::size_t>::max());
+            // Transformed per shell quartet, so the Cartesian tensor never exists.
+            // No size cap: none of the ~20 callers survives an empty return.
+            auto eri_sph = _compute_2e_spherical(
+                shell_pairs, nb, calc._shells._cart_to_sph, calc._integral._engine, 1e-10,
+                calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
             if (!eri_sph)
             {
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, tag, eri_sph.error());
