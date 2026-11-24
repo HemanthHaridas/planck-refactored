@@ -150,6 +150,15 @@ def emit_planck_ccsd_t_translation_unit() -> str:
 TRIPLE_ORDERINGS = ((0, 1, 2), (1, 2, 0), (2, 0, 1), (1, 0, 2), (0, 2, 1), (2, 1, 0))
 
 _INDEX_TOKEN = re.compile(r"\b([ijkabcdl])\b")
+_T2_READ = re.compile(r"\bt2\(([^()]*)\)")
+
+
+def _swap_t2_pair(expr: str) -> str:
+    """`t2(p, q, r, s)` -> `t2(q, p, s, r)`: the same value in spatial RCC."""
+    def swap(m):
+        p, q, r, s = (x.strip() for x in m.group(1).split(","))
+        return f"t2({q}, {p}, {s}, {r})"
+    return _T2_READ.sub(swap, expr)
 
 
 def _emit_triple_kernel(target: str, terms) -> str:
@@ -183,13 +192,21 @@ def _emit_triple_kernel(target: str, terms) -> str:
                 sign *= fs
                 exprs.append(e)
             # Occupied externals renamed u0, u1, u2 by first appearance, so terms
-            # equal up to an i, j, k renaming share one block.
-            occ: list[str] = []
-            for e in exprs:
-                occ += [x for x in _INDEX_TOKEN.findall(e) if x in "ijk" and x not in occ]
-            assert sorted(occ) == ["i", "j", "k"], occ
-            rename = {x: f"u{n}" for n, x in enumerate(occ)} | vmap | {s.name: s.name}
-            key = tuple(_INDEX_TOKEN.sub(lambda m: rename[m.group(1)], e) for e in exprs)
+            # equal up to an i, j, k renaming share one block. The t2 read is
+            # taken in whichever spelling under t2(i,j,a,b) = t2(j,i,b,a) gives
+            # the smaller key, so a block and its t2 partner share one slot:
+            # 24 blocks per triple -> 12, PySCF's count.
+            best = None
+            for spelling in (exprs, [_swap_t2_pair(e) for e in exprs]):
+                occ: list[str] = []
+                for e in spelling:
+                    occ += [x for x in _INDEX_TOKEN.findall(e) if x in "ijk" and x not in occ]
+                assert sorted(occ) == ["i", "j", "k"], occ
+                rename = {x: f"u{n}" for n, x in enumerate(occ)} | vmap | {s.name: s.name}
+                cand = tuple(_INDEX_TOKEN.sub(lambda m: rename[m.group(1)], e) for e in spelling)
+                if best is None or cand < best[0]:
+                    best = (cand, occ)
+            key, occ = best
             if key not in keys:
                 keys[key] = len(key_text)
                 key_text.append((key, s.name, "nv" if s.name == "d" else "no"))
