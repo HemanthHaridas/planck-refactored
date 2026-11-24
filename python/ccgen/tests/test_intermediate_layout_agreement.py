@@ -74,6 +74,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ccgen.generate import print_cpp_planck  # noqa: E402
+from ccgen.tests.emitted_cpp_eval import gemm_reads  # noqa: E402
 
 # Rank 2 is the cheap anchor and exhibits the defect in full; the mechanism lives in the
 # emitter so it is rank-independent (RankGenericLayoutTests re-checks at rank 3).
@@ -111,6 +112,7 @@ def _usage_layouts(code: str, bounds: dict[str, str]) -> dict[str, Counter]:
     out: dict[str, Counter] = {}
     for op in DRESSED_OPS:
         sites = re.findall(rf"\b{op}\(([a-z](?:, [a-z])*)\)", code)
+        sites += [", ".join(lab) for name, lab in gemm_reads(code) if name == op]
         c: Counter = Counter()
         for site in sites:
             names = site.split(", ")

@@ -32,7 +32,8 @@ import unittest
 
 import numpy as np
 
-from ccgen.tests.emitted_cpp_eval import eval_chunks, parse_blocks
+from ccgen.tests.emitted_cpp_eval import (
+    GEMM_CALL, eval_chunks, gemm_reads, gemm_write, parse_blocks)
 
 from ccgen.tests.test_emitted_builder_matches_spec import _spatial_tensors
 
@@ -150,6 +151,9 @@ def _part_blocks(src: str, symbol: str, kind: str = 'static void'):
             out.append((tgt, acc[-1].strip()))
         else:
             out.append((tgt, rhs))
+    for g in GEMM_CALL.finditer(body):
+        _, tgt, expr = gemm_write(g)
+        out.append((tgt, expr))
     return out
 
 
@@ -290,6 +294,8 @@ class MergedCallSitesTests(unittest.TestCase):
         # And a merged array must be read at more than one index order, or the
         # permutation property this gate exists for is not present.
         reads = re.findall(r"(W_t2t2v_oooovv_[0-9a-f]+)\(([^)]*)\)", src_m)
+        reads += [(name, ", ".join(lab)) for name, lab in gemm_reads(src_m)
+                  if name.startswith("W_t2t2v_oooovv_")]
         orders = {}
         for name, idx in reads:
             orders.setdefault(name, set()).add(idx.strip())

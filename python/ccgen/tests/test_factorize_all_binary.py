@@ -143,7 +143,8 @@ class FactorizeAllBinaryTests(unittest.TestCase):
             self.skipTest(f"ccgen deps unavailable: {exc}")
 
         def triples_nests(src):
-            return sum(b.count("acc +=") for b in _residual_bodies(src, "ccsdt")
+            return sum(b.count("acc +=") + b.count("cc_gemm_contract(")
+                       for b in _residual_bodies(src, "ccsdt")
                        if "triples" in b.split("(")[0])
 
         self.assertIn("// symmetrize ijkabc:", folded)

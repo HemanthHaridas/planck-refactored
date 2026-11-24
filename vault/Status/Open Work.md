@@ -219,20 +219,18 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     8: the restricted (T) computes W once per virtual triple for all six
     orderings (24 distinct contractions instead of 144 evaluations), (T)
     5–6× faster: dimer 283 → 49.9 s, 8× behind PySCF; whole run 278 s.
-    Next: 9 CCSD time (213 s vs 7.4 s, now 77 % of the run), scoped in
-    `docs/CCSD_RESIDUAL_COST_SCOPE.md`. R0 (census) done: the 36× per
-    iteration is 4.5× more arithmetic (31 separate o³v³ contractions, an
-    unfolded vvvv ladder) × 8.1× slower arithmetic (scalar loops against
-    BLAS). Generator fixes only. R1 done: the doubles residual on j ≥ i
-    only, then mirrored (the term fold over (ia)(jb) cut 2 % and was
-    dropped), CCSD 1.4–1.56× per iteration (dimer cc-pVTZ 11.8 → 7.55 s,
-    now 23× PySCF per iteration). R2 done: terms reading t2 the same
-    way share one contraction against a summed intermediate (31 o³v³
-    contractions → 6), CCSD 1.28–1.41× per iteration (dimer cc-pVTZ
-    7.69 → 5.45 s, now ~17× PySCF; arithmetic 1.5× PySCF). Next: R2b cut
-    builder arithmetic (0.89 × 10¹⁰, 43 % of the count), R3 GEMM lowering
-    (time Eigen against Accelerate first; BLAS B1 may belong there);
-    hand-written code is the last resort. Then the
+    Next: 9 CCSD time (`docs/CCSD_T_SIZE_SCOPE.md`).
+    The gap was more arithmetic times slower arithmetic. Generator changes
+    closed the arithmetic to 1.4× PySCF (a j ≥ i half range, a
+    common-operand merge on t2 and on v) and most of the rate by lowering
+    every large binary contraction to an Eigen GEMM
+    (`src/post_hf/cc/gemm_contract.h`). Dimer cc-pVTZ CCSD per iteration
+    11.8 → 0.85 s, 2.7× PySCF, and the ratio no longer grows with the basis;
+    whole `ccsd(t)` 278 → 81 s, (T) now about 60 % of it. Open: R3b o³v³ GEMMs
+    on j ≥ i (staircase, one GEMM per i), R3c Accelerate behind the helper
+    (2.5–4× on the GEMMs; B1 build decision), R2c shared builder
+    combinations, R4 re-measure. The hand-written fallback is not justified.
+    Then the
     remaining (T) 8× (t2 symmetry, GEMM-shaped blocks).
   - CCSD[T], CCSDT(Q), CCSDTQ(P) and the Λ variants
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen

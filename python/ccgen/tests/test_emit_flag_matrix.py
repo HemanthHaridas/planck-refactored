@@ -54,23 +54,26 @@ BASELINES = (
     ("bare", {}, 37216,
      "af74826e253415a261f9b57efd4ed906827ef0c70cb9da6989e0f941d3b9f656"),
     # Restated 2026-11-24 for R1's doubles half range (`_pair_half_kernel`,
-    # docs/CCSD_RESIDUAL_COST_SCOPE.md): with it a no-op, both spin-adapted rows
+    # docs/CCSD_T_SIZE_SCOPE.md): with it a no-op, both spin-adapted rows
     # reproduce their previous pins, 65431 / 44705c8a... and 63781 / 1a21483c....
     ("spin_adapt", {"spin_adapt": True}, 65682,
      "1c757579a44bc05a55cd6a1b1f40800282a897a42d8c22aebe1694d5727a8940"),
     # Moved at V1.3.2 (37413 -> 37433): tau's builder is now method-suffixed
     # (`build_tau_ccsd`) like every other builder -- one naming rule, no exceptions.
-    ("factorize_tau", {"factorize_tau": True}, 37433,
-     "b8ecaa6711793302be21d9e9e1cdc3fbc154acc2d5f57d98692c9e10a9926495"),
+    # Restated 2026-11-24 for GEMM lowering (`_gemm_lowering`, R3 in
+    # docs/CCSD_T_SIZE_SCOPE.md); with it returning None, every row
+    # reproduces its previous pin.
+    ("factorize_tau", {"factorize_tau": True}, 37047,
+     "d06c9e5517a45a183c0231d3b7075954afcc89ad7d901294fb0911557596b4a5"),
     # Restated 2026-11-21: amplitude views bound as fixed_rank_view<N>(...) and read
     # as t2(i, j, a, b) instead of t2({i, j, a, b}) (docs/CCGEN_GENERATED_CC_COST.md
     # #11). Reverting exactly those two forms by regex reproduces the previous pins:
     # 37175 / bf1e083d..., 64265 / f3a85400....
-    ("force_arbitrary", {"force_arbitrary": True}, 36941,
-     "5e1657eb67051cc57774d659c3a55cb45b625a7a79615dce2a07b98eef83d1b1"),
+    ("force_arbitrary", {"force_arbitrary": True}, 34515,
+     "f847dc1051aae3863142fcd0e8e63ead44379383cdfc4ebd93d8002b5fa4c87f"),
     ("spin_adapt+force_arbitrary",
-     {"spin_adapt": True, "force_arbitrary": True}, 64032,
-     "2e3e6803baf8c68f71893d73dcfcab9378e930a221ad57ec157116389d5ca4ff"),
+     {"spin_adapt": True, "force_arbitrary": True}, 59420,
+     "e7c29db27ed8b519c78d7cd6d1e0804f58681385d2ab5447ae16bc9b390b376e"),
     # Moved at V1.3 (27960 -> 28122): builders that reference a sibling intermediate now
     # bind it (`const auto tau = build_tau(...)`), which is what made the dressed TU
     # compile for the first time. The four undressed baselines above are unchanged, so the
@@ -99,8 +102,10 @@ BASELINES = (
     # 0.000e+00 while the old was off by 1.4e+01. Byte length is unchanged (the
     # edits are in place), which is why only this digest moved.
     # See docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md, D4/D5.
-    ("dress_operators", {"dress_operators": True}, 28187,
-     "49d24c2724e73e5dd0e3625bb2e21367b17db58f68374e97c4c2fa91ee756f05"),
+    # Moved again 2026-11-24 (28187 -> 27313) for GEMM lowering (R3); with
+    # `_gemm_lowering` returning None it reproduces the previous pin.
+    ("dress_operators", {"dress_operators": True}, 27313,
+     "27950f08303257e4d9621dd675fa0bd8fc79433fb5c187cdfaa89e25e2b83e3b"),
 )
 
 
@@ -328,12 +333,12 @@ class DressedTranslationUnitCompileTests(unittest.TestCase):
             start = text.index(f"{consumer}(")
             body = text[start:text.index("\n}", start)]
             binding = f"const auto tau = build_tau_{METHOD}("
+            # A loop nest reads `tau(...)`; a lowered call `cc_operand(tau)`.
+            uses = [body.index(u) for u in ("* tau(", "cc_operand(tau)") if u in body]
             with self.subTest(consumer=consumer):
-                self.assertIn("tau(", body, "expected this builder to reference tau")
+                self.assertTrue(uses, "expected this builder to reference tau")
                 self.assertIn(binding, body)
-                self.assertLess(body.index(binding),
-                                body.index("* tau(") if "* tau(" in body
-                                else body.index("tau("),
+                self.assertLess(body.index(binding), min(uses),
                                 "tau must be bound before first use")
 
 

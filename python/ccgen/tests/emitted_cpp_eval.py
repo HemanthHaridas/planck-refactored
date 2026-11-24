@@ -22,6 +22,31 @@ import re
 import numpy as np
 
 
+# A lowered contraction (`cc_gemm_contract`, R3) is the same einsum as the
+# loop nest it replaced: out(labels) += coeff * A(a_labels) * B(b_labels).
+# The trailing `pair_half` flag only narrows loop bounds, which this
+# evaluator ignores anyway.
+GEMM_CALL = re.compile(
+    r'cc_gemm_contract\((\w+), "(\w+)", ([-+.\de]+), cc_operand\(([\w.]+)\), "(\w+)", '
+    r'cc_operand\(([\w.]+)\), "(\w+)", "\w+", "\w+", "\w+"(?:, true)?\);')
+
+
+def gemm_write(m):
+    """A `GEMM_CALL` match -> (lhs, target indices, accumulation expression)."""
+    lhs, out, coeff, a, al, b, bl = m.groups()
+    return (lhs, list(out),
+            f"{float(coeff)} * {a}({', '.join(al)}) * {b}({', '.join(bl)})")
+
+
+def gemm_reads(src: str):
+    """(operand name, index labels) for every operand of a lowered call."""
+    out = []
+    for m in GEMM_CALL.finditer(src):
+        out.append((m.group(4).split('.')[-1], m.group(5)))
+        out.append((m.group(6).split('.')[-1], m.group(7)))
+    return out
+
+
 def parse_blocks(src: str, symbol: str):
     """Split one emitted function body into its `// Term N` / `// Definition
     term N` chunks, returning (target_indices, summed_expr) per chunk."""
@@ -32,6 +57,11 @@ def parse_blocks(src: str, symbol: str):
     chunks = re.split(r'// (?:Definition term|Term) \d+', body)[1:]
     out = []
     for c in chunks:
+        g = GEMM_CALL.search(c)
+        if g is not None:
+            _, tgt, expr = gemm_write(g)
+            out.append((tgt, expr))
+            continue
         res = re.search(r'result\(([^)]*)\)\s*\+=', c)
         if res is None:
             continue
@@ -101,10 +131,15 @@ def eval_body(body: str, no: int, nv: int, resolve):
     def look(name):
         return local[name] if name in local else resolve(name)
 
+    writes = []
     for w in re.finditer(r'\b(result|X\d+)\(\{?([^)}]*)\}?\)\s*\+=\s*([^;]*);', body):
         lhs, tgt, rhs = w.group(1), [x.strip() for x in w.group(2).split(',')], w.group(3).strip()
         if rhs == 'acc':
             rhs = re.findall(r'acc\s*\+=\s*([^;]*);', body[:w.start()])[-1].strip()
+        writes.append((w.start(), lhs, tgt, rhs))
+    for g in GEMM_CALL.finditer(body):
+        writes.append((g.start(), *gemm_write(g)))
+    for _, lhs, tgt, rhs in sorted(writes, key=lambda w: w[0]):
         local[lhs] = local[lhs] + eval_chunks([(tgt, rhs)], local[lhs].shape, look)
     return local['result']
 

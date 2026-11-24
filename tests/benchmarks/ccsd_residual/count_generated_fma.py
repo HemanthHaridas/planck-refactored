@@ -1,5 +1,5 @@
 """Multiply-adds per CCSD iteration in the generated rank-2 RCC kernels
-(docs/CCSD_RESIDUAL_COST_SCOPE.md, R0).
+(docs/CCSD_T_SIZE_SCOPE.md, R0).
 
 Usage: count_generated_fma.py <build>/generated/cc/ccsd_arbitrary_planck_generated.cpp <no> <nv> [nests.tsv]
 

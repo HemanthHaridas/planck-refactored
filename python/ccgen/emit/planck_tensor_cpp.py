@@ -911,6 +911,84 @@ def group_terms_by_loop_signature(
     return groups
 
 
+def with_gemm_include(text: str) -> str:
+    """Include the GEMM helper after tensor_backend.h, only when a lowered
+    contraction uses it, so a TU without one is unchanged."""
+    if "cc_gemm_contract(" not in text:
+        return text
+    return text.replace('#include "post_hf/cc/tensor_backend.h"\n',
+                        '#include "post_hf/cc/tensor_backend.h"\n'
+                        '#include "post_hf/cc/gemm_contract.h"\n', 1)
+
+
+_READ = re.compile(r"([A-Za-z_][\w.]*)\(([^(){}]*)\)")
+
+
+def _gemm_lowering(term, factors, free, summed, lhs, intermediate_names,
+                   arbitrary_amplitudes, pad):
+    """One binary contraction as a `cc_gemm_contract` call
+    (src/post_hf/cc/gemm_contract.h; docs/CCSD_T_SIZE_SCOPE.md, R3),
+    or None to keep the loop nest.
+
+    Lowered when: two factors, at least one summed index and five distinct
+    indices in all (o^2v^3, o^3v^2 and up), every summed index in both
+    factors and every free index in exactly one, and each operand either used
+    in place by the helper or small enough to copy (at most three virtual
+    indices, so at most o v^3, the size of the ovvv block). The vvvv block is
+    therefore never copied.
+
+    Group orders: k as stored in the operand with more virtual indices, m as
+    stored in the first factor, n as stored in the second. The helper uses an
+    operand in place exactly when its storage is r+c or c+r in those orders,
+    which is the test below.
+    """
+    # Five or more distinct indices: o^2v^3 and up. Smaller nests are cheap
+    # enough that the GEMM setup would not pay.
+    if len(factors) != 2 or not summed or len(free) + len(summed) < 5:
+        return None
+    reads = []
+    sign = 1
+    for factor in factors:
+        s, expr = _map_factor(factor, intermediate_names, arbitrary_amplitudes)
+        m = _READ.fullmatch(expr)
+        if m is None:
+            return None
+        name, labels = m.group(1), [x.strip() for x in m.group(2).split(",")]
+        known = (name.startswith("mo_blocks.")
+                 or name in (intermediate_names or ())
+                 or (arbitrary_amplitudes and re.fullmatch(r"t\d+(?:_[ab]+)?", name)))
+        if not known or any(len(x) != 1 for x in labels) or len(set(labels)) != len(labels):
+            return None
+        reads.append((name, "".join(labels)))
+        sign *= s
+    (a_name, a_lab), (b_name, b_lab) = reads
+    free_names = [i.name for i in free]
+    sum_names = [i.name for i in summed]
+    if any(len(x) != 1 for x in free_names + sum_names):
+        return None
+    if not all(c in a_lab and c in b_lab for c in sum_names):
+        return None
+    if not all((c in a_lab) != (c in b_lab) for c in free_names):
+        return None
+    if set(a_lab) | set(b_lab) != set(free_names) | set(sum_names):
+        return None
+    space = {i.name: i.space for i in list(free) + list(summed)}
+    n_vir = lambda lab: sum(space[c] == "vir" for c in lab)  # noqa: E731
+    k_src = b_lab if n_vir(b_lab) > n_vir(a_lab) else a_lab
+    k = "".join(c for c in k_src if c in sum_names)
+    m = "".join(c for c in a_lab if c not in sum_names)
+    n = "".join(c for c in b_lab if c not in sum_names)
+    if not m or not n:
+        return None
+    for lab, r, c in ((a_lab, m, k), (b_lab, k, n)):
+        if lab not in (r + c, c + r) and n_vir(lab) > 3:
+            return None
+    coeff = float(term.coeff * sign)
+    return (f'{pad}cc_gemm_contract({lhs}, "{"".join(free_names)}", {coeff!r}, '
+            f'cc_operand({a_name}), "{a_lab}", cc_operand({b_name}), "{b_lab}", '
+            f'"{m}", "{k}", "{n}");')
+
+
 def emit_planck_term(
     term: AlgebraTerm | RestrictedClosedShellTerm,
     lhs: str = "result",
@@ -971,6 +1049,12 @@ def emit_planck_term(
         free = list(term.free_indices)
         summed = list(term.summed_indices)
         factors = term.factors
+
+    if not ucc:
+        lowered = _gemm_lowering(term, factors, free, summed, lhs,
+                                 intermediate_names, arbitrary_amplitudes, pad)
+        if lowered is not None:
+            return lowered
 
     if omp_collapse > 0 and len(free) >= omp_collapse:
         lines.append(
@@ -1309,7 +1393,7 @@ def _pair_half_kernel(text: str) -> str:
     Jacobi divides by symmetric denominators, DIIS mixes). So every term nest
     starts j at i, and one pass fills i > j from it: (o+1)/(2o) of the work,
     for every term including the self-symmetric vvvv ladder, with no orbit
-    matching (PySCF's i >= j; docs/CCSD_RESIDUAL_COST_SCOPE.md, R1).
+    matching (PySCF's i >= j; docs/CCSD_T_SIZE_SCOPE.md, R1).
 
     In this kernel j is only ever the free occupied index (summed occupied
     indices are k, l, ...), so the loop header is rewritten as text. Checked:
@@ -1322,6 +1406,11 @@ def _pair_half_kernel(text: str) -> str:
     nests = text.count(_PAIR_J_FULL)
     assert nests > 0, "pair_half: no free j loop found"
     text = text.replace(_PAIR_J_FULL, _PAIR_J_HALF)
+    # Lowered contractions (R3) take the same half: a GEMM group holding both
+    # i and j keeps j >= i (the ladder); other groups compute in full and the
+    # mirror below overwrites j < i.
+    text = re.sub(r"^(\s*cc_gemm_contract\(result, .*)\);$", r"\1, true);",
+                  text, flags=re.M)
     # GCC refuses `schedule` on a non-rectangular collapsed loop. The default
     # schedule is harmless here: each element is written by one iteration.
     text = re.sub(r"(#pragma omp parallel for collapse\(\d+\)) schedule\(static\)", r"\1", text)
@@ -1818,4 +1907,4 @@ def emit_planck_translation_unit(
         lines.append("")
 
     lines.append("} // namespace HartreeFock::Correlation::CC")
-    return "\n".join(lines)
+    return with_gemm_include("\n".join(lines))

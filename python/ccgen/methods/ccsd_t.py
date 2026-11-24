@@ -140,7 +140,8 @@ def emit_planck_ccsd_t_translation_unit() -> str:
         parts.append(_emit_block_kernel(key, terms, ucc=True))
         parts.append("")
     parts.append("} // namespace HartreeFock::Correlation::CC")
-    return "\n".join(parts)
+    from ..emit.planck_tensor_cpp import with_gemm_include
+    return with_gemm_include("\n".join(parts))
 
 
 # The six orderings of a virtual triple (v0, v1, v2), as positions into it:

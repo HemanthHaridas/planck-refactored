@@ -1029,26 +1029,38 @@ def factorize_equations(eqs, *, top_k=None, savings_fraction=None,
     return rewritten, kept
 
 
-# ── R2: merge terms that read t2 the same way ──────────────────────
+# ── R2: merge terms that read one operand the same way ─────────────
 
-# Spatial RCC t2(a,b,i,j) = t2(b,a,j,i): the (ia)(jb) pair swap.
-_T2_SPATIAL_SPELLINGS = ((0, 1, 2, 3), (1, 0, 3, 2))
+# Spatial RCC t2(a,b,i,j) = t2(b,a,j,i): the (ia)(jb) pair swap. The same pair
+# swap holds for a physicist ERI, <pq|rs> = <qp|sr>.
+_PAIR_SWAP_SPELLINGS = ((0, 1, 2, 3), (1, 0, 3, 2))
 
 
-def merge_common_amplitude_reads(terms, target, amp="t2",
-                                 spellings=_T2_SPATIAL_SPELLINGS):
-    """R2 (docs/CCSD_RESIDUAL_COST_SCOPE.md): sum_n c_n amp(P) X_n(Q_n) ->
-    amp(P) Y(Q), with Y = sum_n c_n X_n permuted to one slot order.
+def merge_common_operand_reads(terms, target, operand="t2",
+                               spellings=_PAIR_SWAP_SPELLINGS, max_rest=1,
+                               inline=None):
+    """sum_n c_n A(P) R_n -> A(P) Y, with Y = sum_n c_n R_n permuted to one
+    slot order (docs/CCSD_T_SIZE_SCOPE.md, R2 and R2b).
 
-    Applies to binary terms `amp * X` (X not `amp`). Two terms share a group
-    when their `amp` read is the same once summed indices are renamed in order
-    of appearance, taking the smaller of the read's equivalent `spellings`, and
-    X carries the same index set. Y is an intermediate whose builder is a sum of
-    single-factor terms (|Y| work per member, against the full contraction each
-    merged member saves). Singletons are left alone.
+    A is the one factor named `operand`; R_n, the rest of the term, is up to
+    `max_rest` factors with no summation of its own (every index of R_n is free
+    or read by A), so building Y costs |Y| per member against the contraction
+    each merged member saves. Two terms share a group when their A read is the
+    same once summed indices are renamed in order of appearance, taking the
+    smallest of A's equivalent `spellings`, and their rests carry the same index
+    set. Singletons are left alone.
 
-    Returns (new_terms, new_specs); specs reference the X's, so they go after
-    them in the intermediate list.
+    `inline` maps names of intermediates read once and defined by one term to
+    their specs. A term that reaches A only through one of them is looked at
+    with it expanded; if that term merges, its intermediate is dead and the
+    caller drops it. Unmerged terms are returned as they came.
+
+    R2 runs it with A = t2 after the factorizer (the rests are its W's). R2b
+    runs it with A = v after R2, when only terms R2 left alone still read v:
+    there the ladder t2.v and t1 . (t1 v) merge into tau = t2 + t1 t1, without
+    taking any term from a t2 group.
+
+    Returns (new_terms, new_specs).
     """
     import hashlib
     from fractions import Fraction
@@ -1060,14 +1072,42 @@ def merge_common_amplitude_reads(terms, target, amp="t2",
         names = "klmnopqrstuvwxyz" if space == "occ" else "cdefghabmnopqrst"
         return [n for n in names if n not in taken]
 
+    def expand(t, f, spec):
+        d = spec.definition_terms[0]
+        m = dict(zip(spec.indices, f.indices))
+        used = {i.name for x in t.factors for i in x.indices}
+        new_dummies = []
+        for i in d.summed_indices:
+            n = pool(i.space, used)[0]
+            used.add(n)
+            m[i] = Index(n, i.space, is_dummy=True)
+            new_dummies.append(m[i])
+        factors = tuple(x for x in t.factors if x is not f) + tuple(
+            Tensor(x.name, tuple(m[i] for i in x.indices), x.antisym_groups)
+            for x in d.factors)
+        return AlgebraTerm(coeff=t.coeff * d.coeff, factors=factors,
+                           free_indices=t.free_indices,
+                           summed_indices=t.summed_indices + tuple(new_dummies),
+                           connected=True)
+
     def analyse(t):
-        if len(t.factors) != 2:
+        ops = [f for f in t.factors if f.name == operand]
+        if not ops and inline:
+            for f in t.factors:
+                if f.name in inline:
+                    return analyse(expand(t, f, inline[f.name]))
+        if len(ops) != 1:
             return None
-        amps = [f for f in t.factors if f.name == amp]
-        if len(amps) != 1:
+        a = ops[0]
+        rest = tuple(f for f in t.factors if f is not a)
+        if not rest or len(rest) > max_rest:
             return None
-        a = amps[0]
-        x = t.factors[1 - t.factors.index(a)]
+        rest_idx = tuple(i for f in rest for i in f.indices)
+        if not set(rest_idx) <= set(t.free_indices) | set(a.indices):
+            return None
+        # Y no larger than A: an outer product rest (t1 t2) would make Y o^4v^4.
+        if len(set(rest_idx)) > len(a.indices):
+            return None
         dummies = set(t.summed_indices)
         taken = {i.name for i in t.free_indices}
         best = None
@@ -1075,14 +1115,14 @@ def merge_common_amplitude_reads(terms, target, amp="t2",
             read = tuple(a.indices[p] for p in perm)
             free_pool = {s: pool(s, taken) for s in ("occ", "vir")}
             ren = {}
-            for i in read + x.indices:
+            for i in read + rest_idx:
                 if i in dummies and i not in ren:
                     ren[i] = free_pool[i.space].pop(0)
             key = (tuple(ren.get(i, i.name) for i in read),
-                   tuple(sorted(ren.get(i, i.name) for i in x.indices)))
+                   tuple(sorted({ren.get(i, i.name) for i in rest_idx})))
             if best is None or key < best[0]:
                 best = (key, read, ren)
-        return best[0], best[1], best[2], a, x
+        return best[0], best[1], best[2], a, rest, t
 
     def slot(i, ren):
         return Index(ren[i], i.space) if i in ren else i
@@ -1106,29 +1146,30 @@ def merge_common_amplitude_reads(terms, target, amp="t2",
         if len(members) == 1:
             out_terms.append(members[0][0])
             continue
-        t0, (_, read0, ren0, a0, x0) = members[0]
-        # Y's slots: X's indices under the group's renaming, occ first.
-        slots = tuple(canonical_index_order([slot(i, ren0) for i in x0.indices]))
-        # Sum the members' X reads, combining repeats; drop what cancels.
+        _, (_, read0, ren0, a0, rest0, t0) = members[0]
+        # Y's slots: the rest's indices under the group's renaming, occ first.
+        slots = tuple(canonical_index_order(list(dict.fromkeys(
+            slot(i, ren0) for f in rest0 for i in f.indices))))
+        # Sum the members' rests, combining repeats; drop what cancels.
         coeffs: dict = {}
-        for t, (_, _, ren, _, x) in members:
-            fac = Tensor(x.name, tuple(slot(i, ren) for i in x.indices),
-                         x.antisym_groups)
-            coeffs[fac] = coeffs.get(fac, Fraction(0)) + t.coeff
+        for _, (_, _, ren, _, rest, t) in members:
+            facs = tuple(Tensor(f.name, tuple(slot(i, ren) for i in f.indices),
+                                f.antisym_groups) for f in rest)
+            coeffs[facs] = coeffs.get(facs, Fraction(0)) + t.coeff
         defs = tuple(
-            AlgebraTerm(coeff=c, factors=(f,), free_indices=slots,
+            AlgebraTerm(coeff=c, factors=facs, free_indices=slots,
                         summed_indices=(), connected=True)
-            for f, c in coeffs.items() if c != 0)
+            for facs, c in coeffs.items() if c != 0)
         if not defs:
             continue
         digest = hashlib.blake2s(repr((target, k)).encode(),
                                  digest_size=3).hexdigest()
         sig = "".join(i.space[0] for i in slots)
-        name = f"W_{amp}merge_{sig}_{digest}"
+        name = f"W_{operand}merge_{sig}_{digest}"
         specs.append(IntermediateSpec(
             name=name, indices=slots, definition_terms=defs,
             usage_count=1, index_space_sig=sig, usage_targets=(target,)))
-        # Merged term: amp read in the group's spelling, Y on the same slots;
+        # Merged term: A read in the group's spelling, Y on the same slots;
         # renamed dummies stay dummies here.
         y_read = tuple(Index(s.name, s.space, is_dummy=s.name not in
                              {i.name for i in t0.free_indices})
@@ -1143,6 +1184,41 @@ def merge_common_amplitude_reads(terms, target, amp="t2",
                 [dummy(i, ren0) for i in t0.summed_indices])),
             connected=True))
     return out_terms, specs
+
+
+def _spec_reads(eqs, specs):
+    """How many times each factor name is read, by residual terms and by spec
+    definitions."""
+    from collections import Counter
+    reads = Counter()
+    for terms in eqs.values():
+        for t in terms:
+            reads.update(f.name for f in t.factors)
+    for spec in specs:
+        for d in spec.definition_terms:
+            reads.update(f.name for f in d.factors)
+    return reads
+
+
+def single_use_specs(eqs, specs):
+    """Specs read exactly once and defined by one term: the ones a merge may
+    expand at their single reader."""
+    reads = _spec_reads(eqs, specs)
+    return {s.name: s for s in specs
+            if reads[s.name] == 1 and len(s.definition_terms) == 1}
+
+
+def drop_unread_specs(eqs, specs):
+    """Drop specs nothing reads any more (a merge expanded their one reader),
+    repeating until none is left, since a dropped spec may have been the last
+    reader of another."""
+    specs = list(specs)
+    while True:
+        reads = _spec_reads(eqs, specs)
+        kept = [s for s in specs if reads[s.name]]
+        if len(kept) == len(specs):
+            return kept
+        specs = kept
 
 
 # ── M3.0: factor an operator's OWN builder body ────────────────────

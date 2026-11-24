@@ -99,7 +99,7 @@ class UccSwitchTests(unittest.TestCase):
 
         expected = {
             # Restated 2026-11-24 for R1's doubles half range (`_pair_half_kernel`,
-            # docs/CCSD_RESIDUAL_COST_SCOPE.md); with it a no-op every entry
+            # docs/CCSD_T_SIZE_SCOPE.md); with it a no-op every entry
             # reproduces its previous pin: 44705c8ad85f951c, 4d1ab40e5a75fb19,
             # f70c70701d00a505, 00b7d05821c655e9, df90d610924ff302.
             ("ccsd", None): "1c757579a44bc05a",
@@ -114,7 +114,10 @@ class UccSwitchTests(unittest.TestCase):
             # Restated 2026-11-21 for fixed-rank amplitude reads
             # (docs/CCGEN_GENERATED_CC_COST.md #11); reverting the binding and read
             # forms by regex reproduces the previous pin, 46c90d47ea08c78f.
-            ("ccsdtq", "diagram"): "7095e69cac9dc826",
+            # Restated 2026-11-24 for GEMM lowering (R3); with `_gemm_lowering`
+            # returning None it reproduces 7095e69cac9dc826. The rank-2/3 pins
+            # above are unchanged by it.
+            ("ccsdtq", "diagram"): "b35851fc3c02bb34",
         }
         for (method, engine), digest in expected.items():
             with self.subTest(method=method, engine=engine):
