@@ -69,8 +69,8 @@ the 6× redundancy that was the real lever.
 |---|---|---|---|
 | R0 | Census and measurement | done: 4.5× arithmetic × 8.1× rate; R1, R2, then R3 | — |
 | R1 | Doubles residual on j ≥ i only, then mirror | done: CCSD 1.4–1.56× per iteration | R0 |
-| R2 | Merge terms sharing a t2 read | 31 → 15 o³v³ contractions | R0 |
-| R2b | Cut builder arithmetic | builders 0.88 × 10¹⁰ toward PySCF's share | R2 |
+| R2 | Merge terms sharing a t2 read | done: 31 → 6 o³v³ contractions, CCSD 1.28–1.41× per iteration | R0 |
+| R2b | Cut builder arithmetic | builders 0.89 × 10¹⁰, now 43 % of the count | R2 |
 | R3 | GEMM lowering of the contractions | the 8.1× rate gap | R1, R2, R2b |
 | R4 | Re-measure the ladder against PySCF | decides on the last resort | R1–R3 |
 
@@ -174,26 +174,82 @@ in which of t2's two equivalent spellings they read; the ladder is its own
 image and has nothing to fold. The half range needs no orbit matching and
 covers every term.
 
-### R2. Merge terms that share a t2 read
+### R2. Merge terms that share a t2 read — done
 
-- Distributivity: `Σ_n t2(P) · X_n(Q_n)`, with each `X_n` read over the
-  same index set, becomes `t2(P) · Y` with `Y = Σ_n ±X_n` permuted to one
-  layout. Y is o²v² work per iteration, against the o³v³ contraction it
-  saves.
-- Canonicalize t2 accesses modulo t2's (ia)(jb) symmetry before grouping.
-- Where it lives: the factorization layer (`python/ccgen/optimization/
-  factorize.py`) already builds derived operators from contraction
-  structure; a "common operand" pass belongs there, not in the emitter.
-- Gate: as R1, plus a value test that the merged residual equals the
-  unmerged one term by term (the merged-call-site test pattern of
-  `test_merged_call_sites.py`).
+**What landed.** `merge_common_amplitude_reads`
+(`python/ccgen/optimization/factorize.py`) rewrites
+`Σ_n c_n t2(P) X_n(Q_n)` as `t2(P) Y(Q)`, with `Y = Σ_n c_n X_n` an
+intermediate whose builder sums single-factor terms. `print_cpp_planck`
+runs it after the factorizer, on every non-energy target, when the build is
+spin-adapted and not UCC. It also reaches the singles and the CCSDT/CCSDTQ
+residuals.
+
+- Grouping key: the t2 read with summed indices renamed in order of
+  appearance, the smaller of its two spellings under t2(a,b,i,j) =
+  t2(b,a,j,i), plus the index *set* of the other factor. Comparing the set,
+  not the layout, is why the groups are fewer than the census's 15: each
+  X_n is permuted into Y's slots, so X's own index order does not split a
+  group.
+- Rank-2 doubles: 69 binary `t2 × X` terms → 12 contractions; the 31 o³v³
+  terms → 6. Repeated X reads within a group are combined, and a group that
+  cancels is dropped. ccsdt: singles 36 → 23, doubles 142 → 85, triples
+  331 → 189 terms.
+- Y is |Y| work per member, against the full contraction each member saves.
+
+**Count** (dimer cc-pVTZ, o = 10, v = 106; `count_generated_fma.py` now
+counts R1's `j = i` loops as half):
+
+| | R1 | R2 |
+|---|---|---|
+| o³v³ | 31 statements, 2.03 × 10¹⁰ | 6 statements, 0.39 × 10¹⁰ |
+| ladder o²v⁴ | 0.69 × 10¹⁰ | 0.69 × 10¹⁰ |
+| other residual | 0.24 × 10¹⁰ | 0.08 × 10¹⁰ |
+| builders | 0.88 × 10¹⁰ | 0.89 × 10¹⁰ |
+| total | 3.85 × 10¹⁰ | 2.06 × 10¹⁰ (1.5× PySCF's 1.38 × 10¹⁰) |
+
+**Result** (4 threads, R1 and R2 binaries built from the same tree, run back
+to back; CCSD and (T) energies identical to every printed digit):
+
+| Rung | CCSD per iteration, R1 | R2 | whole run |
+|---|---|---|---|
+| water cc-pVTZ | 16 × 0.138 s | 16 × 0.108 s (1.28×) | 3.6 → 3.1 s |
+| water dimer cc-pVDZ | 20 × 0.299 s | 20 × 0.216 s (1.38×) | 7.1 → 5.5 s |
+| water dimer cc-pVTZ | 18 × 7.69 s | 18 × 5.45 s (1.41×) | 205 → 164 s |
+
+Time falls less than the count (1.41× against 1.87×): what is left is the
+ladder and the builders, both still scalar loops. Against PySCF the dimer
+cc-pVTZ CCSD is now ~17× per iteration (was 23× after R1, 36× before).
+
+**Gates.** `test_merged_amplitude_reads.py` emits ccsd and ccsdt with and
+without the pass and requires every residual to agree to 1e-10 relative,
+on a fixture whose t2 has exactly the (ia)(jb) symmetry. It is
+mutation-checked: one member's sign flipped fails at 0.44 relative, and a
+wrong Y slot order fails on shape. C++: core suite 178/178 on `build/`;
+the seven CC cases on `build-default` (`water_rccsd_t_{sto3g,631g,
+spherical_ccpvdz}`, `h2o2_c1_rccsd_t_631g`, `water_spherical_ccsd_sto3g`,
+`be_ccsd_spherical_631gd`, `be_rccsdtq_sto3g`); on `build/`,
+`{ch4,lih}_rccsdt_generated_sto3g`, `be_rccsdtq_sto3g`, `b_ucc{2,3,4}_sto3g`,
+`oh_uccsd_t_631g`, `water_rccsd_t_631g`, `h2o2_c1_rccsd_t_631g`. ccgen suite
+clean.
+
+The ccgen suite had not been run for R1. It showed 10 failures, none from
+R2:
+- **Nine byte/hash pins of spin-adapted emits.** R1's half range changes
+  them. With `_pair_half_kernel` made a no-op, every old pin reproduces, so
+  they are re-pinned with that note.
+- **`test_registry_compiles_with_spin_adapted_ccsdtq`**, stale since
+  2026-11-22. The registry includes the rank-2 companion, which the test
+  never generated; it now makes the same second generator call as CMake.
+- **`test_chunked_kernel_builds_once`.** R2 took ccsdt triples from 331 to
+  189 terms, under the default 256-term chunk size, so the test now lowers
+  the chunk size for its emit.
 
 ### R2b. Cut builder arithmetic
 
-After R1 + R2 the intermediate builders are the largest arithmetic excess
-over PySCF: 0.88 × 10¹⁰ multiply-adds on the dimer in cc-pVTZ (R0), a
-third of the projected 2.6 × 10¹⁰, with the four `build_W_t2v_oovv_*` at
-1.19 × 10⁹ each. Neither R1 nor R2 touches them.
+After R2 the intermediate builders are the largest arithmetic term:
+0.89 × 10¹⁰ multiply-adds on the dimer in cc-pVTZ, 43 % of the 2.06 × 10¹⁰
+total, with the four `build_W_t2v_oovv_*` at 1.19 × 10⁹ each. Neither R1
+nor R2 touches them.
 
 - Census first: per builder, its multiply-adds, its readers, and whether
   it is a transpose or (ia)(jb) image of another builder (the
@@ -214,6 +270,12 @@ third of the projected 2.6 × 10¹⁰, with the four `build_W_t2v_oovv_*` at
   (`USE_BLAS` is the open B1 item in `docs/ERI_FOCK_BLAS_SCOPE.md`).
 - `python/ccgen/tensor_ir.py` has an unused contraction-order / GEMM
   analysis; start there.
+- Measure Eigen against Accelerate `dgemm` on the real CCSD shapes first.
+  The BLAS scope measured Accelerate 4.3–7.8× faster than Eigen's own GEMM
+  on the RI-K products. If that holds here, Eigen GEMM alone closes only
+  part of the 8.1× rate gap, and the optional `USE_BLAS` build (B1)
+  belongs inside this step. Its constraints (hermeticity, BLAS results not
+  bitwise equal to Eigen) are in that doc.
 - After R1 and R2 (R0).
 - Gate: as R1; the summation order changes, so ≤ 1e-12 relative, not
   bitwise.

@@ -226,10 +226,13 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     BLAS). Generator fixes only. R1 done: the doubles residual on j ≥ i
     only, then mirrored (the term fold over (ia)(jb) cut 2 % and was
     dropped), CCSD 1.4–1.56× per iteration (dimer cc-pVTZ 11.8 → 7.55 s,
-    now 23× PySCF per iteration). Next: R2 merge terms sharing a
-    t2 read (31 → 15 groups), R2b cut builder arithmetic (0.88 × 10¹⁰,
-    a third of what is left after R2), R3 GEMM lowering; hand-written code is the
-    last resort. Then the
+    now 23× PySCF per iteration). R2 done: terms reading t2 the same
+    way share one contraction against a summed intermediate (31 o³v³
+    contractions → 6), CCSD 1.28–1.41× per iteration (dimer cc-pVTZ
+    7.69 → 5.45 s, now ~17× PySCF; arithmetic 1.5× PySCF). Next: R2b cut
+    builder arithmetic (0.89 × 10¹⁰, 43 % of the count), R3 GEMM lowering
+    (time Eigen against Accelerate first; BLAS B1 may belong there);
+    hand-written code is the last resort. Then the
     remaining (T) 8× (t2 symmetry, GEMM-shaped blocks).
   - CCSD[T], CCSDT(Q), CCSDTQ(P) and the Λ variants
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen

@@ -53,8 +53,11 @@ METHOD = "ccsd"
 BASELINES = (
     ("bare", {}, 37216,
      "af74826e253415a261f9b57efd4ed906827ef0c70cb9da6989e0f941d3b9f656"),
-    ("spin_adapt", {"spin_adapt": True}, 65431,
-     "44705c8ad85f951cbebb532a2fe60ea5418feddfbc28b8523ee2768fd12e0fd4"),
+    # Restated 2026-11-24 for R1's doubles half range (`_pair_half_kernel`,
+    # docs/CCSD_RESIDUAL_COST_SCOPE.md): with it a no-op, both spin-adapted rows
+    # reproduce their previous pins, 65431 / 44705c8a... and 63781 / 1a21483c....
+    ("spin_adapt", {"spin_adapt": True}, 65682,
+     "1c757579a44bc05a55cd6a1b1f40800282a897a42d8c22aebe1694d5727a8940"),
     # Moved at V1.3.2 (37413 -> 37433): tau's builder is now method-suffixed
     # (`build_tau_ccsd`) like every other builder -- one naming rule, no exceptions.
     ("factorize_tau", {"factorize_tau": True}, 37433,
@@ -66,8 +69,8 @@ BASELINES = (
     ("force_arbitrary", {"force_arbitrary": True}, 36941,
      "5e1657eb67051cc57774d659c3a55cb45b625a7a79615dce2a07b98eef83d1b1"),
     ("spin_adapt+force_arbitrary",
-     {"spin_adapt": True, "force_arbitrary": True}, 63781,
-     "1a21483c2e326c1c97f576ede7cbe4f2569e0888946e34abaa05e6083e4b07d5"),
+     {"spin_adapt": True, "force_arbitrary": True}, 64032,
+     "2e3e6803baf8c68f71893d73dcfcab9378e930a221ad57ec157116389d5ca4ff"),
     # Moved at V1.3 (27960 -> 28122): builders that reference a sibling intermediate now
     # bind it (`const auto tau = build_tau(...)`), which is what made the dressed TU
     # compile for the first time. The four undressed baselines above are unchanged, so the

@@ -1274,6 +1274,20 @@ def print_cpp_planck(
         # docs/CCGEN_GENERATED_CC_COST.md.
         eqs, dressed_intermediates = factorize_equations(
             eqs, spatial=spin_adapt, merge_transposes=True)
+        if spin_adapt and not ucc:
+            # R2: terms reading t2 the same way share one contraction against
+            # the sum of their other factors (spatial t2 symmetry; on rank-2
+            # doubles 31 o^3v^3 contractions -> 6). After the factorizer, so
+            # the summed factors are its W's. docs/CCSD_RESIDUAL_COST_SCOPE.md.
+            from .optimization.factorize import merge_common_amplitude_reads
+            eqs = dict(eqs)
+            for target in list(eqs):
+                if target == "energy":
+                    continue
+                eqs[target], merged_specs = merge_common_amplitude_reads(
+                    eqs[target], target)
+                dressed_intermediates = (list(dressed_intermediates or [])
+                                         + merged_specs)
         dressed_intermediates = dressed_intermediates or None
 
     if dressed_intermediates is not None:

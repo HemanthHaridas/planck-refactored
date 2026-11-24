@@ -14,7 +14,8 @@ from collections import defaultdict
 
 path, no, nv = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 bound = {"no": no, "nv": nv}
-FOR = re.compile(r"^\s*for \(int (\w+) = 0; \1 < (\w+); \+\+\1\)\s*$")
+# `j = i` is R1's half range: with the i loop, B(B+1)/2 pairs, so (B+1)/2 here.
+FOR = re.compile(r"^\s*for \(int (\w+) = (\w+); \1 < (\w+); \+\+\1\)\s*$")
 FUNC = re.compile(r"^\S.*\b(build_W_\w+|compute_ccsd_\w+_residual)\(")
 
 per_func = defaultdict(int)
@@ -39,7 +40,8 @@ for line in open(path):
         continue
     f = FOR.match(line)
     if f:
-        (inner if in_body else outer).append(f.group(2))
+        b = f.group(3) if f.group(2) == "0" else f.group(3) + "/2"
+        (inner if in_body else outer).append(b)
         continue
     s = line.strip()
     if s == "{":
@@ -49,7 +51,7 @@ for line in open(path):
         loops = outer + inner
         n = 1
         for b in loops:
-            n *= bound[b]
+            n *= (bound[b[:-2]] + 1) / 2 if b.endswith("/2") else bound[b]
         per_func[func] += n
         per_nest.append((func, nest, n, " ".join(loops)))
         inner = []
@@ -67,7 +69,8 @@ for k, v in sorted(per_func.items(), key=lambda kv: -kv[1])[:6]:
 shapes = defaultdict(lambda: [0, 0])
 for fn, nid, n, loops in per_nest:
     if fn == "compute_ccsd_doubles_residual":
-        key = "o^%dv^%d" % (loops.split().count("no"), loops.split().count("nv"))
+        ls = [b.split("/")[0] for b in loops.split()]
+        key = "o^%dv^%d" % (ls.count("no"), ls.count("nv"))
         shapes[key][0] += 1
         shapes[key][1] += n
 print("  doubles residual by shape:")

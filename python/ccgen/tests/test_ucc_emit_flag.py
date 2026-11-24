@@ -98,19 +98,23 @@ class UccSwitchTests(unittest.TestCase):
         import hashlib
 
         expected = {
-            ("ccsd", None): "44705c8ad85f951c",
-            ("ccsd", "diagram"): "4d1ab40e5a75fb19",
+            # Restated 2026-11-24 for R1's doubles half range (`_pair_half_kernel`,
+            # docs/CCSD_RESIDUAL_COST_SCOPE.md); with it a no-op every entry
+            # reproduces its previous pin: 44705c8ad85f951c, 4d1ab40e5a75fb19,
+            # f70c70701d00a505, 00b7d05821c655e9, df90d610924ff302.
+            ("ccsd", None): "1c757579a44bc05a",
+            ("ccsd", "diagram"): "e90d94edc0f171ec",
             # Restated 2026-11-21 for the symmetrize-once fold of the spin-adapted
             # triples (fold_external_symmetry). With the fold disabled these emit
             # the previous pins exactly: ccsdt 7d5dc96aeebb2141 / 792a73c904403849,
             # ccsdtq d6e0f38aba1e6961.
-            ("ccsdt", None): "f70c70701d00a505",
-            ("ccsdt", "diagram"): "00b7d05821c655e9",
+            ("ccsdt", None): "68f287abed994022",
+            ("ccsdt", "diagram"): "1e16c26d57bd2d67",
             # The discriminating point: rank 4 is where the sector amplitudes live.
             # Restated 2026-11-21 for fixed-rank amplitude reads
             # (docs/CCGEN_GENERATED_CC_COST.md #11); reverting the binding and read
             # forms by regex reproduces the previous pin, 46c90d47ea08c78f.
-            ("ccsdtq", "diagram"): "df90d610924ff302",
+            ("ccsdtq", "diagram"): "7095e69cac9dc826",
         }
         for (method, engine), digest in expected.items():
             with self.subTest(method=method, engine=engine):

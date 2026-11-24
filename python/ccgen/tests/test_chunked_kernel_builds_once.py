@@ -26,9 +26,18 @@ import unittest
 class ChunkedKernelBuildsOnceTests(unittest.TestCase):
     @staticmethod
     def _emit():
+        """Emit with a small chunk size, so the triples kernel is chunked
+        whatever its term count (R2's t2-read merge took ccsdt triples from 331
+        terms to 189, under the default 256)."""
+        from ccgen.emit import planck_tensor_cpp as E
         from ccgen.generate import print_cpp_planck
-        return print_cpp_planck("ccsdt", dressing="derived", spin_adapt=True,
-                                force_arbitrary=True)
+        real = E._KERNEL_CHUNK_TERMS
+        E._KERNEL_CHUNK_TERMS = 64
+        try:
+            return print_cpp_planck("ccsdt", dressing="derived",
+                                    spin_adapt=True, force_arbitrary=True)
+        finally:
+            E._KERNEL_CHUNK_TERMS = real
 
     def _entry_body(self, src, kernel="compute_ccsdt_triples_residual"):
         """The main kernel function body: signature through `return result;`."""
