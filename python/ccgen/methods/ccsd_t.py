@@ -228,7 +228,60 @@ def _emit_triple_kernel(target: str, terms) -> str:
     lines += _amplitude_view_bindings(terms)
     lines.append("    static thread_local std::vector<double> e;")
     lines.append(f"    if (e.size() < {len(key_text)} * o3) e.resize({len(key_text)} * o3);")
+    # Step 10b: the t2 . ovvv blocks (summed d, o^3 v each) as small GEMMs,
+    # PySCF's per-triple dgemm. Blocks reading the same t2 slice share one
+    # GEMM, their ovvv operands side by side: C(u0 u1, g u2) = A(u0 u1, d) B(d, g u2).
+    # The operands are strided, so they are copied into contiguous buffers
+    # first (about 10 % of the multiply). Fixed sizes, so the result does not
+    # depend on the thread count. The t2 . ooov blocks (o^4) stay loops.
+    gemm_groups: dict[str, list[int]] = {}
+    for slot, (exprs, s, _) in enumerate(key_text):
+        if s == "d":
+            assert re.search(r"\bu2\b", exprs[1]) and not re.search(r"\bu2\b", exprs[0]), exprs
+            gemm_groups.setdefault(exprs[0], []).append(slot)
+    if gemm_groups:
+        lines += [
+            "    static thread_local std::vector<double> ga, gb, gc;",
+            "    using TripleMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;",
+        ]
+    for a_expr, slots in gemm_groups.items():
+        g = len(slots)
+        b_exprs = [key_text[sl][0][1] for sl in slots]
+        lines += [
+            f"    // Elementary blocks {', '.join(map(str, slots))}: {a_expr} * "
+            + " | ".join(b_exprs) + " (one GEMM)",
+            "    {",
+            "        const int K = nv, N = " + f"{g} * no;",
+            "        ga.resize(static_cast<std::size_t>(no) * no * K);",
+            "        gb.resize(static_cast<std::size_t>(K) * N);",
+            "        gc.resize(static_cast<std::size_t>(no) * no * N);",
+            "        for (int u0 = 0; u0 < no; ++u0)",
+            "        for (int u1 = 0; u1 < no; ++u1)",
+            "        for (int d = 0; d < nv; ++d)",
+            f"            ga[(static_cast<std::size_t>(u0) * no + u1) * K + d] = {a_expr};",
+        ]
+        for n, b in enumerate(b_exprs):
+            lines += [
+                "        for (int d = 0; d < nv; ++d)",
+                "        for (int u2 = 0; u2 < no; ++u2)",
+                f"            gb[static_cast<std::size_t>(d) * N + {n} * no + u2] = {b};",
+            ]
+        lines += [
+            "        Eigen::Map<TripleMat>(gc.data(), no * no, N).noalias() ="
+            " Eigen::Map<const TripleMat>(ga.data(), no * no, K) *"
+            " Eigen::Map<const TripleMat>(gb.data(), K, N);",
+        ]
+        for n, sl in enumerate(slots):
+            lines += [
+                "        for (int u01 = 0; u01 < no * no; ++u01)",
+                "        for (int u2 = 0; u2 < no; ++u2)",
+                f"            e[{sl} * o3 + static_cast<std::size_t>(u01) * no + u2] ="
+                f" gc[static_cast<std::size_t>(u01) * N + {n} * no + u2];",
+            ]
+        lines.append("    }")
     for slot, (exprs, s, bound) in enumerate(key_text):
+        if s == "d":
+            continue
         lines += [
             f"    // Elementary block {slot}: {' * '.join(exprs)}",
             "    for (int u0 = 0; u0 < no; ++u0)",

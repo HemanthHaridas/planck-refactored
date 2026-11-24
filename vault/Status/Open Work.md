@@ -226,10 +226,10 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     every large binary contraction to an Eigen GEMM
     (`src/post_hf/cc/gemm_contract.h`). Dimer cc-pVTZ CCSD per iteration
     11.8 → 0.85 s, 2.7× PySCF, and the ratio no longer grows with the basis;
-    whole `ccsd(t)` 278 → 81 s. Step 10a halved the (T) blocks by t2
-    symmetry: (T) 49.8 → 26.8 s, 4.5× PySCF; whole run 58.5 s. Open, in
-    order: 10b (T) blocks as GEMMs batched over a virtual (a driver
-    restructure), R3b o³v³ GEMMs on j ≥ i (staircase, one GEMM per i), R3c
+    whole `ccsd(t)` 278 → 81 s. Step 10 halved the (T) blocks by t2
+    symmetry and runs the `t2 · ovvv` blocks as small GEMMs per triple:
+    (T) 49.8 → 8.25 s, 1.4× PySCF; whole run 39.6 s. Open, in order: 10c
+    profile the rest of (T), R3b o³v³ GEMMs on j ≥ i (staircase, one GEMM per i), R3c
     Accelerate behind the helper (2.5–4× on the GEMMs; B1 build decision),
     R2c shared builder combinations, R4 re-measure. The hand-written
     fallback is not justified.
