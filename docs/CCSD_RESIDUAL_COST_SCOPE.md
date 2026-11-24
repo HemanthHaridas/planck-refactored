@@ -68,9 +68,10 @@ the 6× redundancy that was the real lever.
 | # | Step | Expected | Needs |
 |---|---|---|---|
 | R0 | Census and measurement | done: 4.5× arithmetic × 8.1× rate; R1, R2, then R3 | — |
-| R1 | (ia)(jb) fold of the doubles residual | up to 2× on non-symmetric nests | R0 |
-| R2 | Merge terms sharing a t2 read | 31 → 15 o³v³ contractions (≈ 8 with R1) | R0 |
-| R3 | GEMM lowering of the contractions | the 8.1× rate gap | R1, R2 |
+| R1 | Doubles residual on j ≥ i only, then mirror | done: CCSD 1.4–1.56× per iteration | R0 |
+| R2 | Merge terms sharing a t2 read | 31 → 15 o³v³ contractions | R0 |
+| R2b | Cut builder arithmetic | builders 0.88 × 10¹⁰ toward PySCF's share | R2 |
+| R3 | GEMM lowering of the contractions | the 8.1× rate gap | R1, R2, R2b |
 | R4 | Re-measure the ladder against PySCF | decides on the last resort | R1–R3 |
 
 ### R0. Census and measurement — done
@@ -117,27 +118,61 @@ o(o+1)/2·v⁴.
   groups pair up under (ia)(jb) on the output, so R1 + R2 should leave
   about 8 o³v³ contractions.
 
-**Projection after R1 + R2:** o³v³ ~0.95 × 10¹⁰, ladder 0.63 × 10¹⁰,
-other residual ~0.18 × 10¹⁰, builders 0.88 × 10¹⁰ (untouched): about
-2.6 × 10¹⁰, 1.9× PySCF. The builders are then the largest remaining excess
+**Projection after R1 + R2** (written for the fold; the half range that
+landed for R1 gives the same factor on every residual nest): o³v³
+~0.95 × 10¹⁰, ladder 0.63 × 10¹⁰, other residual ~0.18 × 10¹⁰, builders
+0.88 × 10¹⁰ (untouched): about 2.6 × 10¹⁰, 1.9× PySCF. The builders are then the largest remaining excess
 (four `build_W_t2v_oovv_*` at 1.19 × 10⁹ each).
 
 **Order decided:** R1 and R2 first, since they remove arithmetic R3 would
 otherwise lower; then R3 for the 8.1× rate gap, which grows with v (4.0×
 at cc-pVDZ, 8.1× at cc-pVTZ), as expected of GEMM against scalar loops.
 
-### R1. Fold the doubles residual over (ia)(jb)
+### R1. Use the (ia)(jb) symmetry — done, as an output half range
 
-- The mechanism exists: `fold_external_symmetry`
-  (`python/ccgen/optimization/permutation.py`) folds the triples residual
-  over its order-4 group and `_symmetrize_lines` emits one pass at the end
-  (`docs/CCGEN_GENERATED_CC_COST.md`, defect #9). The doubles group is
-  order 2, `{e, (ia)(jb)}`.
-- The cost doc judged it "not worth doing at these sizes"; that was
-  measured on small rungs, before the gap was seen to grow.
-- Gate: rank-2 energies to ≤ 1e-12 relative (folding reorders sums), the
-  four `*_rccsd_t_*` cases, `planck-cc-*` tests, and the fold's numpy
-  value test extended to doubles.
+**What landed.** The spatial RCC doubles residual is computed on j ≥ i
+only and mirrored, R(j,i,b,a) = R(i,j,a,b), which is PySCF's i ≥ j.
+`_pair_half_kernel` (`python/ccgen/emit/planck_tensor_cpp.py`) starts every
+nest's free `j` loop at `i` and adds one `// mirror ijab` pass before the
+return; `emit_planck_translation_unit` applies it to the `doubles` target
+when spin-adapted and not UCC (under UCC the swap maps `abab` to `baba`,
+another block). It also reaches the doubles residual of the generated
+CCSDT/CCSDTQ files. GCC refuses `schedule` on a non-rectangular collapsed
+loop, so those nests drop it; each element is written by one iteration, so
+the schedule does not matter.
+
+- Exact because t2 keeps t2(i,j,a,b) = t2(j,i,b,a): the MP2 start has it,
+  Jacobi divides by symmetric denominators, DIIS takes linear
+  combinations.
+- Work: (o+1)/(2o) of every residual nest, the `vvvv` ladder included
+  (55 % at o = 10). Builders are untouched.
+- The numpy evaluator in the ccgen tests ignores loop bounds, so its value
+  gates see the full residual; the half range is gated by the C++ energies.
+
+**Result** (4 threads, energies identical to every printed digit):
+
+| Rung | CCSD per iteration, before | after |
+|---|---|---|
+| water cc-pVTZ | 16 × 0.195 s | 16 × 0.136 s (1.43×) |
+| water dimer cc-pVDZ | 20 × 0.454 s | 20 × 0.301 s (1.51×) |
+| water dimer cc-pVTZ | 18 × 11.8 s | 18 × 7.55 s (1.56×); whole run 278 → 201 s |
+
+Gates: core suite 178/178; `water_rccsd_t_{sto3g,631g,spherical_ccpvdz}`,
+`h2o2_c1_rccsd_t_631g`, `water_spherical_ccsd_sto3g`,
+`be_ccsd_spherical_631gd`, `be_rccsdtq_sto3g` on `build-default`;
+`{ch4,lih}_rccsdt_generated_sto3g`, `be_rccsdtq_sto3g`, `b_ucc{2,3,4}_sto3g`,
+`oh_uccsd_t_631g` and two `*_rccsd_t_*` cases on the fully featured
+`build/`. Against PySCF the dimer cc-pVTZ CCSD is now 23× per iteration
+(was 36×).
+
+**The scoped term fold does not work here** (ruled out). Folding the
+doubles over `{e, (ia)(jb)}` with `fold_external_symmetry` cut the
+arithmetic by 2 % (6.24 → 6.12 × 10¹⁰ on the cc-pVTZ dimer: 1 of 31 o³v³
+and 2 of 56 o³v² statements). It matches orbits on the terms' text with
+dummies as named, and a term and its image mostly differ in dummy names or
+in which of t2's two equivalent spellings they read; the ladder is its own
+image and has nothing to fold. The half range needs no orbit matching and
+covers every term.
 
 ### R2. Merge terms that share a t2 read
 
@@ -152,6 +187,24 @@ at cc-pVDZ, 8.1× at cc-pVTZ), as expected of GEMM against scalar loops.
 - Gate: as R1, plus a value test that the merged residual equals the
   unmerged one term by term (the merged-call-site test pattern of
   `test_merged_call_sites.py`).
+
+### R2b. Cut builder arithmetic
+
+After R1 + R2 the intermediate builders are the largest arithmetic excess
+over PySCF: 0.88 × 10¹⁰ multiply-adds on the dimer in cc-pVTZ (R0), a
+third of the projected 2.6 × 10¹⁰, with the four `build_W_t2v_oovv_*` at
+1.19 × 10⁹ each. Neither R1 nor R2 touches them.
+
+- Census first: per builder, its multiply-adds, its readers, and whether
+  it is a transpose or (ia)(jb) image of another builder (the
+  `merge_transposes` pass already folds transposes; check what it misses
+  on the rank-2 TU).
+- Candidates, decided by the census: build the `t2v_oovv` family once
+  and read it through a permutation; use the (ia)(jb) half range on
+  builders whose output has that symmetry; inline a builder into its single
+  reader when building it costs more than the contraction it feeds.
+- Gate: as R2 (value test of the residual against the unmodified builders),
+  plus the R1 gates.
 
 ### R3. GEMM lowering
 

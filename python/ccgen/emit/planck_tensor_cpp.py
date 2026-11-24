@@ -1190,7 +1190,12 @@ def _emit_kernel(
     force_arbitrary: bool = False,
     ucc: bool = False,
     symmetrizer: Sequence[tuple[dict[str, str], int]] | None = None,
+    pair_half: bool = False,
 ) -> str:
+    if pair_half:
+        return _pair_half_kernel(_emit_kernel(
+            method, target, terms, lowered_terms, intermediates, free_indices,
+            force_arbitrary, ucc, symmetrizer))
     lowered_terms = tuple(lowered_terms or ())
     if free_indices is None:
         if lowered_terms:
@@ -1291,6 +1296,50 @@ def _emit_kernel(
     lines.append("    return result;")
     lines.append("}")
     return "\n".join(lines)
+
+
+_PAIR_J_FULL = "for (int j = 0; j < no; ++j)"
+_PAIR_J_HALF = "for (int j = i; j < no; ++j)"
+
+
+def _pair_half_kernel(text: str) -> str:
+    """Compute a spatial doubles residual on j >= i only, then mirror.
+
+    R(i,j,a,b) = R(j,i,b,a) holds because t2 has it (the MP2 start does,
+    Jacobi divides by symmetric denominators, DIIS mixes). So every term nest
+    starts j at i, and one pass fills i > j from it: (o+1)/(2o) of the work,
+    for every term including the self-symmetric vvvv ladder, with no orbit
+    matching (PySCF's i >= j; docs/CCSD_RESIDUAL_COST_SCOPE.md, R1).
+
+    In this kernel j is only ever the free occupied index (summed occupied
+    indices are k, l, ...), so the loop header is rewritten as text. Checked:
+    the result is declared (no, no, nv, nv) and some nest loops j. The
+    mirror comment is deliberately not `// symmetrize`: the numpy evaluator
+    ignores loop bounds and so already sees the full R.
+    """
+    assert re.search(r"Tensor4D result\(no, no, nv, nv\b", text), \
+        "pair_half: not an (o, o, v, v) kernel"
+    nests = text.count(_PAIR_J_FULL)
+    assert nests > 0, "pair_half: no free j loop found"
+    text = text.replace(_PAIR_J_FULL, _PAIR_J_HALF)
+    # GCC refuses `schedule` on a non-rectangular collapsed loop. The default
+    # schedule is harmless here: each element is written by one iteration.
+    text = re.sub(r"(#pragma omp parallel for collapse\(\d+\)) schedule\(static\)", r"\1", text)
+    head, sep, tail = text.rpartition("    return result;\n")
+    assert sep, "pair_half: kernel has no final return"
+    collapse = _omp_collapse_setting()
+    mirror = ["", "    // mirror ijab: only j >= i was computed; R(j,i,b,a) = R(i,j,a,b)"]
+    if collapse > 0:
+        mirror.append(f"    #pragma omp parallel for collapse({min(collapse, 2)})")
+    mirror += [
+        "    for (int i = 0; i < no; ++i)",
+        "    for (int j = 0; j < i; ++j)",
+        "    for (int a = 0; a < nv; ++a)",
+        "    for (int b = 0; b < nv; ++b)",
+        f"        {_accessor('result', ['i', 'j', 'a', 'b'])} = "
+        f"{_accessor('result', ['j', 'i', 'b', 'a'])};",
+    ]
+    return head + "\n".join(mirror) + "\n" + sep + tail
 
 
 def _symmetrize_lines(result_type, free_indices, symmetrizer,
@@ -1750,6 +1799,9 @@ def emit_planck_translation_unit(
                 force_arbitrary=force_arbitrary,
                 ucc=ucc,
                 symmetrizer=(symmetrizers or {}).get(target),
+                # Spatial doubles: R(i,j,a,b) = R(j,i,b,a). Under UCC the swap
+                # maps an abab block to baba, another block, so not there.
+                pair_half=spin_adapted and not ucc and target == "doubles",
             )
         )
         lines.append("")
