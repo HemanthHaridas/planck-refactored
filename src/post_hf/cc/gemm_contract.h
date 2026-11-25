@@ -13,19 +13,23 @@
 //
 // `pair_half` (the spatial doubles kernels, which mirror j < i afterwards):
 // a group holding both i and j keeps only j >= i, which halves the ladder.
-// Where i and j are in different groups the half is not a block, and the
-// whole product is computed; the mirror overwrites j < i either way.
+// Where i and j lead the two output groups (rows and columns), the kept part
+// is a staircase: for each value x of the row index, one contiguous row slab
+// times a contiguous column range (j >= x, or i <= x), one GEMM per x (R3b).
+// Anywhere else the whole product is computed; the mirror overwrites j < i.
 //
-// The product runs in fixed 64-wide blocks of the larger output dimension,
-// so the summation order of every element, and the result, are independent
-// of the thread count.
+// The product runs in fixed 64-wide blocks (of the larger output dimension,
+// or of each staircase step's columns), so the summation order of every
+// element, and the result, are independent of the thread count.
 
 #include <Eigen/Dense>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "post_hf/cc/common.h"
@@ -162,48 +166,81 @@ namespace HartreeFock::Correlation::CC
         const CCMatrix bm = cc_matrix(b, b_labels, k, n, pair_half);
         const Eigen::Index M = am.rows, K = am.cols, N = bm.cols;
 
-        // Every A and B is an Eigen expression of one of two kinds; one lambda
-        // per combination keeps the product a single noalias() GEMM.
-        auto amat = [&] { return CCMap(am.data, am.transposed ? K : M, am.transposed ? M : K); };
-        auto bmat = [&] { return CCMap(bm.data, bm.transposed ? N : K, bm.transposed ? K : N); };
+        const CCMap a_map(am.data, am.transposed ? K : M, am.transposed ? M : K);
+        const CCMap b_map(bm.data, bm.transposed ? N : K, bm.transposed ? K : N);
+        // Calls f(A, B) with A as an M x K and B as a K x N Eigen expression.
+        auto with_operands = [&](auto &&f)
+        {
+            if (am.transposed && bm.transposed)
+                f(a_map.transpose(), b_map.transpose());
+            else if (am.transposed)
+                f(a_map.transpose(), b_map);
+            else if (bm.transposed)
+                f(a_map, b_map.transpose());
+            else
+                f(a_map, b_map);
+        };
+
+        // Staircase (R3b): i and j lead the row and column groups, so the
+        // rows of one row-index value x are one slab and the kept columns
+        // one range. Its tasks are (step x, 64-wide column block).
+        const bool stair = pair_half && !m.empty() && !n.empty() &&
+                           ((m[0] == 'i' && n[0] == 'j') || (m[0] == 'j' && n[0] == 'i')) &&
+                           n.find(m[0]) == std::string_view::npos &&
+                           m.find(n[0]) == std::string_view::npos;
+        Eigen::Index steps = 1, R = M, C = N;
+        if (stair) {
+            steps = out_dims[out_labels.find(m[0])];
+            R = M / steps;
+            C = N / out_dims[out_labels.find(n[0])];
+        }
+        // Kept columns of step x: j >= x when i leads the rows, i <= x when j does.
+        auto col_range = [&](Eigen::Index x) -> std::pair<Eigen::Index, Eigen::Index>
+        {
+            if (!stair)
+                return {0, N};
+            return m[0] == 'i' ? std::pair{x * C, N} : std::pair{Eigen::Index{0}, (x + 1) * C};
+        };
 
         CCRowMat prod(M, N);
         constexpr Eigen::Index block = 64;
-        const bool by_rows = M >= N;
-        const Eigen::Index extent = by_rows ? M : N;
-        const Eigen::Index n_blocks = (extent + block - 1) / block;
+        with_operands([&](const auto &A, const auto &B)
+        {
+            if (stair) {
+                std::vector<std::array<Eigen::Index, 3>> tasks;  // (x, first column, width)
+                for (Eigen::Index x = 0; x < steps; ++x) {
+                    const auto [c0, c1] = col_range(x);
+                    for (Eigen::Index s = c0; s < c1; s += block)
+                        tasks.push_back({x, s, std::min(block, c1 - s)});
+                }
+#pragma omp parallel for schedule(dynamic, 1)
+                for (std::size_t t = 0; t < tasks.size(); ++t) {
+                    const auto [x, s, w] = tasks[t];
+                    prod.block(x * R, s, R, w).noalias() = A.middleRows(x * R, R) * B.middleCols(s, w);
+                }
+                return;
+            }
+            const bool by_rows = M >= N;
+            const Eigen::Index extent = by_rows ? M : N;
+            const Eigen::Index n_blocks = (extent + block - 1) / block;
 #pragma omp parallel for schedule(static)
-        for (Eigen::Index t = 0; t < n_blocks; ++t) {
-            const Eigen::Index s = t * block, w = std::min(block, extent - s);
-            const auto A = amat();
-            const auto B = bmat();
-            if (by_rows) {
-                if (am.transposed && bm.transposed)
-                    prod.middleRows(s, w).noalias() = A.transpose().middleRows(s, w) * B.transpose();
-                else if (am.transposed)
-                    prod.middleRows(s, w).noalias() = A.transpose().middleRows(s, w) * B;
-                else if (bm.transposed)
-                    prod.middleRows(s, w).noalias() = A.middleRows(s, w) * B.transpose();
-                else
+            for (Eigen::Index t = 0; t < n_blocks; ++t) {
+                const Eigen::Index s = t * block, w = std::min(block, extent - s);
+                if (by_rows)
                     prod.middleRows(s, w).noalias() = A.middleRows(s, w) * B;
-            } else {
-                if (am.transposed && bm.transposed)
-                    prod.middleCols(s, w).noalias() = A.transpose() * B.transpose().middleCols(s, w);
-                else if (am.transposed)
-                    prod.middleCols(s, w).noalias() = A.transpose() * B.middleCols(s, w);
-                else if (bm.transposed)
-                    prod.middleCols(s, w).noalias() = A * B.transpose().middleCols(s, w);
                 else
                     prod.middleCols(s, w).noalias() = A * B.middleCols(s, w);
             }
-        }
+        });
 
         const auto mo = cc_group_offsets(out_labels, out_dims, m, pair_half);
         const auto no = cc_group_offsets(out_labels, out_dims, n, pair_half);
 #pragma omp parallel for schedule(static)
-        for (Eigen::Index i = 0; i < M; ++i)
-            for (Eigen::Index j = 0; j < N; ++j)
+        for (Eigen::Index i = 0; i < M; ++i) {
+            const auto [c0, c1] = col_range(i / R);
+            for (Eigen::Index j = c0; j < c1; ++j)
                 out[mo[i] + no[j]] += coeff * prod(i, j);
+        }
     }
 } // namespace HartreeFock::Correlation::CC
 

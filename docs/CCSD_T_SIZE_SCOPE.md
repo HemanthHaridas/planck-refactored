@@ -451,7 +451,7 @@ arithmetic. Reverted; step 8 removed 5/6 of it.
 | # | Step | Expected |
 |---|---|---|
 | 10c | (T): profiled, and step 1a done (see 10c): 1.8×, past PySCF. Left: V and the energy loops (~20 %), batching over a virtual only if (T) grows as a share | small |
-| R3b | CCSD o³v³ contractions on j ≥ i (staircase) | ~45 % of the six o³v³ GEMMs |
+| R3b | CCSD o³v³ contractions on j ≥ i (staircase): done, 1.04–1.08× per iteration (see R3b) | — |
 | R3c | Accelerate `dgemm` behind the GEMM helper | 2.5–4× on the GEMMs; a build decision |
 | R2c | Share linearly dependent combinations of builders | 4 o³v³ builders → 3 contractions (≤ 1.06×) |
 | R4 | Re-measure the size ladder against PySCF | timing and footprint in separate runs |
@@ -554,6 +554,30 @@ i first in its group and make the rows of one i contiguous. In the helper
 this is a loop over i in place of the single product, when i and j are in
 different groups. Expected gain: up to about 10 % of the CCSD arithmetic,
 less in time.
+
+**Done 2026-11-25.** No emitter change was needed:
+in every affected call of the rank-2 kernel, i or j already leads its
+group (o³v³: `ia|kc|jb`, `jb|kc|ia`, `ib|kc|ja`, `ja|kc|ib`; o³v²:
+`i|c|jba`, `j|c|iab`, `iab|k|j`, `jab|k|i`). `cc_gemm_contract` detects
+i leading the rows and j the columns (or the reverse), and runs one GEMM
+per row-index value x on its row slab against the kept column range
+(j ≥ x, or i ≤ x). The tasks are (x, 64-wide column block), a partition
+fixed by the sizes, so results do not depend on the thread count. The
+scatter writes only the computed region. The four transpose branches,
+repeated twice, became one dispatch. Gates: new `planck-cc-gemm-contract`
+(the four staircase shapes, the same-group filter and the full product
+against a label-driven reference loop, ≤ 1.1e-15; a column range with
+the wrong direction fails 600 elements); `*_rccsd_t_*` pass, CCSD/(T)
+output identical at 1/2/4/8 threads; core 178/178.
+
+| Dimer cc-pVTZ, 4 threads, 2 runs each | before (1a) | staircase |
+|---|---|---|
+| CCSD `t_res` per iteration, median | 0.83–0.86 s | 0.80–0.805 s (1.04–1.08×) |
+| slowest iteration | 0.92–1.08 s | 0.86–0.89 s |
+| whole run | 36.4–38.6 s | 35.8–36.5 s |
+
+Energies equal to every printed digit. As predicted, less than the
+arithmetic: the staircase halves only the o³v³ and o³v² GEMMs.
 
 ### R3c. Accelerate behind the GEMM helper
 

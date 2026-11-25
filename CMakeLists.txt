@@ -1888,6 +1888,12 @@ if(BUILD_TESTING)
         ${SRC_DIR}/post_hf/cc/common.cpp
     )
 
+    # cc_gemm_contract staircase (R3b) against a reference loop.
+    add_executable(planck-cc-gemm-contract
+        ${CMAKE_SOURCE_DIR}/tests/cc_gemm_contract.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+    )
+
     add_executable(planck-cc-ucc-denominator
         ${CMAKE_SOURCE_DIR}/tests/cc_ucc_denominator.cpp
         ${SRC_DIR}/post_hf/cc/common.cpp
@@ -2509,6 +2515,10 @@ if(BUILD_TESTING)
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
+    target_include_directories(planck-cc-gemm-contract PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
 
     target_include_directories(planck-cc-ucc-denominator PRIVATE
         ${SRC_DIR}
@@ -2838,6 +2848,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-cc-tensor-index PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-gemm-contract PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -3355,6 +3371,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-cc-tensor-index
         COMMAND planck-cc-tensor-index
+    )
+
+    add_test(
+        NAME planck-cc-gemm-contract
+        COMMAND planck-cc-gemm-contract
     )
 
     add_test(
