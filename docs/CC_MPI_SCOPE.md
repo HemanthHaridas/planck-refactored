@@ -37,7 +37,7 @@ distributed), `docs/CCSD_T_SIZE_SCOPE.md` (what limits CCSD(T) size today),
 | cost | small: the SCF and RI pattern | a distributed-tensor design; the emitter assumes whole local tensors (`t2({i,j,a,b})`, `mo_blocks.ovvv(...)`) |
 
 Since the memory work in `docs/CCSD_T_SIZE_SCOPE.md`, time is the limit,
-not memory: the water dimer in cc-pVTZ peaks at 1.43 GB and takes 39.6 s
+not memory: the water dimer in cc-pVTZ peaks at 1.43 GB and takes about 37 s
 (4 threads). Splitting the work therefore pays now. It still fits nothing
 new; splitting the memory is the only MPI lever on size, and the next
 memory walls (the ns⁴ AO tensor in the SCF, v⁴ `vvvv` in the CCSD) have
@@ -83,9 +83,9 @@ digit equal to serial. Add a mutation: drop the allreduce. Per
 here, not a hang, because no later collective waits on it. Use
 `tests/mpi_smoke_compare.py` with its timeout anyway.
 
-(T) is under 1 % of the C1 H2O2 6-31G run, but about 21 % of the water
-dimer cc-pVTZ run (8.25 of 39.6 s) since the CCSD speed-ups, so it is now a
-measurable share at size.
+(T) is under 1 % of the C1 H2O2 6-31G run and about 12 % of the water
+dimer cc-pVTZ run (4.6 of ~37 s, after size-scope step 1a). It is a
+measurable share at size, but smaller than the CCSD that M1 splits.
 
 ### M1. Split the work for the CCSD residual
 

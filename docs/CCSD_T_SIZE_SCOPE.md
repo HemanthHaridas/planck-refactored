@@ -30,17 +30,18 @@ cc-pVTZ).
   dimer in cc-pVDZ, 2.7× in cc-pVTZ). The gap was more arithmetic times
   slower arithmetic. Generator changes brought the arithmetic to 1.4×
   PySCF's and moved 99.6 % of it into Eigen GEMMs.
-- **(T): 1.4× behind** after step 10: the t2 symmetry halved its blocks,
-  and the `t2 · ovvv` blocks run as small GEMMs per triple, as PySCF's
-  do.
+- **(T): faster than PySCF since step 1a** (4.5–4.8 s against 6.0 s):
+  the t2 symmetry halved its blocks, the `t2 · ovvv` blocks run as small
+  GEMMs per triple, as PySCF's do, and every block now reads contiguous
+  layouts made once per (T).
 
 | Water dimer / cc-pVTZ `ccsd(t)` (nb 116 sph / 130 cart, o 10, v 106) | |
 |---|---|
 | Total energy | −152.7012785674 Eh, equal to PySCF 2.15 to every printed digit |
 | E_corr(CCSD), E(T) | −0.5642828768, −0.0160404999 |
 | Peak footprint | 6.7 GB (did not finish) → 5.5 GB → 3.93 GB → 2.83 GB → **1.43 GB** |
-| CCSD / (T) / whole run | 18 × 0.85 s / 8.25 s / **39.6 s**, 4 threads (512 s at step 7) |
-| Against PySCF 2.15 (4 threads) | CCSD 0.85 vs 0.32 s per iteration (2.7×), (T) 8.25 vs 6.0 s (1.4×) |
+| CCSD / (T) / whole run | 18 × 0.85 s / 4.5–4.8 s / **36.4–38.6 s**, 4 threads (512 s at step 7) |
+| Against PySCF 2.15 (4 threads) | CCSD 0.85 vs 0.32 s per iteration (2.7×), (T) 4.5–4.8 vs 6.0 s (0.8×) |
 
 ## What changed
 
@@ -59,6 +60,7 @@ cc-pVTZ).
 | 9 | Generated RCCSD residual: half range (R1), common-operand merges (R2, R2b), GEMM lowering (R3) | "CCSD time" | CCSD 13.9× per iteration: dimer cc-pVTZ 11.8 → 0.85 s; whole run 278 → 81 s |
 | 10a | (T) blocks keyed up to the t2 pair swap: 24 → 12 per triple | `_emit_triple_kernel`, `_swap_t2_pair` (`python/ccgen/methods/ccsd_t.py`) | (T) 1.7–1.9×: dimer cc-pVTZ 49.8 → 26.8 s; whole run 81 → 58.5 s |
 | 10b | (T) `t2 · ovvv` blocks as small GEMMs, two per shared t2 slice | `_emit_triple_kernel` | (T) 1.7–3.2×: dimer cc-pVTZ 26.5 → 8.25 s; whole run 57.8 → 39.6 s |
+| 1a | (T) blocks as GEMMs on contiguous layouts made once per (T); contiguous assembly | `_emit_triple_kernel`, `prepare_ccsd_t_triple_layouts`, `batched_triples_energy` | (T) 1.8×: dimer cc-pVTZ 8.1–8.4 → 4.5–4.8 s, past PySCF's 6.0 s |
 
 Energies are identical to every printed digit after every change. The core
 suite passes (178/178) with all of them.
@@ -448,7 +450,7 @@ arithmetic. Reverted; step 8 removed 5/6 of it.
 
 | # | Step | Expected |
 |---|---|---|
-| 10c | (T): profiled (see 10c). Make the gathers, `ooov` blocks and assembly contiguous; batch over a virtual only if that falls short | (T) ~2–2.5×, past PySCF |
+| 10c | (T): profiled, and step 1a done (see 10c): 1.8×, past PySCF. Left: V and the energy loops (~20 %), batching over a virtual only if (T) grows as a share | small |
 | R3b | CCSD o³v³ contractions on j ≥ i (staircase) | ~45 % of the six o³v³ GEMMs |
 | R3c | Accelerate `dgemm` behind the GEMM helper | 2.5–4× on the GEMMs; a build decision |
 | R2c | Share linearly dependent combinations of builders | 4 o³v³ builders → 3 contractions (≤ 1.06×) |
@@ -494,9 +496,37 @@ vectorize. Levers, each a generator change gated as in step 8:
   ordering's sum is 24 contiguous adds.
 
 If the loop sections ran at the GEMMs' rate, W would be about a third of
-today and (T) roughly 2–2.5× faster, below PySCF's 6.0 s. The batch-over-c
-restructure below attacks all three at once, at o³v² memory and a driver
-change; take it only if the per-section levers fall short.
+today and (T) roughly 2–2.5× faster, below PySCF's 6.0 s.
+
+**Step 1a (done 2026-11-25).** `_emit_triple_kernel` now also emits
+`prepare_ccsd_t_triple_layouts`, which the driver calls once per (T). It
+copies t2 as [x][p][q][r] and [x][y][p][q], `ovvv` as [x][y][d][u] and
+`ooov` as [z][l][u][v] (about 110 MB on the dimer; 17 ms wall). Every
+elementary block is then one GEMM on views of those layouts, written
+straight into its slot: the six `ovvv` blocks as (o² × v)(v × o), the six
+`ooov` blocks as (o × o)ᵀ(o × o²). No per-triple gathers or scatter
+remain. The assembly sums, per ordering, the terms that read their blocks
+in the same occupied order in one contiguous loop, then adds that sum once
+through the transposition: 30 transposed passes per triple instead of 144
+strided adds. The kernel asserts the two block shapes, so a change in the
+(T) terms fails at generation instead of emitting a wrong layout.
+
+| Water dimer cc-pVTZ, 4 threads | before | after |
+|---|---|---|
+| (T) wall | 8.1–8.4 s | 4.5–4.8 s (2 runs) |
+| W, thread-seconds | 29.6 | 14.6 |
+| V / energy loops, thread-seconds | ~2.3 / ~1.3 | 2.3 / 1.4 |
+| whole run | ~41 s | 36.4–38.6 s |
+
+E(T) and the total equal the previous output to every printed digit; the
+batched kernel matches the full-tensor kernel to 1.3e-18
+(`water_rccsd_t_631g`); C1 H2O2 output is identical at 1, 2, 4 and 8
+threads. The result is no longer bitwise equal to the step-10b kernel
+(different summation order). W is now ~80 % of (T). What is left in W
+is the 12 small GEMMs and the assembly; V (o³ per ordering, through
+accessors) and the energy loops are the next ~20 %. The batch-over-c
+restructure below is not needed to pass PySCF; keep it only as the route
+if (T) becomes a large share again.
 
 Original plan, kept for that case. If the small GEMMs themselves limit, batch over one virtual: for fixed c,
 Σ_d t2(i,j,d,c) ovvv(k,d,a,b) over all (a, b) is a (o² × v) · (v × o v²)

@@ -169,10 +169,10 @@ def _emit_triple_kernel(target: str, terms) -> str:
     block (one contraction of two factors) up to a renaming of i, j, k. Over
     the six orderings the 144 term evaluations hit only 24 distinct elementary
     blocks, so each is computed once and every (ordering, term) adds it with
-    its occupied indices transposed. Each elementary block is the same
-    summation, in the same order, as the term's accumulator in the per-ordering
-    kernel, and the terms are added in the same order, so the result is the
-    per-ordering kernel's bitwise.
+    its occupied indices transposed. The blocks are GEMMs on layouts made once
+    per (T) by the emitted ``prepare_ccsd_t_triple_layouts``, so the result
+    equals the per-ordering kernel to roundoff, not bitwise; it does not
+    depend on the thread count.
     """
     from ..emit.planck_tensor_cpp import (
         _amplitude_view_bindings, _coeff_literal, _map_factor, _orbital_count_preamble)
@@ -212,100 +212,139 @@ def _emit_triple_kernel(target: str, terms) -> str:
                 key_text.append((key, s.name, "nv" if s.name == "d" else "no"))
             adds[p].append((keys[key], term.coeff * sign, occ))
 
+    # Step 1a (docs/CCSD_T_SIZE_SCOPE.md, 10c): every operand is read from a
+    # layout made once per (T), where each slice a triple needs is contiguous,
+    # so the elementary blocks are GEMMs on views with no per-triple gathers.
+    # Only these two block shapes occur; anything else is a generator change.
+    ovvv_block = re.compile(r"^t2\(u0, u1, d, (v\d)\)$"), re.compile(r"^mo_blocks\.ovvv\(u2, d, (v\d), (v\d)\)$")
+    ooov_block = re.compile(r"^t2\(l, u0, (v\d), (v\d)\)$"), re.compile(r"^mo_blocks\.ooov\(u1, u2, l, (v\d)\)$")
+    gemms: list[str] = []
+    for slot, (exprs, s, _) in enumerate(key_text):
+        ta, tb = ovvv_block if s == "d" else ooov_block
+        ma = next(filter(None, (ta.match(e) for e in exprs)), None)
+        mb = next(filter(None, (tb.match(e) for e in exprs)), None)
+        assert ma and mb, f"unexpected (T) block shape: {exprs}"
+        dst = f"Eigen::Map<RowMat>(&e[{slot} * o3], no * no, no).noalias() = "
+        if s == "d":
+            # e(u0 u1, u2) = t2(u0, u1, d, x) ovvv(u2, d, x', y'): (o^2 x v)(v x o).
+            x, (xp, yp) = ma.group(1), mb.groups()
+            gemms += [
+                f"    // Elementary block {slot}: {' * '.join(exprs)}",
+                "    " + dst + f"Eigen::Map<const RowMat>(&lay.t2_xpqr[{x} * o2 * nv], no * no, nv) *"
+                f" Eigen::Map<const RowMat>(&lay.ovvv_xydu[(static_cast<std::size_t>({xp}) * nv + {yp}) * nv * no], nv, no);",
+            ]
+        else:
+            # e(u0, u1 u2) = t2(l, u0, x, y) ooov(u1, u2, l, z): (o x o)^T (o x o^2).
+            (x, y), z = ma.groups(), mb.group(1)
+            dst = f"Eigen::Map<RowMat>(&e[{slot} * o3], no, no * no).noalias() = "
+            gemms += [
+                f"    // Elementary block {slot}: {' * '.join(exprs)}",
+                "    " + dst + f"Eigen::Map<const RowMat>(&lay.t2_xypq[({x} * nv + {y}) * o2], no, no).transpose() *"
+                f" Eigen::Map<const RowMat>(&lay.ooov_zluv[{z} * o3], no, no * no);",
+            ]
+
     lines = [
+        "// Layouts for compute_ccsd_t_W_triple, made once per (T): every slice a",
+        "// triple reads is contiguous. t2(p, q, r, x) at [x][p][q][r] and",
+        "// t2(p, q, x, y) at [x][y][p][q] (o^2 v^2 each), ovvv(u, d, x, y) at",
+        "// [x][y][d][u] (o v^3, the size of ovvv), ooov(u, v, l, z) at [z][l][u][v].",
+        "struct CCSDTripleLayouts",
+        "{",
+        "    std::vector<double> t2_xpqr, t2_xypq, ovvv_xydu, ooov_zluv;",
+        "};",
+        "",
+        "CCSDTripleLayouts prepare_ccsd_t_triple_layouts(",
+        "    const CanonicalRHFCCReference &reference,",
+        "    const TensorCCBlockCache &mo_blocks,",
+        "    const ArbitraryOrderRCCAmplitudes &amplitudes)",
+        "{",
+    ]
+    lines += _orbital_count_preamble(False)
+    lines += _amplitude_view_bindings(terms)
+    lines += [
+        "    const std::size_t o2 = static_cast<std::size_t>(no) * no;",
+        "    CCSDTripleLayouts lay;",
+        "    lay.t2_xpqr.resize(o2 * nv * nv);",
+        "    lay.t2_xypq.resize(o2 * nv * nv);",
+        "    lay.ovvv_xydu.resize(static_cast<std::size_t>(no) * nv * nv * nv);",
+        "    lay.ooov_zluv.resize(o2 * no * nv);",
+        "#ifdef USE_OPENMP",
+        "#pragma omp parallel for schedule(static)",
+        "#endif",
+        "    for (int x = 0; x < nv; ++x)",
+        "    {",
+        "        for (int p = 0; p < no; ++p)",
+        "        for (int q = 0; q < no; ++q)",
+        "        for (int r = 0; r < nv; ++r)",
+        "            lay.t2_xpqr[((static_cast<std::size_t>(x) * no + p) * no + q) * nv + r] = t2(p, q, r, x);",
+        "        for (int y = 0; y < nv; ++y)",
+        "        {",
+        "            for (int p = 0; p < no; ++p)",
+        "            for (int q = 0; q < no; ++q)",
+        "                lay.t2_xypq[((static_cast<std::size_t>(x) * nv + y) * no + p) * no + q] = t2(p, q, x, y);",
+        "            for (int d = 0; d < nv; ++d)",
+        "            for (int u = 0; u < no; ++u)",
+        "                lay.ovvv_xydu[((static_cast<std::size_t>(x) * nv + y) * nv + d) * no + u] ="
+        " mo_blocks.ovvv(u, d, x, y);",
+        "        }",
+        "        for (int l = 0; l < no; ++l)",
+        "        for (int u = 0; u < no; ++u)",
+        "        for (int v = 0; v < no; ++v)",
+        "            lay.ooov_zluv[((static_cast<std::size_t>(x) * no + l) * no + u) * no + v] ="
+        " mo_blocks.ooov(u, v, l, x);",
+        "    }",
+        "    return lay;",
+        "}",
+        "",
         f"void compute_ccsd_t_{target}_triple(",
         "    int v0, int v1, int v2,",
         "    const CanonicalRHFCCReference &reference,",
-        "    const TensorCCBlockCache &mo_blocks,",
-        "    const ArbitraryOrderRCCAmplitudes &amplitudes,",
+        "    const CCSDTripleLayouts &lay,",
         "    double *out)",
         "{",
     ]
     lines += _orbital_count_preamble(False)
-    lines.append("    (void)nv;")
-    lines.append("    const std::size_t o3 = static_cast<std::size_t>(no) * no * no;")
-    lines.append(f"    std::fill(out, out + {len(TRIPLE_ORDERINGS)} * o3, 0.0);")
-    lines += _amplitude_view_bindings(terms)
-    lines.append("    static thread_local std::vector<double> e;")
-    lines.append(f"    if (e.size() < {len(key_text)} * o3) e.resize({len(key_text)} * o3);")
-    # Step 10b: the t2 . ovvv blocks (summed d, o^3 v each) as small GEMMs,
-    # PySCF's per-triple dgemm. Blocks reading the same t2 slice share one
-    # GEMM, their ovvv operands side by side: C(u0 u1, g u2) = A(u0 u1, d) B(d, g u2).
-    # The operands are strided, so they are copied into contiguous buffers
-    # first (about 10 % of the multiply). Fixed sizes, so the result does not
-    # depend on the thread count. The t2 . ooov blocks (o^4) stay loops.
-    gemm_groups: dict[str, list[int]] = {}
-    for slot, (exprs, s, _) in enumerate(key_text):
-        if s == "d":
-            assert re.search(r"\bu2\b", exprs[1]) and not re.search(r"\bu2\b", exprs[0]), exprs
-            gemm_groups.setdefault(exprs[0], []).append(slot)
-    if gemm_groups:
-        lines += [
-            "    static thread_local std::vector<double> ga, gb, gc;",
-            "    using TripleMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;",
-        ]
-    for a_expr, slots in gemm_groups.items():
-        g = len(slots)
-        b_exprs = [key_text[sl][0][1] for sl in slots]
-        lines += [
-            f"    // Elementary blocks {', '.join(map(str, slots))}: {a_expr} * "
-            + " | ".join(b_exprs) + " (one GEMM)",
-            "    {",
-            "        const int K = nv, N = " + f"{g} * no;",
-            "        ga.resize(static_cast<std::size_t>(no) * no * K);",
-            "        gb.resize(static_cast<std::size_t>(K) * N);",
-            "        gc.resize(static_cast<std::size_t>(no) * no * N);",
-            "        for (int u0 = 0; u0 < no; ++u0)",
-            "        for (int u1 = 0; u1 < no; ++u1)",
-            "        for (int d = 0; d < nv; ++d)",
-            f"            ga[(static_cast<std::size_t>(u0) * no + u1) * K + d] = {a_expr};",
-        ]
-        for n, b in enumerate(b_exprs):
-            lines += [
-                "        for (int d = 0; d < nv; ++d)",
-                "        for (int u2 = 0; u2 < no; ++u2)",
-                f"            gb[static_cast<std::size_t>(d) * N + {n} * no + u2] = {b};",
-            ]
-        lines += [
-            "        Eigen::Map<TripleMat>(gc.data(), no * no, N).noalias() ="
-            " Eigen::Map<const TripleMat>(ga.data(), no * no, K) *"
-            " Eigen::Map<const TripleMat>(gb.data(), K, N);",
-        ]
-        for n, sl in enumerate(slots):
-            lines += [
-                "        for (int u01 = 0; u01 < no * no; ++u01)",
-                "        for (int u2 = 0; u2 < no; ++u2)",
-                f"            e[{sl} * o3 + static_cast<std::size_t>(u01) * no + u2] ="
-                f" gc[static_cast<std::size_t>(u01) * N + {n} * no + u2];",
-            ]
-        lines.append("    }")
-    for slot, (exprs, s, bound) in enumerate(key_text):
-        if s == "d":
-            continue
-        lines += [
-            f"    // Elementary block {slot}: {' * '.join(exprs)}",
-            "    for (int u0 = 0; u0 < no; ++u0)",
-            "    for (int u1 = 0; u1 < no; ++u1)",
-            "    for (int u2 = 0; u2 < no; ++u2)",
-            "    {",
-            "        double acc = 0.0;",
-            f"        for (int {s} = 0; {s} < {bound}; ++{s})",
-            f"            acc += {' * '.join(exprs)};",
-            f"        e[{slot} * o3 + (static_cast<std::size_t>(u0) * no + u1) * no + u2] = acc;",
-            "    }",
-        ]
+    lines += [
+        "    const std::size_t o2 = static_cast<std::size_t>(no) * no;",
+        "    const std::size_t o3 = o2 * no;",
+        f"    std::fill(out, out + {len(TRIPLE_ORDERINGS)} * o3, 0.0);",
+        "    using RowMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;",
+        "    static thread_local std::vector<double> e, t;",
+        f"    if (e.size() < {len(key_text)} * o3) e.resize({len(key_text)} * o3);",
+        "    if (t.size() < o3) t.resize(o3);",
+    ]
+    lines += gemms
+    # Assembly: per ordering, the terms reading their blocks in the same
+    # occupied order are summed contiguously, then added once through that
+    # transposition (identity: straight into out). Fixed order, so the result
+    # does not depend on the thread count.
     for p, perm in enumerate(TRIPLE_ORDERINGS):
-        lines.append(f"    // Ordering {p}: (a, b, c) = (v{perm[0]}, v{perm[1]}, v{perm[2]})")
         lines += [
-            "    for (int i = 0; i < no; ++i)",
-            "    for (int j = 0; j < no; ++j)",
-            "    for (int k = 0; k < no; ++k)",
+            f"    // Ordering {p}: (a, b, c) = (v{perm[0]}, v{perm[1]}, v{perm[2]})",
             "    {",
-            "        double &w = out[" + str(p) + " * o3 + (static_cast<std::size_t>(i) * no + j) * no + k];",
+            f"        double *w = out + {p} * o3;",
         ]
+        groups: dict[tuple, list] = {}
         for slot, coeff, occ in adds[p]:
+            groups.setdefault(tuple(occ), []).append((slot, coeff))
+        for occ, members in groups.items():
+            rhs = " ".join(f"+ {_coeff_literal(c)}e[{sl} * o3 + x]" for sl, c in members).replace("+ -", "- ")
+            rhs = rhs[2:] if rhs.startswith("+ ") else "-" + rhs[2:]
+            if occ == ("i", "j", "k"):
+                lines += [
+                    "        for (std::size_t x = 0; x < o3; ++x)",
+                    f"            w[x] += {rhs};",
+                ]
+                continue
             u = f"(static_cast<std::size_t>({occ[0]}) * no + {occ[1]}) * no + {occ[2]}"
-            lines.append(f"        w += {_coeff_literal(coeff)}e[{slot} * o3 + {u}];")
+            lines += [
+                "        for (std::size_t x = 0; x < o3; ++x)",
+                f"            t[x] = {rhs};",
+                "        for (int i = 0; i < no; ++i)",
+                "        for (int j = 0; j < no; ++j)",
+                "        for (int k = 0; k < no; ++k)",
+                f"            w[(static_cast<std::size_t>(i) * no + j) * no + k] += t[{u}];",
+            ]
         lines.append("    }")
     lines.append("}")
     return "\n".join(lines)

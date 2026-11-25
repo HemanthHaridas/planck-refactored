@@ -83,6 +83,9 @@ namespace HartreeFock::Correlation::CC
                     for (int c = 0; c <= b; ++c)
                         triples.push_back({a, b, c});
             std::vector<double> e_triple(triples.size(), 0.0);
+            // Contiguous operand layouts, read-only and shared by every triple.
+            const CCSDTripleLayouts lay =
+                prepare_ccsd_t_triple_layouts(state.reference, state.mo_blocks, state.amplitudes);
 
 #ifdef USE_OPENMP
 #pragma omp parallel
@@ -96,10 +99,9 @@ namespace HartreeFock::Correlation::CC
                 for (std::ptrdiff_t t = 0; t < static_cast<std::ptrdiff_t>(triples.size()); ++t)
                 {
                     const std::array<int, 3> abc = triples[static_cast<std::size_t>(t)];
-                    // W for all six orderings at once: they share 24 elementary
+                    // W for all six orderings at once: they share 12 elementary
                     // contractions, which a per-ordering kernel would compute six times.
-                    compute_ccsd_t_W_triple(abc[0], abc[1], abc[2], state.reference,
-                                            state.mo_blocks, state.amplitudes, w.data());
+                    compute_ccsd_t_W_triple(abc[0], abc[1], abc[2], state.reference, lay, w.data());
                     std::array<std::array<int, 3>, 6> ord{};
                     for (int p = 0; p < 6; ++p)
                     {
