@@ -922,6 +922,12 @@ def with_gemm_include(text: str) -> str:
 
 
 _READ = re.compile(r"([A-Za-z_][\w.]*)\(([^(){}]*)\)")
+# A UCC same-spin ERI read as <pq||rs> = <pq|rs> - <pq|sr>: one stored array
+# read twice (`_block_needs_explicit_exchange`).
+_DIFF_READ = re.compile(r"\(([A-Za-z_][\w.]*)\(([^(){}]*)\) - \1\(([^(){}]*)\)\)")
+# Operands the UCC kernels bind locally: ERI and Fock spin blocks
+# (Tensor4D/Tensor2D references), and a builder's scratch arrays.
+_UCC_OPERAND = re.compile(r"v_[ab]{4}_[ov]{4}|f_[ab]{2}_[ov]{2}|X\d+")
 
 
 def _gemm_lowering(term, factors, free, summed, lhs, intermediate_names,
@@ -941,27 +947,46 @@ def _gemm_lowering(term, factors, free, summed, lhs, intermediate_names,
     stored in the first factor, n as stored in the second. The helper uses an
     operand in place exactly when its storage is r+c or c+r in those orders,
     which is the test below.
+
+    UCC: operands are spin blocks bound locally (`v_abab_oovv`, `f_aa_vv`,
+    `t2_abab`, builder scratch `X1`), and a same-spin ERI read is the
+    antisymmetrized difference `(v(..cd) - v(..dc))` of one stored array.
+    Each alternative of a difference is lowered as its own call with its
+    sign, so one term can emit up to four calls.
     """
     # Five or more distinct indices: o^2v^3 and up. Smaller nests are cheap
     # enough that the GEMM setup would not pay.
     if len(factors) != 2 or not summed or len(free) + len(summed) < 5:
         return None
-    reads = []
+    # Per factor, its alternatives (sign, name, labels): one read, or the two
+    # reads of an antisymmetrized UCC difference, each lowered as its own call.
+    alternatives = []
     sign = 1
     for factor in factors:
         s, expr = _map_factor(factor, intermediate_names, arbitrary_amplitudes)
-        m = _READ.fullmatch(expr)
-        if m is None:
-            return None
-        name, labels = m.group(1), [x.strip() for x in m.group(2).split(",")]
-        known = (name.startswith("mo_blocks.")
-                 or name in (intermediate_names or ())
-                 or (arbitrary_amplitudes and re.fullmatch(r"t\d+(?:_[ab]+)?", name)))
-        if not known or any(len(x) != 1 for x in labels) or len(set(labels)) != len(labels):
-            return None
-        reads.append((name, "".join(labels)))
         sign *= s
-    (a_name, a_lab), (b_name, b_lab) = reads
+        m = _READ.fullmatch(expr)
+        d = None if m else _DIFF_READ.fullmatch(expr)
+        if m:
+            parts = [(1, m.group(1), m.group(2))]
+        elif d:
+            parts = [(1, d.group(1), d.group(2)), (-1, d.group(1), d.group(3))]
+        else:
+            return None
+        alts = []
+        for alt_sign, name, args in parts:
+            labels = [x.strip() for x in args.split(",")]
+            known = (name.startswith("mo_blocks.")
+                     or name in (intermediate_names or ())
+                     or (arbitrary_amplitudes and re.fullmatch(r"t\d+(?:_[ab]+)?", name))
+                     or _UCC_OPERAND.fullmatch(name))
+            if not known or any(len(x) != 1 for x in labels) or len(set(labels)) != len(labels):
+                return None
+            alts.append((alt_sign, name, "".join(labels)))
+        if any(set(lab) != set(alts[0][2]) for _, _, lab in alts):
+            return None
+        alternatives.append(alts)
+    (_, a_name, a_lab), (_, b_name, b_lab) = alternatives[0][0], alternatives[1][0]
     free_names = [i.name for i in free]
     sum_names = [i.name for i in summed]
     if any(len(x) != 1 for x in free_names + sum_names):
@@ -980,13 +1005,19 @@ def _gemm_lowering(term, factors, free, summed, lhs, intermediate_names,
     n = "".join(c for c in b_lab if c not in sum_names)
     if not m or not n:
         return None
-    for lab, r, c in ((a_lab, m, k), (b_lab, k, n)):
-        if lab not in (r + c, c + r) and n_vir(lab) > 3:
-            return None
-    coeff = float(term.coeff * sign)
-    return (f'{pad}cc_gemm_contract({lhs}, "{"".join(free_names)}", {coeff!r}, '
-            f'cc_operand({a_name}), "{a_lab}", cc_operand({b_name}), "{b_lab}", '
-            f'"{m}", "{k}", "{n}");')
+    for alts, r, c in ((alternatives[0], m, k), (alternatives[1], k, n)):
+        for _, _, lab in alts:
+            if lab not in (r + c, c + r) and n_vir(lab) > 3:
+                return None
+    calls = []
+    for a_sign, a_name, a_lab in alternatives[0]:
+        for b_sign, b_name, b_lab in alternatives[1]:
+            coeff = float(term.coeff * sign * a_sign * b_sign)
+            calls.append(
+                f'{pad}cc_gemm_contract({lhs}, "{"".join(free_names)}", {coeff!r}, '
+                f'cc_operand({a_name}), "{a_lab}", cc_operand({b_name}), "{b_lab}", '
+                f'"{m}", "{k}", "{n}");')
+    return "\n".join(calls)
 
 
 def emit_planck_term(
@@ -1050,11 +1081,12 @@ def emit_planck_term(
         summed = list(term.summed_indices)
         factors = term.factors
 
-    if not ucc:
-        lowered = _gemm_lowering(term, factors, free, summed, lhs,
-                                 intermediate_names, arbitrary_amplitudes, pad)
-        if lowered is not None:
-            return lowered
+    # RCC and UCC alike (1c, docs/CCSD_T_SIZE_SCOPE.md): the helper takes its
+    # extents from the operands, so spin blocks need nothing extra.
+    lowered = _gemm_lowering(term, factors, free, summed, lhs,
+                             intermediate_names, arbitrary_amplitudes, pad)
+    if lowered is not None:
+        return lowered
 
     if omp_collapse > 0 and len(free) >= omp_collapse:
         lines.append(

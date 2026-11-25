@@ -117,6 +117,13 @@ namespace HartreeFock::Correlation::CC
         using CCRowMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
         using CCMap = Eigen::Map<const CCRowMat>;
 
+        // Below this many elements (copy, scatter) or multiply-adds (product) a
+        // loop runs on one thread: tiny systems make thousands of calls on
+        // matrices a few elements wide, where opening a parallel region costs
+        // more than the work. The partition into tasks does not change, so
+        // the result does not depend on it.
+        constexpr std::ptrdiff_t cc_parallel_min = std::ptrdiff_t{1} << 15;
+
         // Operand as an (rows x cols) matrix over groups (r, c): a map when the
         // storage already is that matrix or its transpose, else a copy.
         struct CCMatrix
@@ -142,7 +149,7 @@ namespace HartreeFock::Correlation::CC
                 m.transposed = true;
             } else {
                 m.copy.resize(m.rows, m.cols);
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static) if (m.rows * m.cols >= cc_parallel_min)
                 for (Eigen::Index i = 0; i < m.rows; ++i)
                     for (Eigen::Index j = 0; j < m.cols; ++j)
                         m.copy(i, j) = x.data[ro[i] + co[j]];
@@ -213,7 +220,7 @@ namespace HartreeFock::Correlation::CC
                     for (Eigen::Index s = c0; s < c1; s += block)
                         tasks.push_back({x, s, std::min(block, c1 - s)});
                 }
-#pragma omp parallel for schedule(dynamic, 1)
+#pragma omp parallel for schedule(dynamic, 1) if (M * N * K >= cc_parallel_min)
                 for (std::size_t t = 0; t < tasks.size(); ++t) {
                     const auto [x, s, w] = tasks[t];
                     prod.block(x * R, s, R, w).noalias() = A.middleRows(x * R, R) * B.middleCols(s, w);
@@ -223,7 +230,7 @@ namespace HartreeFock::Correlation::CC
             const bool by_rows = M >= N;
             const Eigen::Index extent = by_rows ? M : N;
             const Eigen::Index n_blocks = (extent + block - 1) / block;
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static) if (M * N * K >= cc_parallel_min)
             for (Eigen::Index t = 0; t < n_blocks; ++t) {
                 const Eigen::Index s = t * block, w = std::min(block, extent - s);
                 if (by_rows)
@@ -235,7 +242,7 @@ namespace HartreeFock::Correlation::CC
 
         const auto mo = cc_group_offsets(out_labels, out_dims, m, pair_half);
         const auto no = cc_group_offsets(out_labels, out_dims, n, pair_half);
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static) if (M * N >= cc_parallel_min)
         for (Eigen::Index i = 0; i < M; ++i) {
             const auto [c0, c1] = col_range(i / R);
             for (Eigen::Index j = c0; j < c1; ++j)
