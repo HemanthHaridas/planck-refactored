@@ -711,8 +711,6 @@ if(PLANCK_CC_ARBITRARY_LOWER_RANKS)
 else()
     set(_planck_cc_arb_lower 0)
 endif()
-target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
-target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower})
 # Reaches choose_rccsdt_backend: a dressed build must select the TensorOptimized backend,
 # since that is the only one that runs the ccgen-generated triples kernel dressing rewrites.
 if(PLANCK_CC_DRESS_OPERATORS)
@@ -720,14 +718,20 @@ if(PLANCK_CC_DRESS_OPERATORS)
 else()
     set(_planck_cc_dressed 0)
 endif()
-target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
-
 if(PLANCK_CC_UCC)
     set(_planck_cc_ucc 1)
 else()
     set(_planck_cc_ucc 0)
 endif()
-target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_UCC=${_planck_cc_ucc})
+# The CC feature set of the post-HF driver. hartree-fock and planck-mpi run the
+# same driver, so both take this one list; planck-mpi once lacked the UCC and
+# dressing entries and so had no uccsd(t) (docs/CC_MPI_SCOPE.md).
+set(_planck_posthf_cc_defs
+    PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER}
+    PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower}
+    PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed}
+    PLANCK_CC_UCC=${_planck_cc_ucc})
+target_compile_definitions(hartree-fock PRIVATE ${_planck_posthf_cc_defs})
 
 add_executable(planck-dft
     ${BASE_SRC}
@@ -1015,7 +1019,7 @@ if(BUILD_MPI)
         add_dependencies(planck-mpi ccgen-planck-kernels)
     endif()
     # USING_Libxc enables the libxc-backed XC path (same as planck-dft).
-    target_compile_definitions(planck-mpi PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER} PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower})
+    target_compile_definitions(planck-mpi PRIVATE USING_Libxc ${_planck_posthf_cc_defs})
 
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-mpi OpenMP::OpenMP_CXX)

@@ -17,10 +17,14 @@ distributed), `docs/CCSD_T_SIZE_SCOPE.md` (what limits CCSD(T) size today),
   (round-robin ownership of an index range, `owns(i)`) and
   `allreduce_inplace`. RI uses them for the 3c build, RI-J/K and the RI-MP2
   loops (`docs/RI_MPI_SCOPE.md`, M0–M1).
-- `planck-mpi` is compiled without `PLANCK_CC_UCC` and
-  `PLANCK_CC_DRESS_OPERATORS`, which the serial binaries get
-  (`docs/BUILD_SHARED_OBJECTS_SCOPE.md`). So `uccsd(t)` is not available in
-  `planck-mpi` at all today.
+- `planck-mpi` takes the same CC compile definitions as `hartree-fock`
+  (one list, `_planck_posthf_cc_defs`; since 2026-11-25). Before that it
+  lacked `PLANCK_CC_UCC` and `PLANCK_CC_DRESS_OPERATORS`, so it had no
+  `uccsd(t)` and ran a different CC path from the serial binary.
+- `tests/mpi_smoke_compare.py` compares `Total Energy`, MP2 totals and
+  gradient rows. It does not read `Total RCCSD(T) Energy` or
+  `Total UCCSD(T) Energy`, so a CC MPI gate would compare only the SCF.
+  Extend its patterns before M0/M1's gates.
 
 ## Two different things "distributed" can mean
 
@@ -98,10 +102,9 @@ Apply to the CCSD residual the same pattern as the SCF and RI:
   and the energy run replicated.
 
 Gate: serial versus 2 and 3 ranks, every printed digit, on `ccsd(t)` and
-`uccsd(t)` cases, plus the drop-the-reduce mutation. First fix the
-`planck-mpi` build options so that it compiles `PLANCK_CC_UCC` and
-`PLANCK_CC_DRESS_OPERATORS` like the serial binaries; otherwise `uccsd(t)`
-cannot be gated there.
+`uccsd(t)` cases, plus the drop-the-reduce mutation. `planck-mpi` has the
+UCC and dressing options since 2026-11-25; the comparator still needs the
+CC energy patterns (see "The state").
 
 Measure before claiming a speedup. Per-iteration time includes replicated
 DIIS and the energy, which do not shrink with the rank count.

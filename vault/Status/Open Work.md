@@ -334,8 +334,8 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   break silently (three on 2026-11-07). Plan: one static `planck_core` plus
   a small `planck_dft`. `USE_OPENMP`, `USING_Libxc`, `USE_MPI` and the
   `PLANCK_CC_*` options currently vary per target and decide what can be
-  shared. `planck-mpi` also omits two `PLANCK_CC_*` options the other
-  binaries define; check whether that was intended.
+  shared. `planck-mpi` now takes `hartree-fock`'s CC definitions from one
+  list (it lacked UCC and dressing until 2026-11-25, unintended).
 - **No build-and-test CI runs, because the runners ran out of disk.** The
   "CMake on multiple platforms" workflow
   (`.github/workflows/cmake-multi-platform.yml`) is `disabled_manually`; its
@@ -434,8 +434,10 @@ None of these blocks correctness. Take each up only with a current profile.
 
     Both prerequisites are met (spatial RCCSD, threaded generated kernels);
     RI is not needed while time, not memory, binds.
-    `planck-mpi` also lacks `PLANCK_CC_UCC` and `PLANCK_CC_DRESS_OPERATORS`,
-    so it has no `uccsd(t)`; fix that before M1's UCC gates.
+    `planck-mpi` has `uccsd(t)` since 2026-11-25 (same CC definitions as
+    `hartree-fock`). Before the M0/M1 gates, teach
+    `tests/mpi_smoke_compare.py` the `Total R/UCCSD(T) Energy` lines; it
+    compares only `Total Energy` today, i.e. the SCF.
 - **CASSCF** (`docs/CASSCF_PERFORMANCE.md`). Stopped at 1.3× behind PySCF at
   water cc-pVTZ C2v, which was accepted. Leftovers, only with a new target:
   re-profile cc-pVTZ C2v, a better relaxed-solve preconditioner, and the RI
