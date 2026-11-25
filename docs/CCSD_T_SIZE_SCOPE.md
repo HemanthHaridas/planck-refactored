@@ -2,166 +2,119 @@
 
 Status lives in `vault/Status/Open Work.md` (priority 1). Parent:
 `docs/CCSD_T_SCOPE.md`. Background on the generated CC route:
-`docs/CCGEN_GENERATED_CC_COST.md`.
+`docs/CCGEN_GENERATED_CC_COST.md`. Labels in parentheses (R1, R3b, 1a, ...)
+are the step names other docs cite.
 
 **Constraint: fixes go in the generator.** A hand-written spatial RCCSD is
 the last resort, under the conditions in "Last resort".
 
-## Answer (2026-11-24)
+## Answer
 
-**Memory limited the size first, and no longer binds at the water dimer in
-cc-pVTZ.** What filled memory was the AO integral handling and avoidable
-copies around it. Each phase now holds one large object:
+**Time is the limit, not memory.** On the water dimer in cc-pVTZ every phase
+holds one large object and the run peaks at 1.43 GB. The remaining gap to
+PySCF is the CCSD's per-iteration time; (T) is faster than PySCF.
 
-| Phase | Largest object | Peak footprint |
+| Water dimer / cc-pVTZ `ccsd(t)`, 4 threads (nb 116 sph / 130 cart, o 10, v 106) | Planck | PySCF 2.15 |
 |---|---|---|
-| SCF | spherical AO ERI tensor, 1.38 GB (ns⁴) | 1.31 GB |
-| CCSD | `vvvv`, 0.96 GB (v⁴), with the other blocks and amplitudes | 1.43 GB |
+| Total energy | −152.7012785674 Eh | equal to every printed digit |
+| CCSD per iteration | 0.79–0.80 s × 18 | 0.32 s × 23 (2.5× per iteration) |
+| (T) | 4.5–4.8 s | 6.0 s |
+| whole run | 35.8–37.1 s | |
+| peak footprint | 1.43 GB | 1.94 GB |
+
+Where it started (2026-11-21): the same run did not fit in 8 GiB (6.7 GB
+footprint, paging), and once it did it took 512 s, CCSD 29× and (T) 47×
+behind PySCF, with the gap growing with the basis. Now the CCSD ratio is
+flat in the basis (3.1× on the dimer in cc-pVDZ, 2.5× in cc-pVTZ).
+
+The next walls:
+- **Memory:** the ns⁴ AO tensor in the SCF and v⁴ `vvvv` in the CCSD.
+  Removing either is a different method (direct or RI integrals, an
+  AO-driven or RI `vvvv` contraction), not a fix.
+- **Time:** the CCSD's remaining 2.5×, and the UCC residual, which has only
+  part of the restricted work (see "UCC").
+
+## Memory: one large object per phase
+
+| Phase | Largest object | Peak footprint (dimer cc-pVTZ) |
+|---|---|---|
+| SCF | spherical AO ERI tensor, ns⁴ (1.38 GB) | 1.31 GB |
+| CCSD | `vvvv`, v⁴ (0.96 GB), with the other blocks and amplitudes | 1.43 GB |
 | (T) | `vvvv` and blocks, kept by the state | 1.14 GB |
 
-The next memory wall is the ns⁴ AO tensor in the SCF and v⁴ `vvvv` in the
-CCSD. Removing either is a different method (direct or RI integrals, an
-AO-driven or RI `vvvv` contraction), not a fix.
+What keeps it there, each with the measurement that justified it:
 
-**Time is the limit now.** Against PySCF 2.15 the gap used to grow with size
-(CCSD ~2× → 29×, (T) ~10× → 47× from water cc-pVDZ to the dimer in
-cc-pVTZ).
-- **CCSD: closed to 2.7× per iteration, flat in the basis** (3.1× on the
-  dimer in cc-pVDZ, 2.7× in cc-pVTZ). The gap was more arithmetic times
-  slower arithmetic. Generator changes brought the arithmetic to 1.4×
-  PySCF's and moved 99.6 % of it into Eigen GEMMs.
-- **(T): faster than PySCF since step 1a** (4.5–4.8 s against 6.0 s):
-  the t2 symmetry halved its blocks, the `t2 · ovvv` blocks run as small
-  GEMMs per triple, as PySCF's do, and every block now reads contiguous
-  layouts made once per (T).
+| Mechanism | Where | Effect |
+|---|---|---|
+| The spherical tensor is built per shell quartet; the Cartesian one never exists | `RysQuad::_compute_2e_spherical` (`src/integrals/rys.cpp`) | SCF peak nc⁴ + ns·nc³ (4.1 GB on the dimer) → ns⁴ (1.38 GB) |
+| One SCF copy of the tensor; the Cartesian-to-spherical transform frees its input | `build_conventional_eri` (`src/scf/scf.cpp`), `transform_eri_cart_to_sph` | water cc-pVTZ Cartesian SCF 466 → 330 MiB |
+| `transform_eri` batched over its leading index | `src/post_hf/integrals.cpp` | removes n1·nb³ and n1·n2·nb² intermediates (1.32 + 1.21 GB on the dimer); bitwise identical, no time cost |
+| The AO tensor is freed before the CC iterations | `Correlation::release_eri`, called in `rccgen.cpp` and `uccgen.cpp` | dimer peak 2.83 → 1.43 GB |
+| The CC solver moves its state instead of copying it | `run_generated_arbitrary_order_iterations` | one copy of every integral block fewer (963 + 91 MiB on the dimer) |
+| (T) reuses the CCSD's converged integral blocks | `compute_rccsd_t_energy(calculator, state)` | E(T) bitwise unchanged |
+| The engines' thread-local ERI scratch is freed after a one-shot build | `_compute_2e` (`src/integrals/base.h`) | ~130 MiB on water cc-pVTZ |
+| Binaries re-exec with libmalloc's large-block cache off | `src/base/malloc_env.h`, both `main`s | water cc-pVTZ footprint 624 → 262 MiB |
 
-| Water dimer / cc-pVTZ `ccsd(t)` (nb 116 sph / 130 cart, o 10, v 106) | |
-|---|---|
-| Total energy | −152.7012785674 Eh, equal to PySCF 2.15 to every printed digit |
-| E_corr(CCSD), E(T) | −0.5642828768, −0.0160404999 |
-| Peak footprint | 6.7 GB (did not finish) → 5.5 GB → 3.93 GB → 2.83 GB → **1.43 GB** |
-| CCSD / (T) / whole run | 18 × 0.85 s / 4.5–4.8 s / **36.4–38.6 s**, 4 threads (512 s at step 7) |
-| Against PySCF 2.15 (4 threads) | CCSD 0.85 vs 0.32 s per iteration (2.7×), (T) 4.5–4.8 vs 6.0 s (0.8×) |
+**Freeing the AO tensor.** The iterations and (T) read only the CC blocks,
+and every rank's `prepare` (the warm-start recursion's included) runs
+before any rank iterates. A later `ensure_eri` rebuilds the tensor, so a
+missed reader costs time, not correctness. Both generated routes are
+single-point only.
 
-## What changed
-
-| # | Change | Where | Effect |
-|---|---|---|---|
-| 1 | One SCF copy of the ERI tensor; the spherical transform frees its input | `build_conventional_eri` (`src/scf/scf.cpp`), `transform_eri_cart_to_sph` | `885109ce`. Water cc-pVTZ Cartesian SCF 466 → 330 MiB |
-| 2 | `transform_eri` batched over its leading index | `src/post_hf/integrals.cpp` | `25714026`. Removes two n1·nb³ / n1·n2·nb² intermediates (1.32 + 1.21 GB on the dimer); bitwise identical, no time cost |
-| 3 | (T) reuses the CCSD's converged integral blocks | `compute_rccsd_t_energy(calculator, state)` | `94fb61b5`. E(T) bitwise unchanged; dimer (T) 379 → 354 s |
-| 3b | Re-exec with libmalloc's large-block cache off | `src/base/malloc_env.h`, both `main`s | `22589e59`. Water cc-pVTZ peak footprint 624 → 262 MiB |
-| 4 | Free the engines' thread-local ERI scratch after a one-shot tensor build | `_compute_2e` in `src/integrals/base.h` | `22589e59`. ~130 MiB on water cc-pVTZ |
-| 6 | Spherical tensor built per shell quartet, never the Cartesian one | `RysQuad::_compute_2e_spherical` (`src/integrals/rys.cpp`) | `538430e9`. SCF peak nc⁴ + ns·nc³ (4.1 GB on the dimer) → ns⁴ (1.38 GB) |
-| — | CC solver moves its state instead of copying it | `run_generated_arbitrary_order_iterations` | `5be4a29e`. One copy of every integral block fewer (963 + 91 MiB on the dimer). Water cc-pVTZ peak live 245 → 186 MiB |
-| 5 | Free the AO tensor before the CC iterations | `Correlation::release_eri`, called in `rccgen.cpp` and `uccgen.cpp` | `d9f5fb69`. Dimer peak footprint 2.83 → 1.43 GB |
-| 7 | Re-measure the size ladder against PySCF | "Evidence" | Time, not memory, is the limit |
-| 8 | (T) W computed once per virtual triple for all six orderings | `_emit_triple_kernel` (`python/ccgen/methods/ccsd_t.py`), `compute_ccsd_t_W_triple` | (T) 5.0–5.7×: dimer cc-pVTZ 283 → 49.9 s |
-| 9 | Generated RCCSD residual: half range (R1), common-operand merges (R2, R2b), GEMM lowering (R3) | "CCSD time" | CCSD 13.9× per iteration: dimer cc-pVTZ 11.8 → 0.85 s; whole run 278 → 81 s |
-| 10a | (T) blocks keyed up to the t2 pair swap: 24 → 12 per triple | `_emit_triple_kernel`, `_swap_t2_pair` (`python/ccgen/methods/ccsd_t.py`) | (T) 1.7–1.9×: dimer cc-pVTZ 49.8 → 26.8 s; whole run 81 → 58.5 s |
-| 10b | (T) `t2 · ovvv` blocks as small GEMMs, two per shared t2 slice | `_emit_triple_kernel` | (T) 1.7–3.2×: dimer cc-pVTZ 26.5 → 8.25 s; whole run 57.8 → 39.6 s |
-| 1a | (T) blocks as GEMMs on contiguous layouts made once per (T); contiguous assembly | `_emit_triple_kernel`, `prepare_ccsd_t_triple_layouts`, `batched_triples_energy` | (T) 1.8×: dimer cc-pVTZ 8.1–8.4 → 4.5–4.8 s, past PySCF's 6.0 s |
-
-Energies are identical to every printed digit after every change. The core
-suite passes (178/178) with all of them.
-
-## Memory
-
-**Step 5** frees `calculator._eri` right before a generated CC route's
-iterations. The iterations and (T) read only the CC blocks, and every
-rank's `prepare`, the warm-start recursion's included, runs before any rank
-iterates. A later `ensure_eri` rebuilds the tensor, so a missed reader
-would cost time, not correctness. Both routes are single-point only.
-Gated by the RCC cases on `build-default` and the UCC and generated CCSDT
-cases (`b_ucc{2,3,4}`, `*_uccsd_t_*`, `*_rccsdt_generated_*`) on the fully
-featured `build/`.
-
-**Step 6.** Each canonical shell quartet's Cartesian block comes from the
-same kernels `_compute_2e` uses (Auto per quartet, HGP or Rys hoisted blocks,
-per-component OS). It gets the same per-component Schwarz screen, then four
-one-index transforms with the shells' blocks of `C`. Only canonical
-spherical elements are written, with their 8 permutations, so the tensor is
-exactly symmetric. A canonical element can have its ket shell pair before
-its bra pair when both start on the same shell, (P1 P2 | P1 P1) holding
-(3,6|4,4), so the ket loop starts at (sa, sa). The builder checks that `C` is
-block-diagonal by shell instead of assuming it. With integral symmetry
-operations, which act on Cartesian AOs, it falls back to
-build-then-transform. Gated in `planck-compute-2e`: equal to
-build-then-transform to ≤ 6.7e-16 (cc-pVDZ, all four engines) and 2.1e-15
-(cc-pVTZ, Auto), against integrals up to 4.9, and exactly 8-fold symmetric.
-The gate's first run caught the missing (sa, sa) kets (4592 elements, all
-unwritten). The SCF's spherical build no longer has the transform's hidden
-150-Cartesian-AO limit, matching `ensure_eri` and the Cartesian build.
+**The per-quartet spherical build.** Each canonical shell quartet's
+Cartesian block comes from the same kernels `_compute_2e` uses, gets the
+same Schwarz screen, then four one-index transforms with the shells' blocks
+of `C`. Only canonical spherical elements are written, with their 8
+permutations, so the tensor is exactly symmetric. A canonical element can
+have its ket pair before its bra pair when both start on the same shell
+((P1 P2 | P1 P1) holds (3,6|4,4)), so the ket loop starts at (sa, sa); the
+gate's first run caught the missing kets (4592 elements). The builder
+checks that `C` is block-diagonal by shell, and falls back to
+build-then-transform under integral symmetry operations, which act on
+Cartesian AOs. Gated in `planck-compute-2e`: equal to build-then-transform
+to ≤ 6.7e-16 (cc-pVDZ, all four engines) and 2.1e-15 (cc-pVTZ, Auto), and
+exactly 8-fold symmetric.
 
 **Where the memory was** (dimer cc-pVTZ, live blocks ≥ 1 MiB during the
-CCSD, from the profiler in "Tools"):
+CCSD):
 
-| MiB | Object | After 3b, 4, 6 | + move fix | + step 5 |
-|---|---|---|---|---|
-| 2179 | spherical AO tensor in the recycled Cartesian block (1448 requested) | 1381 | 1381 | gone |
-| 963 | `vvvv`, `rebind_physicist` | 963 | 963 | 963 |
-| 963 | `vvvv` copy, `TensorCCBlockCache` copy in the solver | 963 | gone | gone |
-| 91 + 91 | `ovvv` and its copy | 91 + 91 | 91 | 91 |
-| ~140 | thread-local ERI scratch | gone | gone | gone |
-| | **peak live / footprint** | 3.89 / 3.93 GB | 2.80 / 2.83 GB | 1.41 / 1.43 GB |
-| | **through (T)** | 2.49 GB live | 2.49 GB live | 1.11 GB live |
-
-Before 3b–6 the SCF also held the Cartesian tensor (2179 MiB) with the
-transform's first quarter (1944 MiB), 4.26 GB at ~23 s.
-
-Water cc-pVTZ `ccsd(t)` through the changes:
-
-| | peak live | peak footprint |
+| MiB | Object | Now |
 |---|---|---|
-| after step 3 | 424 MiB (`malloc_size`) | 624 MiB |
-| + 3b, 4 | 245 MiB | 262 MiB |
-| + 6 | 245 MiB (SCF phase 235 → 185) | 260 MiB |
-| + move fix | 186 MiB | 213 MiB |
+| 2179 | spherical AO tensor in a recycled Cartesian block (1448 requested) | freed before the CC |
+| 963 | `vvvv` | kept |
+| 963 | `vvvv` copy in the solver | gone (move) |
+| 91 + 91 | `ovvv` and its copy | 91 |
+| ~140 | thread-local ERI scratch | gone |
 
 **Findings.**
 - **macOS libmalloc held up to half the footprint.** It keeps a freed large
-  block dirty in its large-block cache and returns it whole for a later,
-  smaller request. The freed 2.18 GB Cartesian tensor became the 1.45 GB
-  spherical tensor's block, pinning a dirty 0.73 GB tail for the whole run.
-  A standalone C program reproduces it: freeing a touched 1000 MiB block
-  leaves the footprint at 1001 MiB, and a 632 MiB request gets the same
-  pointer back.
-  - Ruled out: `malloc_zone_pressure_relief(NULL, 0)` (releases 0 bytes),
-    `madvise(MADV_FREE_REUSABLE)` or `MADV_FREE` before `free` (footprint
-    unchanged), `MallocXzoneEnabled=0` (no change).
-  - Works: `MallocLargeCache=0`, read only at process start, hence the
-    re-exec. A user-set value is kept, a failed exec continues unchanged,
-    `planck-mpi` does not re-exec (unsafe under an MPI launcher). No cost:
-    water cc-pVTZ 5.82–5.86 s with the cache, 5.87–5.92 s without.
-  - Linux: a no-op. glibc serves blocks above its mmap threshold (at most
-    32 MiB) with `mmap` and returns them on `free`. From glibc's documented
-    defaults, not measured.
-- **The live-byte total read off a profile depends on `malloc_size`.** An
-  earlier profile concluded the CCSD's ≥ 1 MiB allocations summed to less
-  than the SCF peak (4.26 GB) and looked for small allocations. They summed
-  to 5.34 GB, because the spherical tensor occupied a 2179 MiB block. Small
-  allocations were under 20 MiB of 5.36 GB live. Track requested size next
-  to `malloc_size` and the reuse shows as slack.
-- **An earlier attribution of the dimer's peak to (T) was wrong.** (T)
-  rebuilt every integral block (step 3 removed that), but the footprint
-  peak had already been reached in the CCSD, at 73 s.
+  block dirty and returns it whole for a later, smaller request: the freed
+  2.18 GB Cartesian tensor became the 1.45 GB spherical tensor's block,
+  pinning a dirty 0.73 GB tail. A standalone C program reproduces it.
+  `MallocLargeCache=0` fixes it; it is read only at process start, hence
+  the re-exec. A user-set value is kept, a failed exec continues unchanged,
+  and `planck-mpi` does not re-exec (unsafe under an MPI launcher). No
+  cost (water cc-pVTZ 5.82–5.86 s with the cache, 5.87–5.92 s without).
+  On Linux it is a no-op: glibc returns blocks above its mmap threshold on
+  `free` (from glibc's documented defaults, not measured).
+- **Read live bytes with the requested size next to `malloc_size`.** A
+  profile that summed `malloc_size` concluded the CCSD's large allocations
+  fell short of the SCF peak and went looking for small ones; they summed
+  to 5.34 GB because the spherical tensor sat in a 2179 MiB block.
 - **Measure footprint, not RSS, near the RAM limit.** On a paging run RSS
-  read 0.1–1.3 GiB while the footprint was 5–6.7 GB; an RSS watchdog never
-  fired, and `/usr/bin/time` max-RSS understates the same way.
-- **`vmmap` pauses the process it inspects** (water cc-pVTZ 6.3 → 7.9 s at
-  a 2 s poll). The profiler reads `task_info` in-process instead.
+  read 0.1–1.3 GiB while the footprint was 5–6.7 GB; `/usr/bin/time`
+  max-RSS understates the same way.
 - **The spin-orbital RCCSD was the first limit.** `run_rccsd` works in 2o
-  and 2v spin orbitals: 16 v⁴ `vvvv`, 16 o²v² t2, a 64 o²v⁴ leading
-  contraction. Moving `ccsd(t)` to the generated spatial RCCSD removed it
+  and 2v spin orbitals (16× `vvvv`, 16× t2, a 64× o²v⁴ leading
+  contraction). `ccsd(t)` runs the generated spatial RCCSD instead
   ("Evidence").
 
-## CCSD time (step 9)
+## CCSD time
 
-### Where the gap came from (R0)
+### Why it was slow: more arithmetic, and slower arithmetic
 
-Measured per iteration, 4 threads, against PySCF 2.15 RCCSD (`cc.RCCSD`, the
-optimized `ccsd.CCSD`), same geometry and basis files, energies equal,
-before any of step 9:
+Per iteration, 4 threads, against PySCF 2.15 RCCSD (`cc.RCCSD`), same
+geometry and basis files, before any time work (R0):
 
 | Water dimer | Planck | PySCF | ratio |
 |---|---|---|---|
@@ -172,115 +125,58 @@ before any of step 9:
 | cc-pVDZ multiply-adds | 2.69 × 10⁹ | 4.6 × 10⁸ | 5.9× |
 | cc-pVDZ rate | 6.0 G/s | 24 G/s | 4.0× |
 
-Two factors of similar size, then: more arithmetic and slower arithmetic.
-Iteration counts are not the cause.
+Iteration counts are not the cause. The extra arithmetic was the `vvvv`
+ladder over all (i, j) where PySCF takes i ≥ j (1.8×), and 31 separate
+o³v³ contractions where PySCF has a few. The count models the time: its
+shares matched a `sample` profile within a few percent (o³v³ nests 59 % vs
+60.4 %, ladder 20 % vs 20.1 %, builders 14 % vs 9.6 %).
 
-**How counted.**
-- **Planck:** `tests/benchmarks/ccsd_residual/count_generated_fma.py`
-  multiplies the loop bounds around every accumulation in the generated
-  rank-2 TU (residuals and every `build_W_*`). It counts a `j = i` loop as
-  half. Lowered contractions are not loops, so it counts only what stays in
-  loops after R3.
-- **PySCF:** `tests/pyscf/ccsd_update_amps_count.py` wraps `lib.einsum`,
-  `lib.ddot`, `lib.dot`, `numpy.dot` and `numpy.einsum` over one
-  `update_amps`, plus the C `vvvv` ladder, o(o+1)/2·v⁴.
-
-**The count models the time.** Its shares of the CCSD matched a `sample`
-profile within a few percent:
-
-| Dimer cc-pVTZ | count | profile |
-|---|---|---|
-| 31 o³v³ nests (`t2 × X`, one occupied and one virtual summed) | 59 % | 60.4 % |
-| `vvvv` ladder (o²v⁴) | 20 % | 20.1 % |
-| builders | 14 % | 9.6 % |
-| other residual terms | 5.5 % | 4.2 % |
-
-The extra arithmetic was the ladder over all (i, j) where PySCF takes i ≥ j
-(1.8×), and 31 separate o³v³ contractions where PySCF has a few.
-
-### What closes the arithmetic (R1, R2, R2b)
+### Matching PySCF's arithmetic
 
 Multiply-adds per iteration on the dimer in cc-pVTZ, × 10¹⁰:
 
-| | o³v³ | ladder | other residual | builders | total | vs PySCF |
+| | o³v³ | ladder | other | builders | total | vs PySCF |
 |---|---|---|---|---|---|---|
 | start | 3.70 (31 nests) | 1.26 | 0.40 | 0.88 | 6.24 | 4.5× |
 | + half range (R1) | 2.03 | 0.69 | 0.24 | 0.88 | 3.85 | 2.8× |
 | + t2 merge (R2) | 0.39 (6 nests) | 0.69 | 0.08 | 0.89 | 2.06 | 1.5× |
 | + v merge, τ ladder (R2b) | 0.39 | 0.69 | 0.08 | 0.75 | 1.92 | 1.4× |
 
-CCSD per iteration, each row measured back to back against the row above
-with binaries built from the same tree (4 threads; CCSD and (T) energies
-identical to every printed digit):
-
-| | water cc-pVTZ | dimer cc-pVDZ | dimer cc-pVTZ |
-|---|---|---|---|
-| start | 0.195 s | 0.454 s | 11.8 s |
-| + half range | 0.136 s (1.43×) | 0.301 s (1.51×) | 7.55 s (1.56×) |
-| + t2 merge | 0.108 s (1.28×) | 0.216 s (1.38×) | 5.45 s (1.41×) |
-| + v merge | 0.093 s (1.16×) | 0.209 s (1.02×) | 5.23 s (1.06×) |
-
-Time fell less than the count after the first step: with every contraction
-still a scalar loop, what remained was rate-bound, so cutting statements no
-longer cut time proportionally. GEMM lowering addresses the rate.
-
-**Half range on the doubles residual (R1).** The spatial RCC doubles
-residual is computed for j ≥ i only and then mirrored,
-R(j,i,b,a) = R(i,j,a,b), which is PySCF's i ≥ j.
-- **Where.** `_pair_half_kernel` (`python/ccgen/emit/planck_tensor_cpp.py`)
-  starts every nest's free `j` loop at `i` and adds one `// mirror ijab`
-  pass. `emit_planck_translation_unit` applies it to the `doubles` target
-  when spin-adapted and not UCC; under UCC the swap maps `abab` to `baba`,
-  another block. It reaches the doubles of the generated CCSDT/CCSDTQ too.
-- **Why exact.** t2 keeps t2(i,j,a,b) = t2(j,i,b,a): the MP2 start has it,
-  Jacobi divides by symmetric denominators, and DIIS takes linear
-  combinations.
-- **Work.** (o+1)/(2o) of every residual loop nest (55 % at o = 10).
-- **OpenMP.** GCC refuses `schedule` on a non-rectangular collapsed loop, so
-  those nests have none; each element is written by one iteration, so it
-  does not matter.
-- **Gate.** The numpy evaluator in the ccgen tests ignores loop bounds and
-  so sees the full residual; the half range is gated by the C++ energies.
+**Half range (R1).** The spatial RCC doubles residual is computed for
+j ≥ i only and mirrored, R(j,i,b,a) = R(i,j,a,b), which is PySCF's i ≥ j.
+`_pair_half_kernel` (`python/ccgen/emit/planck_tensor_cpp.py`) starts every
+nest's free `j` loop at `i` and adds one `// mirror ijab` pass; it applies
+to the spatial doubles of every generated rank, not to UCC. Exact because
+t2 keeps t2(i,j,a,b) = t2(j,i,b,a): the MP2 start has it, Jacobi divides by
+symmetric denominators, and DIIS takes linear combinations. The numpy
+evaluator in the ccgen tests ignores loop bounds, so the half range is gated
+by the C++ energies.
 
 **Common-operand merge (R2, R2b).** `merge_common_operand_reads`
 (`python/ccgen/optimization/factorize.py`) rewrites Σ_n c_n A(P) R_n as
-A(P) Y, where Y = Σ_n c_n R_n is an intermediate whose builder sums the
-rests. `print_cpp_planck` runs it twice after the factorizer, when
-spin-adapted and not UCC, on every non-energy target.
-- **Grouping.** Two terms share a group when their A read is the same once
-  summed indices are renamed in order of appearance (smallest of A's
-  pair-swap spellings), and their rests carry the same index *set*. Each
-  rest is permuted into Y's slots, so its own index order does not split a
-  group.
+A(P) Y, with Y = Σ_n c_n R_n an intermediate. `print_cpp_planck` runs it
+after the factorizer on every non-energy target, spin-adapted and not UCC.
+- **Grouping.** Terms share a group when their A read is the same once
+  summed indices are renamed in order of appearance, and their rests carry
+  the same index set.
 - **Guards.** A rest may not sum an index of its own, and Y may not be
-  larger than A. Without the second guard a t1·t2 rest becomes an o⁴v⁴ Y,
-  and the total went to 3.4 × 10¹³.
-- **A = t2 (R2)**, with the factorizer's W's as rests. On the rank-2
-  doubles, 69 binary `t2 × X` terms become 12 contractions, and the 31
-  o³v³ become 6. ccsdt: singles 36 → 23, doubles 142 → 85, triples
-  331 → 189 terms.
-- **A = v, after the t2 merge (R2b).** By then every term the t2 merge took
-  reads t2·Y and no v, so the two passes cannot compete for a term. The
-  pass sees through an intermediate read once and defined by one term
-  (`single_use_specs`); if that reader merges, the intermediate is dead and
-  `drop_unread_specs` removes it. On the rank-2 doubles exactly one group
-  forms: the ladder t2(c,d,i,j)·v(a,b,c,d) and t1(d,j)·(t1(c,i)·v(a,b,c,d))
-  become one contraction with τ = t2 + t1 t1. That removes the
-  `W_t1v_ovvv` builder (o v⁴, 1.27 × 10⁹), the largest builder. In ccsdt
-  that builder is also read by the triples, so it is not single-use and the
-  ladder stays unmerged.
-- **Gate.** `test_merged_amplitude_reads.py` emits ccsd and ccsdt with and
-  without both passes, requires every residual to agree to 1e-10 relative
-  on a fixture whose t2 has exactly the (ia)(jb) symmetry, and asserts a v
-  merge on ccsd. Mutation-checked: one member's sign flipped (0.44
-  relative), a wrong Y slot order (shape error), an inlined term's sign
-  flipped (4.3e-3).
+  larger than A. Without the second guard a t1·t2 rest becomes an o⁴v⁴ Y
+  (total 3.4 × 10¹³).
+- **A = t2** (R2): 69 binary `t2 × X` doubles terms become 12
+  contractions, the 31 o³v³ become 6. ccsdt: singles 36 → 23, doubles
+  142 → 85, triples 331 → 189 terms.
+- **A = v, after the t2 merge** (R2b): on the rank-2 doubles exactly one
+  group forms, the τ = t2 + t1 t1 ladder, which removes the largest builder
+  (`W_t1v_ovvv`, o v⁴). In ccsdt that builder is also read by the triples,
+  so the ladder stays unmerged there.
+- **Gate.** `test_merged_amplitude_reads.py`: every residual with and
+  without both passes agrees to 1e-10 relative on a fixture with exactly
+  the (ia)(jb) symmetry; mutation-checked.
 
-### What closes the rate (R3, GEMM lowering)
+### Reaching GEMM rates
 
 **The rates available**, G multiply-adds/s on the M3 (4 performance cores),
-for the CCSD shapes on the water dimer, against about 5 for the scalar loop
-nests and 43 for PySCF's iteration average:
+against about 5 for the scalar loop nests and 43 for PySCF's average:
 
 | Shape | Eigen, 1 thread | Eigen, 4 threads | Eigen, caller splits rows (4) | Accelerate |
 |---|---|---|---|---|
@@ -290,318 +186,210 @@ nests and 43 for PySCF's iteration average:
 | ladder, cc-pVDZ (55 × 1444²) | 17 | 37 | 37 | 134 |
 
 Eigen and Accelerate agree to 2e-15 relative. Planck builds Eigen with
-`EIGEN_DONT_PARALLELIZE`, but a caller-side split matches Eigen's own
-threading, so that define is no obstacle. The benchmark source is not in
-the repo; it is a 90-line program around `C.noalias() = A * B` and
-`cblas_dgemm`.
+`EIGEN_DONT_PARALLELIZE`, and a caller-side split matches Eigen's own
+threading. (The benchmark is a 90-line program around `C.noalias() = A * B`
+and `cblas_dgemm`, not in the repo.)
 
-**The helper.** `cc_gemm_contract` (`src/post_hf/cc/gemm_contract.h`)
+**The helper** (R3). `cc_gemm_contract` (`src/post_hf/cc/gemm_contract.h`)
 computes out(...) += coeff · Σ_k A(m..., k...) B(k..., n...), given the
 index groups m, k, n as label strings.
-- **Operands in place or copied.** Each operand is described by per-group
-  offset tables. If they show the storage already is the (rows, cols)
-  matrix or its transpose, the operand is used in place; otherwise it is
-  copied into one.
-- **Fixed blocks.** The product runs in 64-wide blocks of the larger output
-  dimension. Every element's summation order is therefore independent of
-  the thread count, and results are bitwise the same at 1–8 threads.
-- **Scatter.** The product is added into the output through the same
-  offset tables.
-- **`pair_half`.** A group holding both i and j keeps only j ≥ i. That is a
-  rectangle when i and j share a group, as in the ladder (55 of 100 ij
-  rows).
+- **Operands in place or copied.** Per-group offset tables show whether the
+  storage already is the (rows, cols) matrix or its transpose; if not, the
+  operand is copied into one.
+- **Fixed partition.** The product runs in 64-wide blocks, so every
+  element's summation order, and the result, are independent of the thread
+  count.
+- **Half range.** With `pair_half`, a group holding both i and j keeps only
+  j ≥ i (the ladder: 55 of 100 ij rows). Where i and j lead the row and
+  column groups, the kept part is a staircase: one GEMM per row-index value
+  x on its row slab against the kept column range (j ≥ x, or i ≤ x), and
+  the scatter writes only that region (R3b). In the rank-2 kernel that
+  covers `ia|kc|jb`, `jb|kc|ia`, `ib|kc|ja`, `ja|kc|ib` and the o³v² calls
+  `i|c|jba`, `j|c|iab`, `iab|k|j`, `jab|k|i`, with no emitter change: i or
+  j already leads each group.
+- **Small calls run serially.** Each copy, product and scatter loop runs on
+  one thread below 2¹⁵ elements or multiply-adds. Without that, tiny
+  systems paid for thousands of parallel regions on matrices a few elements
+  wide (see "UCC"). The partition into tasks is unchanged, so results still
+  do not depend on the thread count.
 
-**The emitter.** `_gemm_lowering` (`python/ccgen/emit/planck_tensor_cpp.py`),
-called from `emit_planck_term` for every non-UCC term, lowers a term when:
+**The emitter.** `_gemm_lowering` (`python/ccgen/emit/planck_tensor_cpp.py`)
+lowers a term when:
 - it has two factors, at least one summed index, and five or more distinct
-  indices (o²v³, o³v² and up; smaller nests stay loops);
+  indices (o²v³, o³v² and up);
 - every summed index is in both factors and every free index in exactly one;
-- each operand is one the helper uses in place, or has at most three
-  virtual indices. That keeps any copy at o·v³ (the size of `ovvv`) or
-  smaller, and `mo_blocks.vvvv` is never copied.
+- each operand is used in place, or has at most three virtual indices, so
+  any copy is o·v³ (the size of `ovvv`) or smaller and `vvvv` is never
+  copied.
 
 Group orders: k as stored in the operand with more virtual indices, m and n
-as stored in their factors. `_pair_half_kernel` passes `pair_half` to the
-lowered calls of the spatial doubles kernel. A TU includes the header only
-when it uses it (`with_gemm_include`, shared with the (T) TU, whose
-full-tensor reference kernel is lowered too). On the rank-2 TU 98
-contractions are lowered; 7.3 × 10⁷ multiply-adds stay in loops, mostly the
-merge-sum builders.
+as stored in their factors. One-index contractions are lowered too: without
+them two strided `W_t1v_oovv` builders took a third as many samples as all
+the GEMMs together. On the rank-2 TU 98 contractions are lowered and
+7.3 × 10⁷ multiply-adds stay in loops, mostly the merge-sum builders. The
+value tests read the lowered calls: `python/ccgen/tests/emitted_cpp_eval.py`
+turns each `cc_gemm_contract` back into its einsum.
 
-**Why one-index contractions are included.** Lowering only the two-index
-sums left two builders, `W_t1v_oovv_{1336,390c}` (1.2 × 10⁸ multiply-adds
-each), as strided loops that took about a third as many samples as all the
-GEMMs together. They sum over one index, and their `ovvv` operand needs a
-copy because the summed index sits in the middle of its layout.
-
-**Result** (4 threads, back to back against the v-merge binary; CCSD and (T)
-energies identical to every printed digit):
+**Per-iteration time**, each row back to back against the one above (4
+threads; energies identical to every printed digit):
 
 | | water cc-pVTZ | dimer cc-pVDZ | dimer cc-pVTZ |
 |---|---|---|---|
-| v merge, loops | 0.097 s | 0.211 s | 5.37 s |
-| + GEMM lowering | 0.037 s (2.6×) | 0.060 s (3.5×) | 1.10 s (4.9×) |
-| + ladder on i ≤ j | 0.038 s (1.0×) | 0.060 s (1.0×) | 1.089 s (1.01×) |
-| + one-index contractions | 0.039 s (1.0×) | 0.059 s (1.0×) | 0.850 s (1.23×) |
+| start (loops) | 0.195 s | 0.454 s | 11.8 s |
+| + half range | 0.136 s | 0.301 s | 7.55 s |
+| + t2 merge | 0.108 s | 0.216 s | 5.45 s |
+| + v merge | 0.093 s | 0.209 s | 5.23 s |
+| + GEMM lowering, ladder on i ≤ j, one-index contractions | 0.039 s | 0.059 s | 0.850 s |
+| + staircase (R3b) | | | 0.80 s |
+| + serial small calls | | | 0.787 s |
 | PySCF | 0.021 s | 0.019 s | 0.32 s |
 
-The ladder on i ≤ j halves its arithmetic but hardly shows. As a GEMM the
-ladder was no longer a large share of the time; the strided one-index
-builders and serial stretches were (a `sample` profile of the dimer in
-cc-pVTZ put about 27 % of thread time idle).
-
-**Gate.** The value tests read the lowered calls too: the numpy evaluator
-(`python/ccgen/tests/emitted_cpp_eval.py`) turns each `cc_gemm_contract`
-call into the einsum it replaced. With `_gemm_lowering` returning None, every
-emit-hash pin reproduces its previous value; the pins were restated with
-that note.
+Time fell less than the count once every contraction was still a scalar
+loop: the rest was rate-bound, which the GEMM lowering addressed. The
+staircase halves only the o³v³ and o³v² GEMMs, so it gains 1.04–1.08× per
+iteration (slowest iteration 0.92–1.08 → 0.86–0.89 s).
 
 ## (T) time
 
-**Step 8.** A profile of the dimer in cc-pVDZ put 99 % of (T) in the W
-block kernel. The batched (T) evaluated W for each of the six orderings of
-every virtual triple a ≥ b ≥ c, 24 terms each. Every term is an elementary
-o³ block, one contraction of two factors, up to a renaming of i, j, k, and
-over the six orderings the 144 evaluations hit only 24 distinct blocks (12
-`t2 · ovvv`, o³v; 12 `t2 · ooov`, o⁴). The emitter canonicalizes each
-(ordering, term) to a block key (factor texts with occupied externals
-renamed by first appearance and virtuals by triple position), computes each
-block once, and adds it to every ordering with its occupied indices
-transposed. Each block is the same sum in the same order as the old
-per-term accumulator and the terms are added in the same order, so E(T) is
-unchanged (gates `ccsd_t_oracle_diff` and the four `*_rccsd_t_*` cases, 8
-ccgen PySCF (T) tests). V stays per ordering (1 % of (T)). The UCC (T)
-does not have this redundancy: its work items are already one ordering per
-spin block.
+**How the restricted (T) kernel works.** For each virtual triple
+a ≥ b ≥ c, W is needed for all six orderings. Every W term is an
+elementary o³ block (one contraction of two factors) up to a renaming of
+i, j, k, so:
+- **24 → 12 blocks per triple.** Over the six orderings the 144 term
+  evaluations hit 24 distinct blocks (8), and those pair up under
+  t2(i,j,a,b) = t2(j,i,b,a) (10a), leaving 12: six `t2 · ovvv` (o³v) and
+  six `t2 · ooov` (o⁴), PySCF's count. `_emit_triple_kernel`
+  (`python/ccgen/methods/ccsd_t.py`) keys each term by its canonical block
+  and adds the block to every ordering with its occupied indices
+  transposed.
+- **Contiguous layouts, made once (1a).** The emitted
+  `prepare_ccsd_t_triple_layouts`, called once by `batched_triples_energy`
+  (`src/post_hf/cc/ccsd_t.cpp`), copies t2 as [x][p][q][r] and
+  [x][y][p][q], `ovvv` as [x][y][d][u] and `ooov` as [z][l][u][v] (about
+  110 MB on the dimer, 17 ms). Every slice a triple reads is then
+  contiguous.
+- **Every block is a GEMM** on views of those layouts, written straight into
+  its slot: (o² × v)(v × o) for `ovvv`, (o × o)ᵀ(o × o²) for `ooov`. No
+  per-triple gathers or scatter.
+- **Assembly.** Per ordering, the terms that read their blocks in the same
+  occupied order are summed in one contiguous loop and added once through
+  that transposition: 30 transposed passes per triple instead of 144
+  strided adds.
+- The kernel asserts the two block shapes, so a change in the (T) terms
+  fails at generation instead of emitting a wrong layout. Results do not
+  depend on the thread count. V stays per ordering.
 
-**Step 10a.** The 24 blocks pair up under t2(i,j,a,b) = t2(j,i,b,a). The
-six ooov pairs are the same block (t2(u0,l,v1,v2) and t2(l,u0,v2,v1) read
-one value); the six ovvv pairs are the same block with u0 and u1 swapped.
-`_emit_triple_kernel` keys each term by the smaller key over the two
-spellings of its t2 read (`_swap_t2_pair`), and the occupied renaming by
-first appearance then carries the transposition. 12 blocks per triple,
-PySCF's count. E(T) identical to every printed digit; gates
-`ccsd_t_oracle_diff` through `water_rccsd_t_631g`, the four `*_rccsd_t_*`
-cases, the 8 ccgen PySCF (T) tests.
+**How it got there** (water dimer cc-pVTZ, 4 threads, E(T) equal to every
+printed digit at each step):
 
-| (T), 4 threads | 24 blocks | 12 blocks |
+| | (T) |
+|---|---|
+| one W evaluation per ordering | 283 s |
+| W once per triple for all orderings, 24 blocks (8) | 49.9 s |
+| 12 blocks under the t2 pair swap (10a) | 26.8 s |
+| `t2 · ovvv` blocks as small GEMMs with per-triple gathers (10b) | 8.25 s |
+| all blocks as GEMMs on once-made layouts, contiguous assembly (1a) | 4.5–4.8 s |
+| PySCF | 6.0 s |
+
+**What 1a removed** (profiled on the 10b kernel, 2026-11-25): W was 89 % of
+(T). Inside W, thread-local timers put the gathers at 22 %, the GEMMs at
+27 %, the `ooov` loops at 25 % and the assembly at 25 %, out of 29.6
+thread-seconds. The three loop sections were access-bound (strided reads
+that did not vectorize), not arithmetic: the `ooov` loops did a tenth of
+the GEMMs' multiply-adds in the same time. After 1a, W is 14.6
+thread-seconds.
+
+**What is left in (T)**: W about 80 % (12 small GEMMs and the assembly), V
+2.3 and the energy loops 1.4 thread-seconds. The batch-over-a-virtual
+restructure (below, "Open") is not needed to pass PySCF.
+
+## UCC
+
+`uccsd(t)` runs the generated `ucc2`. The restricted work above reached UCC
+only partly.
+
+| | reaches UCC? |
+|---|---|
+| GEMM lowering (R3) | yes (1c) |
+| small calls serial | yes |
+| half range (R1) | no: the mirror maps `abab` to `baba`, another block |
+| merges (R2, R2b) | no |
+| (T) layouts and GEMM blocks (8–1a) | no: the UCC (T) kernels are one block per spin case, still loops |
+
+**The GEMM lowering for UCC** (1c). `_gemm_lowering` accepts the UCC
+operands, which `cc_operand` already took: ERI and Fock spin blocks
+(`v_abab_oovv`, `f_aa_vv`), `t2_abab`-style views and builder scratch
+(`X1`). A same-spin ERI read is stored plain and antisymmetrized in the
+emitted text (`_block_needs_explicit_exchange`), as `(v(..cd) − v(..dc))`;
+each side becomes its own call with its sign. Lowered calls: UCC CCSD 350,
+CCSDT 1309, CCSDTQ 2964. The restricted rank-2 TU is byte-identical.
+
+| water⁺ cc-pVTZ spherical (o 5/4, v 53/54), 4 threads | before | now |
 |---|---|---|
-| water cc-pVTZ | 0.370 s | 0.219 s (1.69×) |
-| dimer cc-pVDZ | 0.790 s | 0.461 s (1.71×) |
-| dimer cc-pVTZ | 49.8 s | 26.8 s (1.86×) |
+| UCC CCSD per iteration (median of 18) | 0.339 s | 0.226–0.231 s (1.47–1.50×) |
+| whole `uccsd(t)` run | 9.4 s | 7.4–7.7 s |
+| RCCSD on neutral water, same basis, for scale | 0.039 s | |
 
-Less than 2× because V and the energy loops per triple do not shrink.
+**Small systems.** The lowering first made B STO-3G `ucc4` slower, 1.82 →
+5.82 s: thousands of calls on tiny matrices, each opening up to four
+parallel regions. Running small calls serially fixed it and sped up the
+small restricted cases, which had paid the same cost since R3:
 
-**Step 10b.** PySCF's `get_wv` calls a small `dgemm` per triple; Planck now
-does the same for the six `t2 · ovvv` blocks. Per triple a block is
-C(u0 u1, u2) = Σ_d t2(u0, u1, d, vX) ovvv(u2, d, vY, vZ), a
-(o² × v) · (v × o) product. Blocks reading the same t2 slice share one GEMM
-with their ovvv columns side by side, so the six are three GEMMs of
-o² × v × 2o (100 × 106 × 20 on the dimer in cc-pVTZ). The strided operands
-are copied into thread-local contiguous buffers first (about 10 % of the
-multiply), and the result is copied into the block slots. Sizes are fixed,
-so E(T) does not depend on the thread count. The six `t2 · ooov` blocks
-(o⁴, about 10 % of W) stay loops.
-
-| (T), 4 threads | loops | ovvv blocks as GEMMs |
+| case | before | now |
 |---|---|---|
-| water cc-pVTZ | 0.216 s | 0.115 s (1.9×) |
-| dimer cc-pVDZ | 0.459 s | 0.266 s (1.7×) |
-| dimer cc-pVTZ | 26.5 s | 8.25 s (3.2×) |
+| `b_ucc4_sto3g` | 1.82 s | 0.63 s |
+| `b_ucc3_sto3g` | 2.48 s (lowered, unfixed) | 0.17 s |
+| `be_rccsdtq_sto3g` | 6.99 s | 1.16 s |
+| `lih_rccsdt_generated_sto3g` | 3.18 s | 0.51 s |
 
-E(T) identical to every printed digit; the same gates as 10a.
+**Where UCC time goes now** (`sample`, water⁺ cc-pVTZ, whole run): thread
+waits 23 %, loop code in the same-spin doubles kernels 19 % (aaaa 12 %,
+bbbb 7 %; abab 0.5 %), the UCC (T) W kernels 16 %, `transform_eri` 13 %,
+the `t1 · vvvv` builders ~7 %, operand copies ~3 %. The census of the UCC
+CCSD residual before 1c (modelled at o 10, v 50): two-read contractions
+53 %, antisymmetrized differences 31 %, three or more factors 15 %.
 
-**(T) was compute-bound, not memory-bound.** Gathering each W term's
-operands into contiguous buffers (both were strided along the summed index,
-by nv and nv² for `t2 · ovvv`) changed (T) by 0–4 % (water cc-pVTZ 1.92 s,
-dimer cc-pVDZ 4.04 → 3.88 s). Counting work explained it: ~34 G
-multiply-adds on the dimer in cc-pVDZ, run at ~9 G/s, so the excess was
-arithmetic. Reverted; step 8 removed 5/6 of it.
-
-## Gates for every change here
-
-- **Core suite** on `build/`.
-- **CC cases on `build-default`:** `water_rccsd_t_{sto3g,631g,spherical_ccpvdz}`,
-  `h2o2_c1_rccsd_t_631g`, `water_spherical_ccsd_sto3g`,
-  `be_ccsd_spherical_631gd`, `be_rccsdtq_sto3g`.
-- **CC cases on `build/`:** `{ch4,lih}_rccsdt_generated_sto3g`,
-  `be_rccsdtq_sto3g`, `b_ucc{2,3,4}_sto3g`, `oh_uccsd_t_631g`,
-  `water_rccsd_t_631g`, `h2o2_c1_rccsd_t_631g`.
-- **The full ccgen suite.** Byte and hash pins of the emitted code
-  (`test_emit_flag_matrix`, `test_ucc_emit_flag`) move with any emit
-  change. Re-pin them only after showing that the old pins reproduce with
-  the change switched off.
-
-## Ruled out
-
-- **Folding the doubles over {e, (ia)(jb)}** with `fold_external_symmetry`
-  cut 2 % (1 of 31 o³v³ statements). It matches orbits on the terms' text
-  with dummies as named, and a term and its image mostly differ in dummy
-  names or in which t2 spelling they read. The half range needs no matching.
-- **`factorize_tau`** collapses 0 spin-adapted doubles pairs: its validated
-  pairs are spin-orbital shaped.
-- **The v merge before the factorizer.** It forms PySCF-style groups (τ for
-  both ladders, 2 t2 − t2ᵀ − t1 t1 for the rings), but the ring groups pull
-  t2·v terms out of the t2 merge: o³v³ nests went 6 → 10 and the total rose
-  to 2.19 × 10¹⁰. Running it after the t2 merge keeps only the ladder.
-- **Contiguous operands for the (T) W kernel**: 0–4 % ("(T) time").
+The same-spin loop code is two kinds of term the lowering still rejects:
+- **The vvvv ladder**, `t2(i,j,c,d) · (v(a,b,c,d) − v(a,b,d,c))`: the
+  second read would copy `vvvv`, which is forbidden. Since c and d are
+  summed, renaming them moves the swap onto t2 (`t2(i,j,d,c) · v(a,b,c,d)`),
+  exactly and with an allowed copy.
+- **A difference of two different arrays**, `(v_ovov(..) − v_ovvo(..))`:
+  the difference pattern requires one array; the two sides are independent
+  calls anyway.
 
 ## Open, in order
 
 | # | Step | Expected |
 |---|---|---|
-| 10c | (T): profiled, and step 1a done (see 10c): 1.8×, past PySCF. Left: V and the energy loops (~20 %), batching over a virtual only if (T) grows as a share | small |
-| R3b | CCSD o³v³ contractions on j ≥ i (staircase): done, 1.04–1.08× per iteration (see R3b) | — |
+| U1 | UCC: lower the same-spin vvvv ladder by renaming dummies, and differences of two arrays | most of the 19 % same-spin loop code |
+| U2 | UCC: `t1 · vvvv` builders as batched GEMMs over the leading (a, b) of `vvvv` (helper gains batch indices) | ~7 % of UCC |
+| U3 | UCC: half range on the same-spin doubles, and the merges | to be measured |
+| U4 | UCC (T): the restricted kernel's layouts and GEMM blocks for each spin block | the 16 % UCC (T) share |
 | R3c | Accelerate `dgemm` behind the GEMM helper | 2.5–4× on the GEMMs; a build decision |
 | R2c | Share linearly dependent combinations of builders | 4 o³v³ builders → 3 contractions (≤ 1.06×) |
+| T1 | (T): V through layouts, energy loops | ~20 % of (T) |
 | R4 | Re-measure the size ladder against PySCF | timing and footprint in separate runs |
 
 Beyond these: build the MO blocks from a direct or RI transform without
-storing the AO tensor at all. RI-CCSD would be its own scope.
+storing the AO tensor. RI-CCSD would be its own scope.
 
-### 10c. What is left in (T)
+**R3c, Accelerate behind the GEMM helper.** Every lowered contraction goes
+through one product call, so swapping Eigen for `cblas_dgemm` is a change in
+one place: the optional `USE_BLAS` build (B1 in
+`docs/ERI_FOCK_BLAS_SCOPE.md`). Accelerate is always present on macOS;
+Linux needs a system or fetched OpenBLAS. BLAS results are not bitwise equal
+to Eigen's; Accelerate is bitwise reproducible across thread counts,
+OpenBLAS/MKL unmeasured. A user decision, not a generator step.
 
-**Profiled 2026-11-25** (water dimer cc-pVTZ,
-`tests/benchmarks/ccsd_t/water_dimer_ccpvtz.hfinp`, the ladder's S22 rung,
-4 threads, (T) 8.1–8.4 s; PySCF 6.0 s). A `sample` profile of the whole
-run, aggregated over the four threads' (T) subtrees, gives W 89 %, V
-blocks 6.7 %, the driver's energy loops 3.8 %. Inside W, thread-local
-`steady_clock` marks inserted into the generated TU (by hand, then
-removed; the build has no debug info for line attribution) give, out of
-29.6 thread-seconds:
-
-| W section | thread time | share | per triple |
-|---|---|---|---|
-| gathers into `ga`/`gb` (t2 slice o²v; six `ovvv(u2, d, vX, vY)` slices o·v, strided v² in d and v³ in u2) | 6.42 s | 22 % | 31 µs |
-| GEMMs (three o² × v × 2o) | 7.91 s | 27 % | 39 µs |
-| scatter into the block slots | 0.30 s | 1 % | |
-| six `t2 · ooov` loop blocks (o⁴ each, `t2(l, u0, ..)` strided nv² in l) | 7.34 s | 25 % | 36 µs |
-| assembly (per ordering, 24 reads of the blocks in transposed index orders) | 7.48 s | 25 % | 37 µs |
-
-So the GEMMs are only a quarter of W: there is no single hot spot, and
-batching the GEMMs alone would not pay. The `ooov` loops do a tenth of the
-GEMMs' multiply-adds (6·10⁴ against 6.4·10⁵ per triple) in the same time,
-and the assembly's 1.4·10⁵ adds take as long again. All three loop sections
-are access-bound: strided accessors and transposed reads that do not
-vectorize. Levers, each a generator change gated as in step 8:
-
-- **Gathers:** read from layouts made once per (T): `ovvv` as
-  [vX][vY][d][u2] (o·v³, 91 MB on the dimer) and t2 as [b][i][j][a]
-  (9 MB), so each slice is contiguous.
-- **`ooov` blocks:** blocks 4/5, 8/9 and 10/11 share one `ooov` slice each;
-  gather the slice (o³) and the two t2 slices (o² each) contiguously and
-  run (2o × o)·(o × o²), or a contiguous loop the compiler vectorizes.
-- **Assembly:** have the scatter write each block in the index orders the
-  orderings read (o³ copies, already 1 % for one order), so every
-  ordering's sum is 24 contiguous adds.
-
-If the loop sections ran at the GEMMs' rate, W would be about a third of
-today and (T) roughly 2–2.5× faster, below PySCF's 6.0 s.
-
-**Step 1a (done 2026-11-25).** `_emit_triple_kernel` now also emits
-`prepare_ccsd_t_triple_layouts`, which the driver calls once per (T). It
-copies t2 as [x][p][q][r] and [x][y][p][q], `ovvv` as [x][y][d][u] and
-`ooov` as [z][l][u][v] (about 110 MB on the dimer; 17 ms wall). Every
-elementary block is then one GEMM on views of those layouts, written
-straight into its slot: the six `ovvv` blocks as (o² × v)(v × o), the six
-`ooov` blocks as (o × o)ᵀ(o × o²). No per-triple gathers or scatter
-remain. The assembly sums, per ordering, the terms that read their blocks
-in the same occupied order in one contiguous loop, then adds that sum once
-through the transposition: 30 transposed passes per triple instead of 144
-strided adds. The kernel asserts the two block shapes, so a change in the
-(T) terms fails at generation instead of emitting a wrong layout.
-
-| Water dimer cc-pVTZ, 4 threads | before | after |
-|---|---|---|
-| (T) wall | 8.1–8.4 s | 4.5–4.8 s (2 runs) |
-| W, thread-seconds | 29.6 | 14.6 |
-| V / energy loops, thread-seconds | ~2.3 / ~1.3 | 2.3 / 1.4 |
-| whole run | ~41 s | 36.4–38.6 s |
-
-E(T) and the total equal the previous output to every printed digit; the
-batched kernel matches the full-tensor kernel to 1.3e-18
-(`water_rccsd_t_631g`); C1 H2O2 output is identical at 1, 2, 4 and 8
-threads. The result is no longer bitwise equal to the step-10b kernel
-(different summation order). W is now ~80 % of (T). What is left in W
-is the 12 small GEMMs and the assembly; V (o³ per ordering, through
-accessors) and the energy loops are the next ~20 %. The batch-over-c
-restructure below is not needed to pass PySCF; keep it only as the route
-if (T) becomes a large share again.
-
-Original plan, kept for that case. If the small GEMMs themselves limit, batch over one virtual: for fixed c,
-Σ_d t2(i,j,d,c) ovvv(k,d,a,b) over all (a, b) is a (o² × v) · (v × o v²)
-GEMM, o³v³ per c and o³v² memory (90 MB on the dimer in cc-pVTZ). That
-needs the (T) driver (`batched_triples_energy` in
-`src/post_hf/cc/ccsd_t.cpp`) to loop over c outermost, compute W for every
-(a, b) at that c, then accumulate the energy over a ≥ b ≥ c. A driver
-restructure, not an emitter change. Gates as in step 8, plus thread-count
-invariance of E(T).
-
-### R3b. The CCSD o³v³ contractions on j ≥ i
-
-In an o³v³ contraction the output matrix has rows (i, a) and columns
-(j, b). The condition j ≥ i couples a row coordinate to a column coordinate,
-so the kept region is a staircase (block upper-triangular in i, j), not a
-rectangle. One GEMM call cannot express it, so today these contractions are
-computed in full and the mirror overwrites j < i.
-
-One GEMM per value of i does express it. Each takes rows (i, ·) (v rows),
-columns (j ≥ i, ·) ((o − i)·v columns) and the full K = o·v. Summed over i
-that is o(o+1)/2 · v² · K, the same half as the ladder: about 45 % less at
-o = 10. The pieces stay large GEMMs (106 × up to 1060 × 1060 on the dimer
-in cc-pVTZ). The emitter chooses the order within each group, so it can put
-i first in its group and make the rows of one i contiguous. In the helper
-this is a loop over i in place of the single product, when i and j are in
-different groups. Expected gain: up to about 10 % of the CCSD arithmetic,
-less in time.
-
-**Done 2026-11-25.** No emitter change was needed:
-in every affected call of the rank-2 kernel, i or j already leads its
-group (o³v³: `ia|kc|jb`, `jb|kc|ia`, `ib|kc|ja`, `ja|kc|ib`; o³v²:
-`i|c|jba`, `j|c|iab`, `iab|k|j`, `jab|k|i`). `cc_gemm_contract` detects
-i leading the rows and j the columns (or the reverse), and runs one GEMM
-per row-index value x on its row slab against the kept column range
-(j ≥ x, or i ≤ x). The tasks are (x, 64-wide column block), a partition
-fixed by the sizes, so results do not depend on the thread count. The
-scatter writes only the computed region. The four transpose branches,
-repeated twice, became one dispatch. Gates: new `planck-cc-gemm-contract`
-(the four staircase shapes, the same-group filter and the full product
-against a label-driven reference loop, ≤ 1.1e-15; a column range with
-the wrong direction fails 600 elements); `*_rccsd_t_*` pass, CCSD/(T)
-output identical at 1/2/4/8 threads; core 178/178.
-
-| Dimer cc-pVTZ, 4 threads, 2 runs each | before (1a) | staircase |
-|---|---|---|
-| CCSD `t_res` per iteration, median | 0.83–0.86 s | 0.80–0.805 s (1.04–1.08×) |
-| slowest iteration | 0.92–1.08 s | 0.86–0.89 s |
-| whole run | 36.4–38.6 s | 35.8–36.5 s |
-
-Energies equal to every printed digit. As predicted, less than the
-arithmetic: the staircase halves only the o³v³ and o³v² GEMMs.
-
-### R3c. Accelerate behind the GEMM helper
-
-Every lowered contraction goes through one product call in
-`cc_gemm_contract`, so swapping Eigen for `cblas_dgemm` is a change in one
-place: the optional `USE_BLAS` build, B1 in `docs/ERI_FOCK_BLAS_SCOPE.md`.
-Its constraints:
-- **Hermeticity.** Accelerate is always present on macOS; Linux needs a
-  system or fetched OpenBLAS.
-- **Bitwise reproducibility.** BLAS results are not bitwise equal to
-  Eigen's. Accelerate is bitwise reproducible across thread counts;
-  OpenBLAS/MKL are unmeasured.
-
-A user decision, not a generator step.
-
-### R2c. Share linearly dependent combinations of builders
-
-**The case.** The four `W_t2v_oovv_{c3cc,68d5,6ae9,7b99}` are t2·v. With
-the ERI pair swap v(l,k,d,c) = v(k,l,c,d) they form a 2 × 2 table:
+**R2c, shared builder combinations.** The four `W_t2v_oovv_{c3cc,68d5,6ae9,
+7b99}` are t2·v. With the ERI pair swap v(l,k,d,c) = v(k,l,c,d) they form a
+2 × 2 table:
 
 | | v(k,l,c,d) | v(k,l,d,c) |
 |---|---|---|
 | t2(a,c,i,k) | c3cc | 68d5 |
-| t2(c,a,i,k) | 6ae9 | 7b99 (j renamed to i) |
+| t2(c,a,i,k) | 6ae9 | 7b99 |
 
 Only three of the t2 merge's sums read them, all on slots (i,k,a,c):
 
@@ -611,47 +399,42 @@ Only three of the t2 merge's sums read them, all on slots (i,k,a,c):
 | `dedafd` | −2 | 1 | 1 | 0 | 1 v read, 1 cheap builder |
 | `1e1c0d` | 0 | 0 | 0 | 1 | 1 v read, 1 cheap builder |
 
-On those columns `ab52bf` = −2·`dedafd` + `1e1c0d`: rank 2. So two
-combinations suffice:
-- Z₁ = −2·c3cc + 68d5 + 6ae9, which is
-  Σ_kc (−2 t2(a,c,i,k) + t2(c,a,i,k)) v(k,l,c,d) + t2(a,c,i,k) v(k,l,d,c):
-  two contractions after o²v² sums;
-- Z₂ = 7b99: one contraction.
+On those columns `ab52bf` = −2·`dedafd` + `1e1c0d`: rank 2, so two
+combinations suffice, Z₁ = −2·c3cc + 68d5 + 6ae9 (two contractions after
+o²v² sums) and Z₂ = 7b99. Three contractions instead of four is the floor,
+and it is PySCF's `Wovvo`/`Wovov`. The common-operand merge cannot find it:
+the saving is in the dependence between sums. Mechanism: write the sums as
+coefficient vectors over basis reads, row-reduce the expensive columns
+exactly (`Fraction`), build each Z from its inlined terms, rewrite the sums
+to read the Z's. Risks: `factored_builder_steps` reads only
+`definition_terms[0]`, so assert that a multi-term Z never has a 3-factor
+first term; smallest-support Z's are a heuristic; rank 3 is unchecked.
+At most about 1.06×; re-measure its share before taking it.
 
-Three contractions instead of four is the floor for this span, and it is
-the structure of PySCF's hand-written `Wovvo`/`Wovov`. The common-operand
-merge cannot find it: the saving is in the dependence *between* sums, and
-inlining the W's into each sum separately would take 6 contractions.
+**T1 and batching (T) over a virtual.** If (T) becomes a large share again:
+for fixed c, Σ_d t2(i,j,d,c) ovvv(k,d,a,b) over all (a, b) is one
+(o² × v) · (v × o v²) GEMM, o³v³ per c and o³v² memory (90 MB on the dimer
+in cc-pVTZ). That is a driver restructure (`batched_triples_energy` loops
+over c outermost), gated like the (T) changes plus thread-count invariance
+of E(T).
 
-**Mechanism.** A pass over the specs after the merges:
-1. **Write the sums as vectors.** Every spec whose definition terms are all
-   single-factor reads on one slot set becomes a coefficient vector over
-   basis reads (factor name, permutation into the slots).
-2. **Pick the expensive columns.** These are builders with a single binary
-   definition costing more than |slots| × o.
-3. **Row-reduce** those columns exactly (`Fraction`). Choose the Z's from
-   the sums' own expensive parts, smallest support first, and express every
-   sum through them.
-4. **Build each Z** from its inlined t2·v terms, running the merge on v and
-   on t2 and keeping the variant with fewer contractions.
-5. **Rewrite the sums** to read the Z's; `drop_unread_specs` removes the
-   W's.
+## Ruled out
 
-**Risks.**
-- `factored_builder_steps` reads only `definition_terms[0]`. A multi-term
-  spec is emitted correctly only because ≤ 2-factor definitions take the
-  flat path, which emits every term. A Z whose first term has 3 factors
-  would lose its other terms silently, so assert against it.
-- Smallest-support Z's are a heuristic; confirm the contraction count with
-  the cost model.
-- Rank 3 is unchecked. Take the census on ccsdt before claiming it there.
-
-**Gate.** The value test, extended to assert that the four W's are gone;
-the count (four o³v³ builders → three contractions); the gates above; A/B
-timing.
-
-**Order.** At most about 1.06× before GEMM lowering; re-measure its share
-of the lowered build before taking it.
+- **Folding the doubles over {e, (ia)(jb)}** with `fold_external_symmetry`:
+  2 % (1 of 31 o³v³ statements). It matches orbits on the terms' text with
+  dummies as named, and a term and its image mostly differ in dummy names or
+  in which t2 spelling they read. The half range needs no matching.
+- **`factorize_tau`** collapses 0 spin-adapted doubles pairs: its validated
+  pairs are spin-orbital shaped.
+- **The v merge before the factorizer.** It forms PySCF-style groups, but
+  the ring groups pull t2·v terms out of the t2 merge: o³v³ nests 6 → 10,
+  total 2.19 × 10¹⁰. After the t2 merge only the ladder forms.
+- **Contiguous operands for the old per-term (T) W kernel**: 0–4 %. That
+  kernel was compute-bound (~34 G multiply-adds on the dimer in cc-pVDZ at
+  ~9 G/s); removing the redundant work (8) was the fix. Contiguity paid
+  later, once the work was GEMMs (1a).
+- **Batching only the (T) GEMMs**: they were a quarter of W (10c profile);
+  the loop sections were the cost.
 
 ## Last resort
 
@@ -660,29 +443,59 @@ A hand-written spatial RCCSD is justified only if, after the GEMM lowering:
 1. Planck's CCSD is still more than 3× slower than PySCF's per iteration on
    the dimer in cc-pVTZ, **and**
 2. the ratio still grows from the dimer in cc-pVDZ to cc-pVTZ, **and**
-3. the remaining gap is not something the generator can express (a
-   contraction order or intermediate the factorizer cannot reach).
+3. the remaining gap is not something the generator can express.
 
 It would replace only the rank-2 RCC residual; (T), UCC and higher ranks
-stay generated.
+stay generated. **Not justified:** 2.5× in cc-pVTZ against 3.1× in cc-pVDZ,
+so neither condition 1 nor 2 holds, and every open lever is a generator or
+build change.
 
-**Where it stands:** neither condition 1 (2.7×) nor condition 2 (3.1× in
-cc-pVDZ, 2.7× in cc-pVTZ) holds, and the levers in "Open" are all generator
-or build changes. Not justified.
+## Gates for every change here
+
+- **Core suite** on `build/`.
+- **CC cases on `build-default`:** `water_rccsd_t_{sto3g,631g,spherical_ccpvdz}`,
+  `h2o2_c1_rccsd_t_631g`, `water_spherical_ccsd_sto3g`,
+  `be_ccsd_spherical_631gd`, `be_rccsdtq_sto3g`.
+- **CC cases on `build/`:** `{ch4,lih}_rccsdt_generated_sto3g`,
+  `be_rccsdtq_sto3g`, `b_ucc{2,3,4}_sto3g` (rank 4 = FCI),
+  `oh_uccsd_t_631g`, `water_cation_uccsd_t_{631g,spherical_ccpvdz}`,
+  `oh_uccsd_t_631g_mpi_smoke`, `water_rccsd_t_631g`,
+  `h2o2_c1_rccsd_t_631g`.
+- **Thread-count invariance:** CCSD and (T) output identical at 1/2/4/8
+  threads (`h2o2_c1_rccsd_t_631g`, `oh_uccsd_t_631g`); the batched (T)
+  against the full-tensor kernel (`ccsd_t_oracle_diff` ≤ 1e-14).
+- **`planck-cc-gemm-contract`:** the GEMM helper against a label-driven
+  reference loop (staircase shapes, same-group filter, full product);
+  a wrong column range fails 600 elements.
+- **The full ccgen suite.** Emit pins (`test_emit_flag_matrix`,
+  `test_ucc_emit_flag`) move with any emit change; re-pin only after showing
+  the old pins reproduce with the change switched off. Tests that read the
+  emitted text must read lowered calls too:
+  `test_every_read_is_the_one_the_valid_group_selects` spells each
+  `cc_operand(name), "labels"` as a read.
 
 ## Tools
 
-- **Allocation profiler.** A `DYLD_INSERT_LIBRARIES` interposer over
-  malloc/calloc/realloc/free/posix_memalign/aligned_alloc. Every N seconds
-  it logs live bytes by log2 size class, slack (`malloc_size` minus
-  requested) for blocks ≥ 1 MiB, the malloc zone's in-use and allocated
-  bytes, and the physical footprint and compressed bytes from `task_info`.
-  At exit it writes the backtraces, requested and actual sizes of the
-  ≥ 1 MiB blocks alive at the live peak after an arm time. Build it with
-  gcc-15 (the system clang's linker cannot read the macOS 27 SDK) and
-  launch the binary directly: SIP strips `DYLD_*` through `/usr/bin/time`.
+- **Benchmark input:** `tests/benchmarks/ccsd_t/water_dimer_ccpvtz.hfinp`
+  (S22 water dimer, the ladder's top rung).
+- **Allocation profiler.** A `DYLD_INSERT_LIBRARIES` interposer over the
+  malloc family that logs live bytes by size class, slack (`malloc_size`
+  minus requested) for blocks ≥ 1 MiB, and the footprint from `task_info`,
+  and at exit writes the backtraces of the blocks alive at the live peak.
+  Build it with gcc-15 and launch the binary directly (SIP strips `DYLD_*`
+  through `/usr/bin/time`). `vmmap` is no substitute: it pauses the process
+  (water cc-pVTZ 6.3 → 7.9 s at a 2 s poll).
+- **Profiling a phase:** `sample` the whole run and aggregate the phase's
+  subtree over all threads; stdout to a file is buffered, so a log line is
+  no trigger. Set `MallocLargeCache=0` first, or the re-exec changes the
+  PID. The release build has no debug info; for line-level splits, insert
+  thread-local `steady_clock` marks into the generated TU, then restore it
+  (and `touch` it: `cp` keeps the old mtime).
 - **Arithmetic count.** `tests/benchmarks/ccsd_residual/count_generated_fma.py`
-  and `tests/pyscf/ccsd_update_amps_count.py` ("Where the gap came from").
+  (loop bounds around every accumulation in the generated rank-2 TU, a
+  `j = i` loop counted as half; lowered calls are not counted) and
+  `tests/pyscf/ccsd_update_amps_count.py` (PySCF's einsum/dot calls over one
+  `update_amps`, plus the C ladder).
 - **PySCF reference and timing.** `tests/pyscf/ccsd_t_ladder_reference.py
   <input> <gbs>`.
 
@@ -697,19 +510,15 @@ HEAD `a1692526`, 4 threads, 3 repeats each, whole-run wall and peak RSS.
 | C1 H2O2 6-31G | 32.0–32.4 s, 83–86 MiB, 22 iter | 0.54–0.58 s, 21 MiB, 26 iter |
 | water cc-pVDZ spherical | 14.5–14.8 s, 100–106 MiB, 15 iter | 0.30–0.31 s, 37–40 MiB, 19 iter |
 
-E(T) agrees to every printed digit, and both totals equal the PySCF-pinned
-gates. Plain `ccsd` still runs the hand-written RCCSD. The generated route's
-speed came from the dressing: undressed, rank 2 ran the same 26 iterations
-in 45.5 s on C1 H2O2, slower than hand-written; dressed (`--dressing
-derived`, every residual term a binary contraction) 0.54 s. So rank 2 is
-emitted dressed in every build.
+E(T) agrees to every printed digit. The speed came from the dressing:
+undressed, rank 2 took 45.5 s on C1 H2O2, slower than hand-written. So rank
+2 is emitted dressed in every build. Plain `ccsd` still runs the
+hand-written RCCSD.
 
-### The ladder at step 7
+### The size ladder once memory was fixed, before the time work
 
-HEAD `d9f5fb69`. `build-default`, spherical, conventional SCF, 4 threads.
-Timing from plain runs (3 repeats; one for the dimer in cc-pVTZ, whose
-profiled run took the same 512 s); footprint from separate profiled runs.
-Energies identical across repeats and equal to the gates.
+HEAD `d9f5fb69`, `build-default`, spherical, conventional SCF, 4 threads.
+Timing and footprint from separate runs.
 
 | Rung | nb sph / cart | o / v | CCSD | (T) | Whole run | Peak footprint |
 |---|---|---|---|---|---|---|
@@ -718,32 +527,7 @@ Energies identical across repeats and equal to the gates.
 | water dimer cc-pVDZ | 48 / 50 | 10 / 38 | 20 × 0.45 s | 4.0–4.1 s | 13.4 s | 84 MiB |
 | water dimer cc-pVTZ | 116 / 130 | 10 / 106 | 18 × 11.8 s | 283 s | 512 s | 1.43 GB |
 
-Per-iteration times were unchanged by the memory work except on the dimer
-in cc-pVTZ, which no longer paged (CCSD 15.3 → 11.8 s per iteration, (T)
-354 → 283 s). Steps 8 and 9 since: (T) water cc-pVTZ 0.37–0.41 s, dimer
-cc-pVDZ 0.80 s, dimer cc-pVTZ 49.9 s; CCSD per iteration in "CCSD time".
-
-### Against PySCF at step 7
-
-PySCF 2.15.0, RHF + RCCSD + `ccsd_t.kernel`, Planck's own GBS files through
-`parse_gaussian`, `cart=False`, `conv_tol` 1e-11, CCSD `conv_tol` 1e-10, 4
-threads (`OMP_NUM_THREADS=4`), same geometries. PySCF times are wall clock
-to 0.1 s.
-
-| Rung | E total, PySCF | Δ Planck | CCSD Planck / PySCF | (T) Planck / PySCF |
-|---|---|---|---|---|
-| water cc-pVDZ | −76.2431380866 | 5e-10 | 0.19 / 0.1 s (~2×) | 0.03 / < 0.05 s |
-| water cc-pVTZ | −76.3457669118 | 7e-10 | 3.1 / 0.2 s (~16×) | 1.9 / 0.2 s (~10×) |
-| water dimer cc-pVDZ | −152.4977225012 | 2e-10 | 9.1 / 0.4 s (~23×) | 4.0 / 0.2 s (~20×) |
-| water dimer cc-pVTZ | −152.7012785674 | 0 | 213 / 7.4 s (29×) | 283 / 6.0 s (47×) |
-
-PySCF's peak footprint on the dimer in cc-pVTZ is 1.94 GB, against
-Planck's 1.43 GB. The Δ on the small rungs is CCSD convergence (Planck
-stops at `tol_energy`), not a defect.
-
-## Not in this scope
-
-RI-CCSD and RI-(T), frozen core, MPI distribution of the CC solve, the UCC
-residual (the same levers likely apply; measure it separately),
-iteration-count differences from DIIS, and the generated rank-3 CCSDT's
-cost (`docs/CCGEN_GENERATED_CC_COST.md`).
+Against PySCF 2.15 at that point (same inputs, Planck's GBS files,
+`cart=False`): total energies within 7e-10 (Planck stops at `tol_energy`),
+CCSD ~2× → 29× and (T) ~10× → 47× from water cc-pVDZ to the dimer in
+cc-pVTZ. R4 re-measures this ladder.

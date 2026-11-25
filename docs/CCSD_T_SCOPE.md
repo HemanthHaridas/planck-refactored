@@ -34,7 +34,7 @@ Cost, 4 threads, whole run: `ccsd(t)` on C1 H2O2 6-31G takes 0.54 s, of
 which (T) is 0.06 s; spherical water cc-pVDZ 0.30 s. `uccsd(t)` on
 spherical water⁺ cc-pVDZ takes 0.55 s (it took about 23 × 9.4 s in the
 `ucc2` solve before the 2026-11-21/22 emit changes). The CCSD sets the size
-limit, not (T). Where it stops is step 0 of the size scope.
+limit, not (T). Where it stops: `docs/CCSD_T_SIZE_SCOPE.md`.
 
 ## Open
 
@@ -43,7 +43,7 @@ limit, not (T). Where it stops is step 0 of the size scope.
 2. **Size**, including what is left of (T)'s cost: the restricted kernel
    now computes 12 blocks per virtual triple and runs the `t2 · ovvv`
    blocks as small GEMMs (steps 8, 10a, 10b); the `t2 · ooov` blocks, V
-   and the energy loops are step 10c. `docs/CCSD_T_SIZE_SCOPE.md`.
+   and the energy loops are open step T1 in `docs/CCSD_T_SIZE_SCOPE.md`.
 
 ## How it works
 
