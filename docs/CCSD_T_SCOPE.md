@@ -40,10 +40,10 @@ limit, not (T). Where it stops is step 0 of the size scope.
 
 1. **ROHF-(T).** Needs semicanonical ROHF-CC and the f_ov terms
    (`canonical_fock=False`). Comes after `docs/ROHF_CORRELATION_SCOPE.md`.
-2. **Size.** `docs/CCSD_T_SIZE_SCOPE.md`.
-3. **(T) kernel shape.** The block kernels index t2 and the ERI blocks
-   through generic accessors, one term at a time; they are not BLAS-shaped.
-   Measure (T)'s share at size before reshaping them.
+2. **Size**, including what is left of (T)'s cost: the restricted kernel
+   now computes 12 blocks per virtual triple and runs the `t2 · ovvv`
+   blocks as small GEMMs (steps 8, 10a, 10b); the `t2 · ooov` blocks, V
+   and the energy loops are step 10c. `docs/CCSD_T_SIZE_SCOPE.md`.
 
 ## How it works
 
@@ -165,7 +165,11 @@ from `hcore` UHF can land on the ²A₁ saddle.
 
 - **Spin adaptation.** `ccsd(t)` is correct only with
   `PLANCK_CC_SPIN_ADAPT=ON` (the default). OFF reproduces the historical
-  spin-orbital emit, which is wrong, and no runtime check refuses it.
+  spin-orbital emit, which is wrong. Since 2026-11-25 the option is a global
+  compile definition and `run_rccgen` refuses an OFF build by name, which
+  covers `ccsd(t)` and every other generated RCC method. Checked by building
+  `build-default` OFF (`water_rccsd_t_sto3g` stops with the message) and
+  back ON (the gates pass).
 
 ## Findings and corrected premises
 

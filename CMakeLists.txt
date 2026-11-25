@@ -64,6 +64,13 @@ option(PLANCK_CC_INCLUDE_INTERMEDIATES
 # Set -DPLANCK_CC_SPIN_ADAPT=OFF only to reproduce that historical emit.
 option(PLANCK_CC_SPIN_ADAPT
     "Emit spatial (spin-adapted) RCC kernels instead of the raw spin-orbital defect" ON)
+# Global, so every binary that runs the generated RCC kernels (run_rccgen) can
+# refuse the defective emit by name instead of returning a wrong energy.
+if(PLANCK_CC_SPIN_ADAPT)
+    add_compile_definitions(PLANCK_CC_SPIN_ADAPT=1)
+else()
+    add_compile_definitions(PLANCK_CC_SPIN_ADAPT=0)
+endif()
 # U5.3: also emit UNRESTRICTED (spin-block resolved) CC kernels alongside the
 # restricted ones, as <method>_ucc_planck_generated.cpp. They define distinct
 # symbols (U5.0) so both link into one binary, and are reached through

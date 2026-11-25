@@ -233,6 +233,18 @@ namespace HartreeFock::Correlation::CC
                 "run_rccgen: the generated RCC path is currently available only for "
                 "single-point calculations.");
 
+        // The generated RCC kernels (ccsd(t), cc2..cc6, ccsdt_gen) are correct
+        // only as the spatial spin-adapted emit; OFF emits the historical
+        // spin-orbital defect, which converges to a wrong energy.
+#ifndef PLANCK_CC_SPIN_ADAPT
+#define PLANCK_CC_SPIN_ADAPT 1 // CMake always defines it; ON is its default.
+#endif
+        if (!PLANCK_CC_SPIN_ADAPT)
+            return std::unexpected(
+                "run_rccgen: this build emitted the generated RCC kernels without spin "
+                "adaptation (-DPLANCK_CC_SPIN_ADAPT=OFF), which gives wrong energies. "
+                "Reconfigure with -DPLANCK_CC_SPIN_ADAPT=ON.");
+
         calculator._have_ccsd_reference_energy = false;
         calculator._ccsd_reference_correlation_energy = 0.0;
 

@@ -31,11 +31,13 @@ distributed), `docs/CCSD_T_SIZE_SCOPE.md` (what limits CCSD(T) size today),
 | buys | wall time | system size |
 | cost | small: the SCF and RI pattern | a distributed-tensor design; the emitter assumes whole local tensors (`t2({i,j,a,b})`, `mo_blocks.ovvv(...)`) |
 
-Today's size limit is memory, not time (`docs/CCSD_T_SIZE_SCOPE.md`).
-Splitting the work therefore makes runs that already fit faster, and fits
-nothing new. Splitting the memory is the only MPI lever on size.
-`docs/HPC_MPI.md` also says to distribute the memory-lean algorithm, not
-the dense one.
+Since the memory work in `docs/CCSD_T_SIZE_SCOPE.md`, time is the limit,
+not memory: the water dimer in cc-pVTZ peaks at 1.43 GB and takes 39.6 s
+(4 threads). Splitting the work therefore pays now. It still fits nothing
+new; splitting the memory is the only MPI lever on size, and the next
+memory walls (the ns⁴ AO tensor in the SCF, v⁴ `vvvv` in the CCSD) have
+single-node fixes first (direct or RI integrals). `docs/HPC_MPI.md` also
+says to distribute the memory-lean algorithm, not the dense one.
 
 ## What should come first
 
@@ -47,15 +49,16 @@ These are cheaper and some are prerequisites:
    4 threads (`docs/CCGEN_GENERATED_CC_COST.md`). MPI ranks on one node now compete
    with these threads, so a node should run one rank with threads, not
    many single-threaded ranks.
-2. **A spatial RCCSD** (`docs/CCSD_T_SIZE_SCOPE.md`, route A). The
-   spin-orbital solver stores up to 16× the spatial memory. Distributing
-   that waste is the wrong order.
+2. **A spatial RCCSD.** Done 2026-11-22: `ccsd(t)` runs the generated
+   spatial RCCSD, 48–59× faster than the spin-orbital one and with 2.5–4×
+   less memory (`docs/CCSD_T_SIZE_SCOPE.md`).
 3. **RI** for the integral side, if the nb⁴ tensors bind before the
    amplitudes. RI breaks the nb⁴ wall on one node with no new executable.
+   Not needed yet: at the largest measured size, time binds first.
 
 ## Steps
 
-### M0. (T) across ranks (cheap; do it once (T) is a measurable share)
+### M0. (T) across ranks (cheap; its condition is now met)
 
 The batched (T) is already shaped for this. Its work items, one per virtual
 triple (or per block and triple for UHF), are independent, and each writes
@@ -75,12 +78,14 @@ digit equal to serial. Add a mutation: drop the allreduce. Per
 here, not a hang, because no later collective waits on it. Use
 `tests/mpi_smoke_compare.py` with its timeout anyway.
 
-It is worth little until CCSD scales: (T) is under 1% of the C1 H2O2 run.
+(T) is under 1 % of the C1 H2O2 6-31G run, but about 21 % of the water
+dimer cc-pVTZ run (8.25 of 39.6 s) since the CCSD speed-ups, so it is now a
+measurable share at size.
 
 ### M1. Split the work for the CCSD residual
 
 Apply to the CCSD residual the same pattern as the SCF and RI:
-- **Where.** Generated route (after the spatial RCCSD lands): stripe the
+- **Where.** Generated route (the spatial RCCSD behind `ccsd(t)`): stripe the
   outermost free index of each residual nest, then one `allreduce_inplace`
   per residual tensor per iteration (o²v² for doubles). The emitter already
   writes each nest as a loop over disjoint `result(i, ...)` slices, which is

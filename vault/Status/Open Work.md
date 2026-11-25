@@ -428,13 +428,14 @@ None of these blocks correctness. Take each up only with a current profile.
   - **CC under MPI** (`docs/CC_MPI_SCOPE.md`). Every rank currently runs
     the full CC redundantly. In order:
     - M0: (T) across ranks; bitwise equal to serial through owned slots.
-    - M1: split the generated CCSD residual by outer index, after the
-      spatial RCCSD.
+      (T) is ~21 % of the water dimer cc-pVTZ run now, so it pays.
+    - M1: split the generated CCSD residual by outer index.
     - M2: split the memory; only once a single node is saturated.
 
-    The spatial RCCSD and RI come first. (Threading the generated kernels,
-    also a prerequisite, is now the default.)
-    `planck-mpi` also lacks `PLANCK_CC_UCC`, so it has no `uccsd(t)`.
+    Both prerequisites are met (spatial RCCSD, threaded generated kernels);
+    RI is not needed while time, not memory, binds.
+    `planck-mpi` also lacks `PLANCK_CC_UCC` and `PLANCK_CC_DRESS_OPERATORS`,
+    so it has no `uccsd(t)`; fix that before M1's UCC gates.
 - **CASSCF** (`docs/CASSCF_PERFORMANCE.md`). Stopped at 1.3× behind PySCF at
   water cc-pVTZ C2v, which was accepted. Leftovers, only with a new target:
   re-profile cc-pVTZ C2v, a better relaxed-solve preconditioner, and the RI
