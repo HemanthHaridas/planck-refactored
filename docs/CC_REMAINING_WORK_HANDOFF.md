@@ -84,9 +84,13 @@ Gates for M0/M1: serial against 2 and 3 ranks, every printed digit, on
 4. ROHF-(T): same `canonical_fock=False` change; the UHF (T) it builds on
    exists.
 
-**Λ** (own scope, not opened): de-excitation operators, a left projector,
-Λ residuals, a linear solver and the (n)_Λ energies. Largest item; also the
-foundation of analytic CC gradients.
+**Λ** (`docs/CC_LAMBDA_SCOPE.md`): 1 spin-orbital Λ equations in ccgen
+(Λ_n, a ket excitation with free indices, a Λ connectivity rule; gate: the
+Λ residual is zero at PySCF's converged gccsd λ) → 2 closed-shell and UHF
+lowering (PySCF `ccsd_lambda`/`uccsd_lambda`) → 3 Λ solver and densities in
+Planck (PySCF `ccsd_rdm`; an ERI-perturbation finite-difference gate for
+any rank) → 4 consumers: ΛCCSD(T), CCSDT(Q)_Λ, and analytic CC gradients
+(own scope). Largest item; also the foundation of gradients and properties.
 
 **CC2, CC3, CCn, CCSDT-n** (`docs/CC_APPROXIMATE_MODELS_SCOPE.md`). Its
 step 0 is independent and worth doing now: every `ccN`/`uccN` keyword means
