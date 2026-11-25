@@ -4,7 +4,7 @@
 Runs the supplied input twice — once through the serial binary
 (`hartree-fock` / `planck-dft`, auto-selected from the input) and once
 through `mpirun -n <ranks> planck-mpi` — and fails if the final energy
-disagrees by more than --atol. Any printed MP2 total energies and gradient
+disagrees by more than --atol. Any printed correlated total energies and gradient
 rows are compared too, at the same tolerance.
 
 At Tier 3 the two must match to the bit: planck-mpi only adds MPI_Init,
@@ -31,9 +31,12 @@ from typing import Iterable
 # `hartree-fock`/`planck-mpi` print "Total Energy : ..."; the DFT path prints
 # "DFT Energy : ...". Same 10-decimal canonical precision; take the last match.
 ENERGY_RE = re.compile(r"(?:Total Energy|DFT Energy)\s*:?\s+([-+0-9Ee\.]+)")
-# Also compared when present, every occurrence in order: the MP2 total energy
-# and each printed gradient row (RI under MPI, docs/RI_MPI_SCOPE.md).
-MP2_RE = re.compile(r"Total MP2 Energy\s*:?\s+([-+0-9Ee\.]+)")
+# Also compared when present, every occurrence in order: each correlated total
+# and each printed gradient row (RI under MPI, docs/RI_MPI_SCOPE.md). Every
+# correlated total comes from Logger::correlation_energy as
+# "Total <label> Energy" (MP2, RCCSD(T), UCCSD(T), Correlated, ...); plain
+# "Total Energy" has no label and is ENERGY_RE's.
+CORR_RE = re.compile(r"Total (\S+) Energy\s*:?\s+([-+0-9Ee\.]+)")
 GRAD_RE = re.compile(r"Atom\s+\d+:\s+([-+0-9Ee\.]+)\s+([-+0-9Ee\.]+)\s+([-+0-9Ee\.]+)")
 
 
@@ -49,7 +52,7 @@ def parse_energy(output: str) -> float:
 
 
 def parse_extra(output: str) -> list[float]:
-    values = [float(v) for v in MP2_RE.findall(output)]
+    values = [float(v) for _, v in CORR_RE.findall(output)]
     for row in GRAD_RE.findall(output):
         values.extend(float(v) for v in row)
     return values
@@ -117,7 +120,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     out_serial = run([str(serial_bin), str(args.input)], args.timeout)
     e_serial = parse_energy(out_serial)
     x_serial = parse_extra(out_serial)
-    print(f"Energy (serial)          : {e_serial:.10f} Eh   (+{len(x_serial)} MP2/gradient values)")
+    print(f"Energy (serial)          : {e_serial:.10f} Eh   (+{len(x_serial)} correlated/gradient values)")
     failed = False
     for ranks in args.ranks:
         # --oversubscribe so the test runs on a machine with fewer cores than ranks.
@@ -129,11 +132,11 @@ def main(argv: Iterable[str] | None = None) -> int:
         print(f"Energy (mpi -n {ranks:<2})       : {e_mpi:.10f} Eh   |delta| {delta:.3e} (tol {args.atol:.3e})")
         failed |= delta > args.atol
         if len(x_mpi) != len(x_serial):
-            print(f"  MP2/gradient value count {len(x_mpi)} != serial {len(x_serial)}")
+            print(f"  correlated/gradient value count {len(x_mpi)} != serial {len(x_serial)}")
             failed = True
         elif x_serial:
             x_delta = max(abs(a - b) for a, b in zip(x_serial, x_mpi))
-            print(f"  max |delta| over {len(x_serial)} MP2/gradient values: {x_delta:.3e}")
+            print(f"  max |delta| over {len(x_serial)} correlated/gradient values: {x_delta:.3e}")
             failed |= x_delta > args.atol
 
     if failed:

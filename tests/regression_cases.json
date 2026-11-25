@@ -2920,6 +2920,32 @@
    "_note": "RI under MPI: RI CASSCF (fitted core/active Fock through build_ri_fock_rhf, active integrals through transform_eri_ri). The final Total Energy line is compared."
   },
   {
+   "id": "water_rccsd_t_631g_mpi_smoke",
+   "input": "tests/inputs/regression/post_hf/water_rccsd_t_631g.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "post_hf"
+   ],
+   "args": ["--ranks", "2", "3", "--atol", "0", "--timeout", "60"],
+   "expected_exit_code": 0,
+   "_note": "CC under MPI (docs/CC_MPI_SCOPE.md): ccsd(t) is replicated on every rank today, so Total RCCSD(T) Energy must equal serial to every printed digit. The baseline for M0/M1."
+  },
+  {
+   "id": "oh_uccsd_t_631g_mpi_smoke",
+   "input": "tests/inputs/regression/post_hf/oh_uccsd_t_631g.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ucc",
+    "post_hf"
+   ],
+   "requires_build_option": "PLANCK_CC_UCC",
+   "args": ["--ranks", "2", "3", "--atol", "0", "--timeout", "60"],
+   "expected_exit_code": 0,
+   "_note": "CC under MPI: uccsd(t) through planck-mpi, which has the UCC kernels since it takes hartree-fock's CC definitions. Total UCCSD(T) Energy must equal serial to every printed digit."
+  },
+  {
    "id": "h2_rmp2_gradient_smoke",
    "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
    "tags": [

@@ -26,7 +26,7 @@ Sources: `docs/CCSD_T_SCOPE.md`, `docs/CCSD_T_SIZE_SCOPE.md`,
 | 0b | `planck-mpi` gets `hartree-fock`'s CC definitions (adds `PLANCK_CC_UCC`, `PLANCK_CC_DRESS_OPERATORS`) through one list, `_planck_posthf_cc_defs` in `CMakeLists.txt` | **Done.** `oh_uccsd_t_631g` through `mpirun -n 2 build/planck-mpi` equals serial `hartree-fock` to every printed digit (`Total UCCSD(T) Energy` −75.4625534240, E(T) −0.0005574953); compared by hand, since 0e is open. The CC gates on `build/` pass (`oh_uccsd_t_631g`, `b_ucc{2,4}_sto3g`, `water_rccsd_t_631g`, `h2o2_c1_rccsd_t_631g`, `lih_rccsdt_generated_sto3g`, `be_rccsdtq_sto3g`). |
 | 0c | Profile what is left in (T): the six `t2 · ooov` loop blocks, V per ordering, GEMM copies, energy loops | Measurement only. Decides 1a. Size scope step 10c. |
 | 0d | CCSD[T] diagnostic: (T) without V, `wx·wx/D` in `src/post_hf/cc/ccsd_t.cpp` | A few lines. **External dependency:** the gate needs a CFOUR or MRCC value; PySCF does not print CCSD[T]. `docs/CCSDT_Q_SCOPE.md` step 0. |
-| 0e | Teach `tests/mpi_smoke_compare.py` the `Total RCCSD(T) Energy` / `Total UCCSD(T) Energy` lines | Today it reads `Total Energy` (the SCF), MP2 totals and gradient rows only, so a CC MPI case would pass while comparing just the SCF. Needed by M0/M1. |
+| 0e | Teach `tests/mpi_smoke_compare.py` the `Total RCCSD(T) Energy` / `Total UCCSD(T) Energy` lines | **Done.** One pattern, `Total <label> Energy`, now reads every total printed by `Logger::correlation_energy` (MP2, RCCSD(T), UCCSD(T), ...). New cases `water_rccsd_t_631g_mpi_smoke` and `oh_uccsd_t_631g_mpi_smoke` (extended; `--atol 0`, 2 and 3 ranks) pass; a change confined to the UCCSD(T) line is now caught where before only the SCF was compared. These are M0/M1's baseline gates. |
 
 ## Tier 1: CCSD and (T) time (generator or build changes)
 
@@ -57,8 +57,8 @@ pins reproduce with the change off.
 
 | # | Step | Depends on |
 |---|---|---|
-| M0 | (T) across ranks: each rank fills the virtual-triple slots it `owns`, one `allreduce_inplace`, ordered serial sum. Bitwise equal to serial. | 0e. (T) is ~21 % of the dimer cc-pVTZ run, so it pays now. |
-| M1 | Stripe the outer free index of each generated CCSD residual nest, one allreduce per residual tensor per iteration | 0b, 0e. Better after 1c, so it distributes the faster UCC residual. |
+| M0 | (T) across ranks: each rank fills the virtual-triple slots it `owns`, one `allreduce_inplace`, ordered serial sum. Bitwise equal to serial. | Nothing left (0e done). (T) is ~21 % of the dimer cc-pVTZ run, so it pays now. |
+| M1 | Stripe the outer free index of each generated CCSD residual nest, one allreduce per residual tensor per iteration | Nothing left (0b, 0e done). Better after 1c, so it distributes the faster UCC residual. |
 | M2 | Split the memory (distributed t2 / `vvvv`) | R4 shows one node is saturated. Do not start without it. |
 
 Gates for M0/M1: serial against 2 and 3 ranks, every printed digit, on
@@ -93,6 +93,6 @@ without EOM.
 
 ## Suggested order
 
-0e → 0c → 1b and 1c, with the user
+0c → 1b and 1c, with the user
 deciding 1e → R4 → M0, M1. Run the quadruples or ROHF chain alongside,
 depending on whether accuracy or open-shell coverage comes first.
