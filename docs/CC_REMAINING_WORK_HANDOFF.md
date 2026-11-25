@@ -14,8 +14,9 @@ Sources: `docs/CCSD_T_SCOPE.md`, `docs/CCSD_T_SIZE_SCOPE.md`,
 
 - `ccsd(t)` (generated spatial RCCSD) and `uccsd(t)` (generated `ucc2`,
   `-DPLANCK_CC_UCC=ON`) equal PySCF 2.15 in Cartesian and spherical bases.
-- Water dimer / cc-pVTZ `ccsd(t)`: 39.6 s at 4 threads, 1.43 GB peak.
-  CCSD 2.7× PySCF per iteration (flat in the basis), (T) 1.4×.
+- Water dimer / cc-pVTZ `ccsd(t)`: 36.4–38.6 s at 4 threads, 1.43 GB
+  peak. CCSD 2.7× PySCF per iteration (flat in the basis); (T) 4.5–4.8 s,
+  faster than PySCF's 6.0 s since 1a.
 - **Time, not memory, limits size now.**
 
 ## Tier 0: no blockers, cheap
@@ -37,9 +38,9 @@ pins reproduce with the change off.
 
 | # | Step | Depends on | Expected |
 |---|---|---|---|
-| 1a | (T) loop sections made contiguous (generator): gathers from once-transposed `ovvv`/t2 layouts, the paired `ooov` blocks as contiguous loops or small GEMMs, the scatter writing the index orders the assembly reads. Batch over one virtual only if that falls short. | 0c (done) | (T) ~2–2.5×, past PySCF's 6.0 s |
-| 1b | R3b: CCSD o³v³ GEMMs on j ≥ i, one GEMM per i (staircase) in `cc_gemm_contract` | none | ≤ ~10 % of CCSD arithmetic |
-| 1c | UCC residual: port the half range (R1), common-operand merges (R2, R2b) and GEMM lowering (R3) | Measure the UCC residual first | Possibly large. Every step-9 change is gated "not UCC" (`_pair_half_kernel`, `merge_common_operand_reads`, `_gemm_lowering`), so `uccsd(t)` has none of them. Not in any scope yet; open one. |
+| 1a | (T) blocks as GEMMs on contiguous layouts made once per (T); contiguous assembly | 0c (done) | **Done**: (T) 8.1–8.4 → 4.5–4.8 s (1.8×), past PySCF's 6.0 s; W 29.6 → 14.6 thread-s. Left in (T): V and the energy loops (~20 %). Size scope 10c. |
+| 1b | R3b: CCSD o³v³ GEMMs on j ≥ i, one GEMM per i (staircase) in `cc_gemm_contract` | none | **Done.** CCSD per iteration 0.83–0.86 → 0.80 s on the dimer cc-pVTZ (1.04–1.08×). Helper-only change (the emitter already puts i/j first in every affected group). New unit test `planck-cc-gemm-contract` (4 staircase shapes + same-group + full, ≤ 1.1e-15; a wrong column range fails 600 elements); rccsd_t gates pass, CCSD/(T) output identical at 1/2/4/8 threads, core 178/178. |
+| 1c | UCC residual: port the half range (R1), common-operand merges (R2, R2b) and GEMM lowering (R3) | Measure the UCC residual first | Possibly large. Every step-9 change is gated "not UCC" (`_pair_half_kernel`, `merge_common_operand_reads`, `_gemm_lowering` via the `if not ucc` in `emit_planck_term`), so `uccsd(t)` has none of them. **Census of the UCC CCSD residual** (modelled at o 10, v 50): plain two-read contractions 53 % of the cost, antisymmetrized differences `X·(V(..cd) − V(..dc))` 31 %, three or more factors 15 %. `cc_operand` already takes the UCC operands (`spin_block` Tensor4D, `fixed_rank_view`). First step: let `_gemm_lowering` accept the UCC block aliases (`v_abab_oovv`, ...) and expand an antisymmetrized difference into two calls with opposite signs, then drop the gate. Not started; no scope yet. |
 | 1d | R2c: share linearly dependent builder combinations (four `W_t2v_oovv` → three contractions) | Re-measure its share on the lowered build | ≤ 1.06× |
 | 1e | R3c: Accelerate / OpenBLAS behind `cc_gemm_contract` | **User decision**: the optional `USE_BLAS` build (B1, `docs/ERI_FOCK_BLAS_SCOPE.md`); hermeticity and bitwise reproducibility trade-offs | 2.5–4× on the GEMMs, the largest lever left |
 
@@ -57,7 +58,7 @@ pins reproduce with the change off.
 
 | # | Step | Depends on |
 |---|---|---|
-| M0 | (T) across ranks: each rank fills the virtual-triple slots it `owns`, one `allreduce_inplace`, ordered serial sum. Bitwise equal to serial. | Nothing left (0e done). (T) is ~21 % of the dimer cc-pVTZ run, so it pays now. |
+| M0 | (T) across ranks: each rank fills the virtual-triple slots it `owns`, one `allreduce_inplace`, ordered serial sum. Bitwise equal to serial. | Nothing left (0e done). (T) is ~12 % of the dimer cc-pVTZ run after 1a (4.6 of ~37 s), so it pays less than M1. |
 | M1 | Stripe the outer free index of each generated CCSD residual nest, one allreduce per residual tensor per iteration | Nothing left (0b, 0e done). Better after 1c, so it distributes the faster UCC residual. |
 | M2 | Split the memory (distributed t2 / `vvvv`) | R4 shows one node is saturated. Do not start without it. |
 
@@ -87,12 +88,17 @@ Gates for M0/M1: serial against 2 and 3 ranks, every printed digit, on
 Λ residuals, a linear solver and the (n)_Λ energies. Largest item; also the
 foundation of analytic CC gradients.
 
-**CC3**: rename the existing `cc3` keyword first (it means generated CCSDT,
-`src/io/io.cpp`), or a user asking for CC3 silently gets CCSDT. Low value
-without EOM.
+**CC2, CC3, CCn, CCSDT-n** (`docs/CC_APPROXIMATE_MODELS_SCOPE.md`). Its
+step 0 is independent and worth doing now: every `ccN`/`uccN` keyword means
+rank-N CC, so `cc3` silently runs full CCSDT. Spelled rank names now exist
+for every rank on both routes, from one table (`generated_cc_keyword`,
+`PostHF::RCCGEN`/`UCCGEN`). Left: migrate the seven inputs and refuse `ccN`
+until the real models exist (a user decision).
+The models themselves are one per-term perturbation-order filter in ccgen;
+build them with an excited-state CC scope or on request.
 
 ## Suggested order
 
-1a, 1b and 1c, with the user
+1c, with the user
 deciding 1e → R4 → M0, M1. Run the quadruples or ROHF chain alongside,
 depending on whether accuracy or open-shell coverage comes first.

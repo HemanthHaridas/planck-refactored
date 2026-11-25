@@ -228,8 +228,9 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     11.8 → 0.85 s, 2.7× PySCF, and the ratio no longer grows with the basis;
     whole `ccsd(t)` 278 → 81 s. Step 10 halved the (T) blocks by t2
     symmetry and runs the `t2 · ovvv` blocks as small GEMMs per triple:
-    (T) 49.8 → 8.25 s, 1.4× PySCF; whole run 39.6 s. Open, in order: 10c
-    profile the rest of (T), R3b o³v³ GEMMs on j ≥ i (staircase, one GEMM per i), R3c
+    (T) 49.8 → 8.25 s. Step 1a (2026-11-25) made every (T) block a GEMM
+    on contiguous layouts built once per (T): (T) 4.5–4.8 s, faster than
+    PySCF's 6.0 s; whole run ~37 s. Open, in order: R3b o³v³ GEMMs on j ≥ i (staircase, one GEMM per i), R3c
     Accelerate behind the helper (2.5–4× on the GEMMs; B1 build decision),
     R2c shared builder combinations, R4 re-measure. The hand-written
     fallback is not justified.
@@ -237,6 +238,12 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen
     today; (Q) is limited by the generated CCSDT's cost, and Λ needs new
     ccgen machinery.
+  - CC2, CC3, CCn and CCSDT-n (`docs/CC_APPROXIMATE_MODELS_SCOPE.md`): one
+    per-term perturbation-order filter in ccgen; worth building with an
+    excited-state CC scope. Its step 0 is a naming defect today: `ccN` /
+    `uccN` mean rank N, so `cc3` runs full CCSDT. Spelled rank names now
+    exist on both routes (`PostHF::RCCGEN` / `UCCGEN`, one keyword table);
+    left are migrating seven inputs and refusing `ccN` (user decision).
   - **Generated RCCSDT: reading amplitudes through a fixed-rank view made
     it 5–6× faster per iteration on one thread** (`docs/CCGEN_GENERATED_CC_COST.md`).
     Hot nests read t2/t3 as `t3({...})`, a runtime-rank offset loop with
