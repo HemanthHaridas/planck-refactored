@@ -126,16 +126,9 @@ only on small benchmark molecules; take it if a user asks for it.
 
 ### 4. Λ-based corrections
 
-This is a separate scope, for these pieces:
-- de-excitation operators Λ_n in `cluster.py` (as `build_tn`, with the
-  operators swapped);
-- a left projector;
-- generated Λ residuals;
-- a linear Λ solver (the Jacobi/DIIS harness should carry over);
-- the (n)_Λ energy.
-
-The Λ residuals are also the basis for analytic CC gradients and
-properties, which makes this the most valuable item here, and the largest.
+Scoped separately: `docs/CC_LAMBDA_SCOPE.md` (Λ operators, the Λ
+connectivity rule, spin adaptation, the solver, densities, and the
+consumers: Λ-based corrections, properties, gradients).
 
 ### Iterative approximations (CC3, CCSDT-n)
 
