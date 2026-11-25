@@ -448,7 +448,7 @@ arithmetic. Reverted; step 8 removed 5/6 of it.
 
 | # | Step | Expected |
 |---|---|---|
-| 10c | (T): profile what is left (V, ooov loops, energy loops), then batch over a virtual if GEMM size limits | (T)'s remaining 1.4× |
+| 10c | (T): profiled (see 10c). Make the gathers, `ooov` blocks and assembly contiguous; batch over a virtual only if that falls short | (T) ~2–2.5×, past PySCF |
 | R3b | CCSD o³v³ contractions on j ≥ i (staircase) | ~45 % of the six o³v³ GEMMs |
 | R3c | Accelerate `dgemm` behind the GEMM helper | 2.5–4× on the GEMMs; a build decision |
 | R2c | Share linearly dependent combinations of builders | 4 o³v³ builders → 3 contractions (≤ 1.06×) |
@@ -459,9 +459,46 @@ storing the AO tensor at all. RI-CCSD would be its own scope.
 
 ### 10c. What is left in (T)
 
-Profile first: the remaining per-triple work is the six `t2 · ooov` loop
-blocks, V per ordering, the copies around the GEMMs, and the energy loops.
-If the small GEMMs themselves limit, batch over one virtual: for fixed c,
+**Profiled 2026-11-25** (water dimer cc-pVTZ,
+`tests/benchmarks/ccsd_t/water_dimer_ccpvtz.hfinp`, the ladder's S22 rung,
+4 threads, (T) 8.1–8.4 s; PySCF 6.0 s). A `sample` profile of the whole
+run, aggregated over the four threads' (T) subtrees, gives W 89 %, V
+blocks 6.7 %, the driver's energy loops 3.8 %. Inside W, thread-local
+`steady_clock` marks inserted into the generated TU (by hand, then
+removed; the build has no debug info for line attribution) give, out of
+29.6 thread-seconds:
+
+| W section | thread time | share | per triple |
+|---|---|---|---|
+| gathers into `ga`/`gb` (t2 slice o²v; six `ovvv(u2, d, vX, vY)` slices o·v, strided v² in d and v³ in u2) | 6.42 s | 22 % | 31 µs |
+| GEMMs (three o² × v × 2o) | 7.91 s | 27 % | 39 µs |
+| scatter into the block slots | 0.30 s | 1 % | |
+| six `t2 · ooov` loop blocks (o⁴ each, `t2(l, u0, ..)` strided nv² in l) | 7.34 s | 25 % | 36 µs |
+| assembly (per ordering, 24 reads of the blocks in transposed index orders) | 7.48 s | 25 % | 37 µs |
+
+So the GEMMs are only a quarter of W: there is no single hot spot, and
+batching the GEMMs alone would not pay. The `ooov` loops do a tenth of the
+GEMMs' multiply-adds (6·10⁴ against 6.4·10⁵ per triple) in the same time,
+and the assembly's 1.4·10⁵ adds take as long again. All three loop sections
+are access-bound: strided accessors and transposed reads that do not
+vectorize. Levers, each a generator change gated as in step 8:
+
+- **Gathers:** read from layouts made once per (T): `ovvv` as
+  [vX][vY][d][u2] (o·v³, 91 MB on the dimer) and t2 as [b][i][j][a]
+  (9 MB), so each slice is contiguous.
+- **`ooov` blocks:** blocks 4/5, 8/9 and 10/11 share one `ooov` slice each;
+  gather the slice (o³) and the two t2 slices (o² each) contiguously and
+  run (2o × o)·(o × o²), or a contiguous loop the compiler vectorizes.
+- **Assembly:** have the scatter write each block in the index orders the
+  orderings read (o³ copies, already 1 % for one order), so every
+  ordering's sum is 24 contiguous adds.
+
+If the loop sections ran at the GEMMs' rate, W would be about a third of
+today and (T) roughly 2–2.5× faster, below PySCF's 6.0 s. The batch-over-c
+restructure below attacks all three at once, at o³v² memory and a driver
+change; take it only if the per-section levers fall short.
+
+Original plan, kept for that case. If the small GEMMs themselves limit, batch over one virtual: for fixed c,
 Σ_d t2(i,j,d,c) ovvv(k,d,a,b) over all (a, b) is a (o² × v) · (v × o v²)
 GEMM, o³v³ per c and o³v² memory (90 MB on the dimer in cc-pVTZ). That
 needs the (T) driver (`batched_triples_energy` in

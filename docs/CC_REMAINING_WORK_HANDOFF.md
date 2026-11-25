@@ -24,7 +24,7 @@ Sources: `docs/CCSD_T_SCOPE.md`, `docs/CCSD_T_SIZE_SCOPE.md`,
 |---|---|---|
 | 0a | `run_rccgen` refuses a `PLANCK_CC_SPIN_ADAPT=OFF` build by name | **Done**, `d2cbc11b`. Checked OFF (refuses) and back ON (gates pass) on `build-default`. |
 | 0b | `planck-mpi` gets `hartree-fock`'s CC definitions (adds `PLANCK_CC_UCC`, `PLANCK_CC_DRESS_OPERATORS`) through one list, `_planck_posthf_cc_defs` in `CMakeLists.txt` | **Done.** `oh_uccsd_t_631g` through `mpirun -n 2 build/planck-mpi` equals serial `hartree-fock` to every printed digit (`Total UCCSD(T) Energy` −75.4625534240, E(T) −0.0005574953); compared by hand, since 0e is open. The CC gates on `build/` pass (`oh_uccsd_t_631g`, `b_ucc{2,4}_sto3g`, `water_rccsd_t_631g`, `h2o2_c1_rccsd_t_631g`, `lih_rccsdt_generated_sto3g`, `be_rccsdtq_sto3g`). |
-| 0c | Profile what is left in (T): the six `t2 · ooov` loop blocks, V per ordering, GEMM copies, energy loops | Measurement only. Decides 1a. Size scope step 10c. |
+| 0c | Profile what is left in (T) | **Done** (size scope 10c). Dimer cc-pVTZ (T) 8.1–8.4 s: W 89 %, V 6.7 %, energy loops 3.8 %. Inside W: gathers 22 %, GEMMs 27 %, `ooov` loops 25 %, assembly 25 %. No single hot spot; the GEMMs are a quarter. Input committed as `tests/benchmarks/ccsd_t/water_dimer_ccpvtz.hfinp`. |
 | 0d | CCSD[T] diagnostic: (T) without V, `wx·wx/D` in `src/post_hf/cc/ccsd_t.cpp` | A few lines. **External dependency:** the gate needs a CFOUR or MRCC value; PySCF does not print CCSD[T]. `docs/CCSDT_Q_SCOPE.md` step 0. |
 | 0e | Teach `tests/mpi_smoke_compare.py` the `Total RCCSD(T) Energy` / `Total UCCSD(T) Energy` lines | **Done.** One pattern, `Total <label> Energy`, now reads every total printed by `Logger::correlation_energy` (MP2, RCCSD(T), UCCSD(T), ...). New cases `water_rccsd_t_631g_mpi_smoke` and `oh_uccsd_t_631g_mpi_smoke` (extended; `--atol 0`, 2 and 3 ranks) pass; a change confined to the UCCSD(T) line is now caught where before only the SCF was compared. These are M0/M1's baseline gates. |
 
@@ -37,7 +37,7 @@ pins reproduce with the change off.
 
 | # | Step | Depends on | Expected |
 |---|---|---|---|
-| 1a | (T) batched over one virtual: for fixed c, one (o² × v)·(v × o v²) GEMM; restructure `batched_triples_energy` to loop c outermost | 0c shows the small GEMMs limit | Part of (T)'s 1.4× |
+| 1a | (T) loop sections made contiguous (generator): gathers from once-transposed `ovvv`/t2 layouts, the paired `ooov` blocks as contiguous loops or small GEMMs, the scatter writing the index orders the assembly reads. Batch over one virtual only if that falls short. | 0c (done) | (T) ~2–2.5×, past PySCF's 6.0 s |
 | 1b | R3b: CCSD o³v³ GEMMs on j ≥ i, one GEMM per i (staircase) in `cc_gemm_contract` | none | ≤ ~10 % of CCSD arithmetic |
 | 1c | UCC residual: port the half range (R1), common-operand merges (R2, R2b) and GEMM lowering (R3) | Measure the UCC residual first | Possibly large. Every step-9 change is gated "not UCC" (`_pair_half_kernel`, `merge_common_operand_reads`, `_gemm_lowering`), so `uccsd(t)` has none of them. Not in any scope yet; open one. |
 | 1d | R2c: share linearly dependent builder combinations (four `W_t2v_oovv` → three contractions) | Re-measure its share on the lowered build | ≤ 1.06× |
@@ -93,6 +93,6 @@ without EOM.
 
 ## Suggested order
 
-0c → 1b and 1c, with the user
+1a, 1b and 1c, with the user
 deciding 1e → R4 → M0, M1. Run the quadruples or ROHF chain alongside,
 depending on whether accuracy or open-shell coverage comes first.
