@@ -922,9 +922,11 @@ def with_gemm_include(text: str) -> str:
 
 
 _READ = re.compile(r"([A-Za-z_][\w.]*)\(([^(){}]*)\)")
-# A UCC same-spin ERI read as <pq||rs> = <pq|rs> - <pq|sr>: one stored array
-# read twice (`_block_needs_explicit_exchange`).
-_DIFF_READ = re.compile(r"\(([A-Za-z_][\w.]*)\(([^(){}]*)\) - \1\(([^(){}]*)\)\)")
+# A UCC same-spin ERI read as <pq||rs> = <pq|rs> - <pq|sr>
+# (`_block_needs_explicit_exchange`). The two reads are one stored array, or
+# two when the routing puts <pq|sr> in another block (`ovov` - `ovvo`).
+_DIFF_READ = re.compile(
+    r"\(([A-Za-z_][\w.]*)\(([^(){}]*)\) - ([A-Za-z_][\w.]*)\(([^(){}]*)\)\)")
 # Operands the UCC kernels bind locally: ERI and Fock spin blocks
 # (Tensor4D/Tensor2D references), and a builder's scratch arrays.
 _UCC_OPERAND = re.compile(r"v_[ab]{4}_[ov]{4}|f_[ab]{2}_[ov]{2}|X\d+")
@@ -970,7 +972,7 @@ def _gemm_lowering(term, factors, free, summed, lhs, intermediate_names,
         if m:
             parts = [(1, m.group(1), m.group(2))]
         elif d:
-            parts = [(1, d.group(1), d.group(2)), (-1, d.group(1), d.group(3))]
+            parts = [(1, d.group(1), d.group(2)), (-1, d.group(3), d.group(4))]
         else:
             return None
         alts = []
@@ -1005,13 +1007,27 @@ def _gemm_lowering(term, factors, free, summed, lhs, intermediate_names,
     n = "".join(c for c in b_lab if c not in sum_names)
     if not m or not n:
         return None
-    for alts, r, c in ((alternatives[0], m, k), (alternatives[1], k, n)):
-        for _, _, lab in alts:
-            if lab not in (r + c, c + r) and n_vir(lab) > 3:
-                return None
+    def allowed(lab, r, c):
+        # Used in place, or small enough to copy (never vvvv).
+        return lab in (r + c, c + r) or n_vir(lab) <= 3
+
+    def swapped(lab, x, y):
+        return lab.translate(str.maketrans({x: y, y: x}))
+
     calls = []
     for a_sign, a_name, a_lab in alternatives[0]:
         for b_sign, b_name, b_lab in alternatives[1]:
+            if not (allowed(a_lab, m, k) and allowed(b_lab, k, n)):
+                # Rename two summed (dummy) indices in both operands: the same
+                # sum, with the permutation moved onto the operand that may be
+                # copied. Turns t2(ijcd) v(abdc) into t2(ijdc) v(abcd).
+                for x, y in itertools.combinations(sum_names, 2):
+                    a2, b2 = swapped(a_lab, x, y), swapped(b_lab, x, y)
+                    if allowed(a2, m, k) and allowed(b2, k, n):
+                        a_lab, b_lab = a2, b2
+                        break
+                else:
+                    return None
             coeff = float(term.coeff * sign * a_sign * b_sign)
             calls.append(
                 f'{pad}cc_gemm_contract({lhs}, "{"".join(free_names)}", {coeff!r}, '

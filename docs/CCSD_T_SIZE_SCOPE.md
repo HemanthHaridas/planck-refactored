@@ -310,7 +310,7 @@ only partly.
 
 | | reaches UCC? |
 |---|---|
-| GEMM lowering (R3) | yes (1c) |
+| GEMM lowering (R3) | yes (1c, U1) |
 | small calls serial | yes |
 | half range (R1) | no: the mirror maps `abab` to `baba`, another block |
 | merges (R2, R2b) | no |
@@ -324,10 +324,10 @@ emitted text (`_block_needs_explicit_exchange`), as `(v(..cd) − v(..dc))`;
 each side becomes its own call with its sign. Lowered calls: UCC CCSD 350,
 CCSDT 1309, CCSDTQ 2964. The restricted rank-2 TU is byte-identical.
 
-| water⁺ cc-pVTZ spherical (o 5/4, v 53/54), 4 threads | before | now |
+| water⁺ cc-pVTZ spherical (o 5/4, v 53/54), 4 threads | before | now (1c + U1) |
 |---|---|---|
-| UCC CCSD per iteration (median of 18) | 0.339 s | 0.226–0.231 s (1.47–1.50×) |
-| whole `uccsd(t)` run | 9.4 s | 7.4–7.7 s |
+| UCC CCSD per iteration (median of 18) | 0.339 s | 0.145–0.146 s (2.33×) |
+| whole `uccsd(t)` run | 9.4 s | 5.9–6.0 s |
 | RCCSD on neutral water, same basis, for scale | 0.039 s | |
 
 **Small systems.** The lowering first made B STO-3G `ucc4` slower, 1.82 →
@@ -349,20 +349,28 @@ the `t1 · vvvv` builders ~7 %, operand copies ~3 %. The census of the UCC
 CCSD residual before 1c (modelled at o 10, v 50): two-read contractions
 53 %, antisymmetrized differences 31 %, three or more factors 15 %.
 
-The same-spin loop code is two kinds of term the lowering still rejects:
+**The same-spin loop code (U1, done).** Two kinds of term were still
+loops, the 19 % above:
 - **The vvvv ladder**, `t2(i,j,c,d) · (v(a,b,c,d) − v(a,b,d,c))`: the
-  second read would copy `vvvv`, which is forbidden. Since c and d are
-  summed, renaming them moves the swap onto t2 (`t2(i,j,d,c) · v(a,b,c,d)`),
-  exactly and with an allowed copy.
+  second read would copy `vvvv`, which is forbidden. When a call needs a
+  forbidden copy, `_gemm_lowering` now tries renaming a pair of summed
+  (dummy) indices in both operands, which leaves the sum unchanged and here
+  moves the swap onto t2: `t2(i,j,d,c) · v(a,b,c,d)`, `vvvv` in place.
 - **A difference of two different arrays**, `(v_ovov(..) − v_ovvo(..))`:
-  the difference pattern requires one array; the two sides are independent
-  calls anyway.
+  `_DIFF_READ` accepts two names; the sides were independent calls anyway.
+
+No loop nests are left in the same-spin doubles kernels; UCC CCSD has 366
+calls and 83 nests (was 350 and 91). The RCC rank-2 TU is byte-identical,
+`oh_uccsd_t_631g` prints exactly what it printed before, and UCC output is
+identical at 1/2/4/8 threads. UCC CCSD 0.226–0.231 → 0.145–0.146 s per
+iteration (1.56×), now 3.7× the RCCSD in the same basis against the ~3×
+UCC inherently costs.
 
 ## Open, in order
 
 | # | Step | Expected |
 |---|---|---|
-| U1 | UCC: lower the same-spin vvvv ladder by renaming dummies, and differences of two arrays | most of the 19 % same-spin loop code |
+| U1 | UCC: same-spin vvvv ladder by renaming dummies, differences of two arrays: done | UCC CCSD 1.56× per iteration |
 | U2 | UCC: `t1 · vvvv` builders as batched GEMMs over the leading (a, b) of `vvvv` (helper gains batch indices) | ~7 % of UCC |
 | U3 | UCC: half range on the same-spin doubles, and the merges | to be measured |
 | U4 | UCC (T): the restricted kernel's layouts and GEMM blocks for each spin block | the 16 % UCC (T) share |
@@ -467,10 +475,17 @@ build change.
 - **`planck-cc-gemm-contract`:** the GEMM helper against a label-driven
   reference loop (staircase shapes, same-group filter, full product);
   a wrong column range fails 600 elements.
-- **The full ccgen suite.** Emit pins (`test_emit_flag_matrix`,
-  `test_ucc_emit_flag`) move with any emit change; re-pin only after showing
-  the old pins reproduce with the change switched off. Tests that read the
-  emitted text must read lowered calls too:
+- **ccgen tests, targeted per change, full per batch.** For an emitter
+  change, run the tests that emit or evaluate emitted code:
+  `test_emit_flag_matrix`, `test_emitted_builder_matches_spec`,
+  `test_factorize_value_preservation`, `test_merged_amplitude_reads`,
+  `test_merged_call_sites`, `test_ucc_*`, and every test file that imports
+  `emitted_cpp_eval` (`grep -l emitted_cpp_eval ccgen/tests/test_*.py`;
+  `residual_eval` evaluates the algebra, not the emitted code). Run the full
+  suite (about 26 minutes) once per batch of changes, before pushing. Emit
+  pins move with any emit change; re-pin only after showing the old pins
+  reproduce with the change switched off. Tests that read the emitted text
+  must read lowered calls too:
   `test_every_read_is_the_one_the_valid_group_selects` spells each
   `cc_operand(name), "labels"` as a read.
 
