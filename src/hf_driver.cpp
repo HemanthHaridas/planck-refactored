@@ -490,7 +490,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                 what + " is not yet supported with a spherical basis "
                        "(basis_type spherical); currently single-point RHF/UHF/ROHF "
                        "energies (Conventional or Direct), with MP2, CASSCF/RASSCF, "
-                       "FCI, or coupled cluster (RCCSD/UCCSD/RCCSDT/UCCSDT/RCCSDTQ), "
+                       "FCI, or coupled cluster (hand-written and generated), "
                        "RHF/UHF/ROHF and dense RMP2/UMP2 analytic gradients, geometry optimization, "
                        "frequencies, geomopt+freq, and imaginary-mode following, "
                        "and point-group symmetry / SAO blocking are available. Use "
@@ -537,7 +537,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         case HartreeFock::PostHF::UCCSD:
         case HartreeFock::PostHF::RCCSDT:
         case HartreeFock::PostHF::UCCSDT:
-        case HartreeFock::PostHF::RCCSDTQ:
+        case HartreeFock::PostHF::RCCGEN:
         case HartreeFock::PostHF::UCCGEN:
             break;
         }
@@ -1237,7 +1237,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag, "Preparing unrestricted CCSDT infrastructure");
             corr_res = HartreeFock::Correlation::CC::run_uccsdt(calculator, shellpairs);
         }
-        else if (calculator._correlation == HartreeFock::PostHF::RCCSDTQ)
+        else if (calculator._correlation == HartreeFock::PostHF::RCCGEN)
         {
             // U5.3c: rank-derived; rank 4 still reads "RCCSDTQ :".
             corr_tag = HartreeFock::Correlation::CC::rcc_method_label(
@@ -1319,15 +1319,19 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                 }
                 if ((calculator._correlation == HartreeFock::PostHF::RCCSDT ||
                      calculator._correlation == HartreeFock::PostHF::UCCSDT ||
-                     calculator._correlation == HartreeFock::PostHF::RCCSDTQ) &&
+                     calculator._correlation == HartreeFock::PostHF::RCCGEN) &&
                     calculator._have_ccsd_reference_energy)
                 {
                     const std::string ccsd_label =
                         (calculator._correlation == HartreeFock::PostHF::UCCSDT) ? "UCCSD" : "CCSD";
+                    // The generated route's label follows its rank, without the
+                    // leading R ("CCSDT", "CCSDTQ", "CC5", ...).
                     const std::string ccsdt_label =
                         (calculator._correlation == HartreeFock::PostHF::RCCSDT)   ? "CCSDT"
                         : (calculator._correlation == HartreeFock::PostHF::UCCSDT) ? "UCCSDT"
-                                                                                   : "CCSDTQ";
+                                                                                   : HartreeFock::Correlation::CC::rcc_method_label(
+                                                                                         calculator._scf._cc_generated_rank)
+                                                                                         .substr(1);
                     HartreeFock::Logger::ccsdt_energy_summary(
                         calculator._total_energy,
                         calculator._ccsd_reference_correlation_energy,
@@ -1340,7 +1344,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                     const std::string method_label =
                         (calculator._correlation == HartreeFock::PostHF::RMP2)      ? "MP2"
                         : (calculator._correlation == HartreeFock::PostHF::UMP2)    ? "MP2"
-                        : (calculator._correlation == HartreeFock::PostHF::RCCSDTQ &&
+                        : (calculator._correlation == HartreeFock::PostHF::RCCGEN &&
                            calculator._scf._cc_triples)                             ? "RCCSD(T)"
                         : (calculator._correlation == HartreeFock::PostHF::RCCSD)   ? "RCCSD"
                         : (calculator._correlation == HartreeFock::PostHF::UCCSD)   ? "UCCSD"
@@ -1350,7 +1354,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                         // itself as RCCSDTQ. `rcc_method_label(4)` is "RCCSDTQ",
                         // so rank 4 -- the only rank the three string-parsing
                         // consumers exercise -- is unchanged.
-                        : (calculator._correlation == HartreeFock::PostHF::RCCSDTQ)
+                        : (calculator._correlation == HartreeFock::PostHF::RCCGEN)
                             ? HartreeFock::Correlation::CC::rcc_method_label(
                                   calculator._scf._cc_generated_rank)
                         : (calculator._correlation == HartreeFock::PostHF::FCI)     ? "FCI"
@@ -1418,7 +1422,8 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                  calculator._correlation == HartreeFock::PostHF::UCCSD ||
                  calculator._correlation == HartreeFock::PostHF::RCCSDT ||
                  calculator._correlation == HartreeFock::PostHF::UCCSDT ||
-                 calculator._correlation == HartreeFock::PostHF::RCCSDTQ)
+                 calculator._correlation == HartreeFock::PostHF::RCCGEN ||
+                 calculator._correlation == HartreeFock::PostHF::UCCGEN)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :",
                                          "Coupled-cluster gradients are not implemented");

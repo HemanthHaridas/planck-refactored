@@ -330,8 +330,8 @@ Each energy evaluation (`evaluate` in `casscf.cpp`) builds the half-transformed 
 |---|---|
 | `run_rccsd`, `run_uccsd` (`ccsd.{h,cpp}`) | Hand-written CCSD; UCCSD and small cases via the determinant-space solver |
 | `run_rccsdt`, `run_uccsdt` (`ccsdt.{h,cpp}`) | RCCSDT routes to the determinant prototype (small: `nso ≤ 16` and `ndet ≤ 10000`), the hand-written tensor backend (`tensor_backend*.cpp`), or the generated harness; `PLANCK_RCCSDT_BACKEND` overrides |
-| `run_rccgen` (`rccgen.{h,cpp}`) | Generated arbitrary-order RCC (`cc2` … `cc6`, `ccsdt_gen`, RCCSDTQ) through `solver_arbitrary`, `generated_arbitrary_{prepare,runtime}` and `generated_kernel_registry` |
-| `run_uccgen` (`uccgen.cpp`, `ucc_blocks.cpp`) | Generated unrestricted CC (`ucc2` … `ucc6`), `PLANCK_CC_UCC=ON` builds only |
+| `run_rccgen` (`rccgen.{h,cpp}`) | Generated arbitrary-order RCC (`PostHF::RCCGEN`, ranks 2-6: `ccsd_gen` … `ccsdtqph_gen`, `cc2` … `cc6`, `ccsd(t)`) through `solver_arbitrary`, `generated_arbitrary_{prepare,runtime}` and `generated_kernel_registry` |
+| `run_uccgen` (`uccgen.cpp`, `ucc_blocks.cpp`) | Generated unrestricted CC (`PostHF::UCCGEN`, ranks 2-6: `uccsd_gen` … `uccsdtqph_gen`, `ucc2` … `ucc6`, `uccsd(t)`), `PLANCK_CC_UCC=ON` builds only. Keyword → route and rank: one table, `generated_cc_keyword` in `src/io/io.cpp` |
 
 <div align="justify">
 

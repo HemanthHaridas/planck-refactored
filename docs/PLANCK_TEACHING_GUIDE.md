@@ -20,8 +20,9 @@ self-consistent field theory. It implements:
 - RCCSD for canonical closed-shell RHF references
 - Small-system determinant-space teaching prototypes for RCCSDT, UCCSD, and UCCSDT
 - Coupled-cluster kernels **generated at build time** by `ccgen`, to arbitrary
-  excitation rank: restricted (`cc3`-`cc6`) and, opt-in, unrestricted
-  (`ucc2`-`ucc6`). Optionally dressed and OpenMP-threaded
+  excitation rank: restricted (ranks 2-6, `ccsd_gen` … `ccsdtqph_gen`, or
+  `cc2`-`cc6`) and, opt-in, unrestricted (`uccsd_gen` … `uccsdtqph_gen`, or
+  `ucc2`-`ucc6`). Optionally dressed and OpenMP-threaded
 - Analytic RHF, UHF, ROHF, RKS, UKS, RMP2, and UMP2 nuclear gradients
 - Analytic RMP2 nuclear gradients include Z-vector / CPHF relaxation
 - Analytic restricted global-double-hybrid gradients include KS Z-vector
@@ -6109,20 +6110,29 @@ typing a quadruples residual.
 
 ### The generated paths, and how to ask for them
 
-Every generated method maps to one enum value; the **excitation rank rides
-separately** on `OptionsSCF._cc_generated_rank`, so a new rank needs no new enum
-member and no new driver branch. The ceiling is `PLANCK_CC_MAXORDER` alone.
+There are two generated routes, `PostHF::RCCGEN` and `PostHF::UCCGEN`; the
+**excitation rank rides separately** on `OptionsSCF._cc_generated_rank`, so a new
+rank needs no new enum member and no new driver branch. The ceiling is
+`PLANCK_CC_MAXORDER` alone. One table in `src/io/io.cpp`
+(`generated_cc_keyword`) gives every keyword its route, rank and whether (T)
+follows, so the three cannot drift apart.
 
-| `correlation` keyword | rank | route |
+The spellings follow one rule on both sides: every rank 2–6 has an `X_gen` name
+and a numeric `ccN` / `uccN` name, and the plain method name means the generated
+route only where no hand-written solver claims it (ranks 4–6).
+
+| rank | restricted (`RCCGEN`) | unrestricted (`UCCGEN`, needs `-DPLANCK_CC_UCC=ON`) |
 |---|---|---|
-| `cc2` / `ccsd_gen` | 2 | generated **R**CC, in every build |
-| `ccsd(t)` | 2 + (T) | `cc2`, then the restricted perturbative triples |
-| `cc3` / `ccsdt_gen` | 3 | generated RCC — needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` |
-| `ccsdtq` / `cc4` | 4 | generated RCC (the usual entry) |
-| `ccsdtqp` / `cc5`, `cc6` | 5, 6 | generated RCC |
-| `ucc2` / `uccsd_gen` | 2 | generated **U**CC — needs `-DPLANCK_CC_UCC=ON` |
-| `uccsd(t)` | 2 + (T) | `ucc2`, then the unrestricted perturbative triples |
-| `ucc3` / `uccsdt_gen`, `ucc4` … `ucc6` | 3-6 | generated UCC |
+| 2 | `ccsd_gen`, `cc2` (every build) | `uccsd_gen`, `ucc2` |
+| 2 + (T) | `ccsd(t)` | `uccsd(t)` |
+| 3 | `ccsdt_gen`, `cc3` (needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`) | `uccsdt_gen`, `ucc3` |
+| 4 | `ccsdtq_gen`, `ccsdtq`, `cc4` | `uccsdtq_gen`, `uccsdtq`, `ucc4` |
+| 5 | `ccsdtqp_gen`, `ccsdtqp`, `cc5` | `uccsdtqp_gen`, `uccsdtqp`, `ucc5` |
+| 6 | `ccsdtqph_gen`, `ccsdtqph`, `cc6` | `uccsdtqph_gen`, `uccsdtqph`, `ucc6` |
+
+The numeric names mean rank N, **not** the CC2/CC3/CCn models of the literature:
+`cc3` is full CCSDT, not CC3. `docs/CC_APPROXIMATE_MODELS_SCOPE.md` scopes the real
+models and what to do about the names.
 
 Two asymmetries that look like oversights and are not:
 
@@ -6135,9 +6145,10 @@ Two asymmetries that look like oversights and are not:
   exists in every UCC build, because it is the comparison against
   hand-written UCCSD that validated the UCC route (it matches exactly), and
   it feeds `uccsd(t)`.
-- **`cc3` is not the same as `ccsdt`.** `ccsdt` runs the hand-written solver;
-  `cc3` runs the generated one, which produces *spatial* amplitudes and can
-  therefore write a `.ccamp` seed that a later `cc4` run warm-starts from.
+- **`ccsdt_gen` is not the same as `ccsdt`.** `ccsdt` runs the hand-written
+  solver; `ccsdt_gen` (`cc3`) runs the generated one, which produces *spatial*
+  amplitudes and can therefore write a `.ccamp` seed that a later rank-4 run
+  warm-starts from.
 
 **Validation.** `ucc4` reproduces the in-tree FCI energy to all ten digits on an
 open-shell system (B/STO-3G) — the strongest single result on the generated path,
@@ -10837,8 +10848,8 @@ driver.cpp
 | Tensor CC block cache | `src/post_hf/cc/tensor_backend_state.cpp` | `build_canonical_rhf_cc_reference`, `format_tensor_memory_summary` |
 | UCCSDT prototype | `src/post_hf/cc/ccsdt.cpp` | `prepare_uccsdt`, `run_uccsdt` |
 | RCCSDTQ generated tensor path | `src/post_hf/cc/rccgen.cpp`, `src/post_hf/cc/generated_arbitrary_runtime.cpp` | `run_rccgen`, `run_generated_arbitrary_order_iterations` |
-| Generated RCC driver (`cc3`-`cc6`) | `src/post_hf/cc/rccgen.cpp` | `run_rccgen` |
-| Generated UCC driver (`ucc2`-`ucc6`) | `src/post_hf/cc/uccgen.cpp` | `run_uccgen` |
+| Generated RCC driver (`PostHF::RCCGEN`, ranks 2-6) | `src/post_hf/cc/rccgen.cpp` | `run_rccgen` |
+| Generated UCC driver (`PostHF::UCCGEN`, ranks 2-6) | `src/post_hf/cc/uccgen.cpp` | `run_uccgen` |
 | Generated-kernel registry (what the emitted TUs plug into) | `src/post_hf/cc/generated_kernel_registry.cpp` | `make_generated_*_kernels` |
 | Arbitrary-order runtime (amplitudes, denominators, residual dispatch) | `src/post_hf/cc/generated_arbitrary_runtime.cpp`, `generated_arbitrary_prepare.cpp` | `run_generated_arbitrary_order_iterations` |
 | The CC equation generator itself | `python/ccgen/` | see `docs/CCGEN_TEACHING_GUIDE.md` |
@@ -10946,7 +10957,7 @@ driver.cpp
 | RCCSDT single-point energy | Determinant prototype for tiny systems plus tensor production/optimized entry points for larger restricted references; size-based default selected by `choose_rccsdt_backend`, optional override via `PLANCK_RCCSDT_BACKEND` |
 | UCCSDT single-point energy | Teaching-oriented small-system determinant-space prototype |
 | RCCSDTQ single-point energy | Generated restricted tensor kernels when built with CCSDTQ support |
-| Generated arbitrary-order RCC (`cc3`-`cc6`) | Complete. One enum value carrying the rank separately, so the ceiling is `PLANCK_CC_MAXORDER` alone. `cc3` needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`; gated by `lih_rccsdt_generated_sto3g`, `ch4_rccsdt_generated_sto3g`, `be_rccsdtq_sto3g` |
+| Generated arbitrary-order RCC (ranks 2-6) | Complete. One enum value (`RCCGEN`) carrying the rank separately, so the ceiling is `PLANCK_CC_MAXORDER` alone. `cc3` needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`; gated by `lih_rccsdt_generated_sto3g`, `ch4_rccsdt_generated_sto3g`, `be_rccsdtq_sto3g` |
 | Generated arbitrary-order UCC (`ucc2`-`ucc6`) | Complete behind `-DPLANCK_CC_UCC=ON` (default off: the UCC translation units roughly triple generated-kernel compile time). `ucc2` == hand-written UCCSD exactly; `ucc4` == in-tree FCI to all ten digits on open-shell B/STO-3G. Gated by `b_ucc{2,3,4}_sto3g`, which skip cleanly in a default build |
 | ccgen dressed-operator kernels | Complete for the `derived` route (`-DPLANCK_CC_DRESS_OPERATORS=ON`), measured ~3.5× faster solves. The `recognized` route is retired and produces wrong kernels |
 | OpenMP-threaded CC kernels | Complete behind `CCGEN_OMP_COLLAPSE=3` (default off). 3.22× at 4 threads with energies bitwise identical across thread counts. CC was the last hot path in Planck with no threading |

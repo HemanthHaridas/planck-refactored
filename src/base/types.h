@@ -79,8 +79,8 @@ namespace HartreeFock
         UCCSD,   // Unrestricted CCSD
         RCCSDT,  // Restricted CCSDT
         UCCSDT,  // Unrestricted CCSDT
-        RCCSDTQ, // Restricted CCSDTQ
-        UCCGEN,  // Unrestricted generated CC (ucc2/ucc3/ucc4); rank on _cc_generated_rank
+        RCCGEN,  // Restricted generated CC, any rank (ccsd_gen ... cc6); rank on _cc_generated_rank
+        UCCGEN,  // Unrestricted generated CC, any rank (uccsd_gen ... ucc6); rank on _cc_generated_rank
         CASSCF,  // Complete active space SCF
         RASSCF,  // Restricted active space SCF
         FCI,     // Full configuration interaction (whole MO space, RHF reference)
@@ -457,8 +457,8 @@ namespace HartreeFock
         double _diis_restart_factor = 2.0; // Restart DIIS when error grows by this factor (0 = off)
         double _cc_damping = 0.8;          // Coupled-cluster damping factor for tensor CC iterations
         double _cc_max_memory_gb = 4.0;    // Soft cap for large tensor-CC intermediates (0 = off)
-        int _cc_generated_rank = 4;        // Excitation rank for the generated arbitrary-order RCC path (cc4=4, cc5=5, cc6=6)
-        bool _cc_triples = false;          // Add the (T) correction after RCCSD (correlation ccsd(t))
+        int _cc_generated_rank = 4;        // Excitation rank for the generated RCCGEN/UCCGEN routes, set by the correlation keyword (io.cpp)
+        bool _cc_triples = false;          // Add (T) after the generated rank-2 CCSD (correlation ccsd(t) / uccsd(t))
         bool _cc_warm_start = true;        // Warm-start the generated arbitrary-order RCC path from a rank-(n-1) solve (cc_warm_start .false. = cold)
         std::string _rccsdt_backend = "auto"; // RCCSDT backend: auto (size-based), determinant, tensor, optimized (generated kernels)
 

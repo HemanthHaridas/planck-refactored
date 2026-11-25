@@ -141,7 +141,7 @@ from `hcore` UHF can land on the ²A₁ saddle.
 - **Fallback.** `ccsd_t.cpp` includes the generated file through
   `__has_include`. Without it, (T) returns a named error.
 - **Restricted driver.** `correlation ccsd(t)` maps to the generated RCC
-  path (RCCSDTQ enum) at rank 2 and sets `OptionsSCF::_cc_triples`. At
+  path (`PostHF::RCCGEN`) at rank 2 and sets `OptionsSCF::_cc_triples`. At
   convergence `run_rccgen` calls `compute_rccsd_t_energy` on its spatial
   t1/t2, logs `E_corr(CCSD)`, `E(T)` and (T)'s wall time on the
   `RCCSD(T) :` line, and prints `Total RCCSD(T) Energy` (runner metric
