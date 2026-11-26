@@ -107,7 +107,17 @@ def differentiate(terms: list[AlgebraTerm], name: str | int) -> list[AlgebraTerm
     result evaluates in t's (vir..., occ...) layout."""
     if isinstance(name, int):
         name = f"t{name}"
-    raw = []
+    return [t for block in differentiate_blocks(terms, name).values() for t in block]
+
+
+def differentiate_blocks(terms: list[AlgebraTerm], name: str) -> dict[str, list[AlgebraTerm]]:
+    """∂L/∂(factor *name*), grouped by the factor's space pattern (``oo``,
+    ``ov``, ``oovv``, ...): one list per block, each canonicalized and merged.
+
+    Free indices are in the factor's slot order. An amplitude has one block;
+    f and v have several, and the densities are these derivatives
+    (:func:`density_terms`)."""
+    raw: dict[str, list[AlgebraTerm]] = {}
     for term in terms:
         for pos, fac in enumerate(term.factors):
             if fac.name != name:
@@ -126,12 +136,32 @@ def differentiate(terms: list[AlgebraTerm], name: str | int) -> list[AlgebraTerm
             rest = [f.reindexed(rename) for k, f in enumerate(term.factors) if k != pos]
             free = tuple(rename[i] for i in fac.indices)
             summed = tuple(rename[i] for i in term.summed_indices if rename[i] not in free)
-            raw.append(_as_dummy(term, rest, free, summed, term.coeff))
-    buckets: dict = {}
-    order: list = []
-    for t in raw:
-        merge_term_into_buckets(canonicalize_term_to_fixed_point(t), buckets, order)
-    return [buckets[s] for s in order if buckets[s].coeff != 0]
+            block = "".join(i.space[0] for i in fac.indices)
+            raw.setdefault(block, []).append(_as_dummy(term, rest, free, summed, term.coeff))
+    out = {}
+    for block, ts in raw.items():
+        buckets: dict = {}
+        order: list = []
+        for t in ts:
+            merge_term_into_buckets(canonicalize_term_to_fixed_point(t), buckets, order)
+        kept = [buckets[s] for s in order if buckets[s].coeff != 0]
+        if kept:
+            out[block] = kept
+    return out
+
+
+def density_terms(lag: list[AlgebraTerm], spin: str = "gcc") -> dict[str, dict[str, list[AlgebraTerm]]]:
+    """The correlation parts of the unrelaxed densities, as ∂L/∂(integral):
+    ``{name: {block: terms}}`` for every f and v tensor of *spin*'s
+    vocabulary (``f``, ``v``; UCC ``f_aa``, ``v_abab``, ...).
+
+    At converged T and Λ, ∂L/∂f_pq is the correlation 1-RDM γ_qp (f enters L
+    linearly), and ∂L/∂v the matching two-body piece. Generate L from the
+    general-Fock equations (``canonical_fock=False``): the f_ov terms that
+    canonical Fock drops are exactly what D_ov is made of. Assembling total
+    RDMs (reference part, and f's own dependence on v) is the caller's."""
+    names = sorted({f.name for t in lag for f in t.factors if f.name[0] in "fv"})
+    return {n: differentiate_blocks(lag, n) for n in names}
 
 
 def lambda_equations(method: str, engine: str = "diagram", canonical_fock: bool = True,

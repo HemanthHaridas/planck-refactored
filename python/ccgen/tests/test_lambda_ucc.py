@@ -81,7 +81,7 @@ CH3 = "C 0 0 0; H 0 1.079 0; H 0.9345 -0.5395 0; H -0.9345 -0.5395 0"
 WATER = "O 0 0 0.117176; H 0 0.756950 -0.468703; H 0 -0.756950 -0.468703"
 
 
-def _pyscf_uccsd(atom, basis, charge, spin):
+def _pyscf_uccsd(atom, basis, charge, spin, return_cc=False):
     from pyscf import ao2mo, cc, gto, scf
 
     mol = gto.M(atom=atom, basis=basis, charge=charge, spin=spin, verbose=0)
@@ -114,7 +114,7 @@ def _pyscf_uccsd(atom, basis, charge, spin):
         "l1_aa": l1a, "l1_bb": l1b, "l2_aaaa": l2aa, "l2_abab": l2ab, "l2_bbbb": l2bb,
     }
     dims = dict(noa=noa, nva=Ca.shape[1] - noa, nob=nob, nvb=Cb.shape[1] - nob)
-    return tensors, dims
+    return (tensors, dims, mycc) if return_cc else (tensors, dims)
 
 
 @unittest.skipUnless(HAVE_PYSCF, "needs PySCF")

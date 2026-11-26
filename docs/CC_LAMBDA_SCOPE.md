@@ -217,6 +217,34 @@ spin)` with `spin` in `gcc`/`rcc`/`ucc`; every residual key gets its own λ
   - Energy check: E_CC = Σ h D + ¼ Σ g Γ (convention to be fixed) to
     roundoff.
 
+**Status (2026-11-26): densities built and gated in ccgen; nothing in
+Planck yet.** `density_terms(lag, spin)` returns ∂L/∂(f or v block) per
+space block (`differentiate_blocks`), generated from the general-Fock
+equations (the f_ov terms canonical Fock drops are what D_ov is made of).
+Gates in `python/ccgen/tests/test_lambda_density.py`: total RDMs are
+assembled by the chain rule through E = E_ref(h, g) + L(f(h, g), v(g)) and
+compared with PySCF's `make_rdm1`/`make_rdm2` element by element, plus the
+energy identity E = Σ h D + ½ Σ g Γ:
+
+| | 1-RDM | 2-RDM | E from RDMs − E_CC |
+|---|---|---|---|
+| RCC water STO-3G (our spatial λ) | 7.8e-11 | 1.6e-10 | −2.6e-13 |
+| RCC C1 H2O2 6-31G | 1.2e-10 | 2.5e-10 | 1.7e-13 |
+| UCC CH3 STO-3G (PySCF's λ) | 1.7e-18 | 1.1e-16 | −7.2e-12 |
+| UCC water⁺ 6-31G | 1.7e-18 | 1.1e-16 | −7.7e-12 |
+
+The RCC rows use our spatial λ against PySCF's λ, so they show the
+densities do not depend on the λ parametrization. Dropping one density term
+misses by 1e-4 to 8e-2 (RCC D_ov, Γ_oovv; UCC f_aa, v_abab).
+
+**Left for Planck (3b–3e):** Λ kernels that read t and λ (one more
+`amplitudes`-like argument and `l<rank>` view bindings in the emitter), a
+Λ solver on the Jacobi/DIIS harness with T frozen (its diagonal: the
+orbital-energy denominators times a per-rank constant fixed by the λ
+weight), density kernels from `density_terms` with the chain-rule assembly
+above in C++, and a driver keyword with the unrelaxed dipole and natural
+occupations as output.
+
 ### 4. Consumers (each its own decision)
 
 - **ΛCCSD(T)**: (T) with a Λ-dependent left vector. Gate against PySCF
