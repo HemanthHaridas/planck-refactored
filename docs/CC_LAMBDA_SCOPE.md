@@ -125,6 +125,24 @@ Term counts for Λ-CCSD against a published spin-orbital list (Gauss–Stanton
 or Crawford–Schaefer) are a further check; transcribe, do not rebuild from
 memory.
 
+**Status (2026-11-26): built, gates 1 and 3 pass; gate 2 and the term
+counts are not done.** `python/ccgen/lagrangian.py` (`lagrangian_terms`,
+`differentiate`, `lambda_equations`); gates in
+`python/ccgen/tests/test_lambda_equations.py`.
+- Gate 3 (complex step, ε = 1e-20i): Σ G·D equals dL/dε to ≤ 3.7e-15 at
+  every rank of CCSD and CCSDT; dropping one G term fails it.
+- Gate 1: at PySCF 2.15 GCCSD's converged t and λ, A(G) ≤ 3e-11 on water
+  STO-3G and C1 H2O2 6-31G; 1 % on λ2 makes it nonzero. PySCF's λ is
+  matched with no rescaling, so the 1/(n!)² weight is PySCF's
+  normalization; a 1/n! weight fails both fixtures (gate 3 cannot see it).
+- Found: the gate must use the general-Fock equations
+  (`canonical_fock=False`). PySCF's SCF leaves |f_ov| = 1.1e-8 on H2O2
+  6-31G, and with the f_ov terms dropped the rank-1 residual sits exactly
+  there (1.06e-8) at any λ tolerance.
+- Term counts (spin-orbital, canonical Fock, after merge): Λ-CCSD 54 / 32
+  (λ1 / λ2 equations); Λ-CCSDT 193 / 91 / 32; Λ-CCSDTQ 752 / 262 / 91 / 32.
+  Generating Λ-CCSDTQ from the T equations takes 1.3 s.
+
 ### 2. Closed-shell and UHF lowering
 
 Two ways, to be decided by the step-1 gates:
