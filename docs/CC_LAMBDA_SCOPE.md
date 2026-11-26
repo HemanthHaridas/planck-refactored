@@ -37,49 +37,108 @@ One generator gives all of these at any rank, which is the reason to do it
 in ccgen rather than by hand: hand-written Λ-CCSD exists in every code,
 Λ-CCSDT and Λ-CCSDTQ almost nowhere.
 
-## What ccgen has, and what is missing (checked 2026-11-25)
+## Route: differentiate the Lagrangian, do not project again
+
+The T equations are already generated, and in production by the diagram
+engine (`PLANCK_CC_ENGINE` defaults to `diagram`; it is 3.0 s against
+Wick's 615 s at CCSDT, `docs/CCGEN_DIAGRAM_REPRESENTATION.md`). The
+Lagrangian is built from them:
+
+    L(T, Λ) = E(T) + Σ_μ λ_μ R_μ(T)
+
+so the Λ residual is a derivative of terms that already exist:
+
+    0 = ∂L/∂t_ν = ∂E/∂t_ν + Σ_μ λ_μ ∂R_μ/∂t_ν
+
+and ∂R_μ/∂t_ν = ⟨μ| [H̄, τ_ν] |0⟩, the commutator form above. Each Λ term
+comes from one E or R term by removing one t factor (its indices become
+the free indices ν) and, for R, contracting the residual's free indices
+with λ_μ. No new operator, projector or connectivity rule is needed: the
+terms where Λ touches only τ_ν are those where the removed t carried the
+residual's external lines, and they come out of the algebra.
+
+Two other routes were considered:
+- **Wick projection of ⟨0|(1 + Λ)[H̄, τ_ν]|0⟩**: needs a de-excitation
+  operator, a ket excitation with free indices, and a linked-but-not-connected
+  projection (the existing helpers drop disconnected products). And it
+  costs Wick's time at the ranks the scope is for. Kept as a cross-check at
+  Λ-CCSD only (step 1 gate).
+- **Λ vertices in the diagram encoding**: a new vertex type in D1, its
+  well-formedness and orbit weights. More work than differentiation for
+  the same terms.
+
+## What ccgen has, and what is missing (checked 2026-11-26)
 
 | Piece | Status |
 |---|---|
-| T_n as a weighted operator string (`build_tn`, `python/ccgen/cluster.py`) | present |
-| H̄ by BCH commutators (`bch_levels`, `python/ccgen/algebra.py`) | present |
-| Bra projectors ⟨Φ_μ\| with free indices (`nfold_projector`, `python/ccgen/project.py`) | present |
-| Full contraction of an arbitrary operator string (`python/ccgen/wick.py`) | present; it already contracts projector + H̄ strings, and nothing in it assumes the excitation direction |
-| Λ_n, the de-excitation operator | **missing**: `build_tn` with the strings swapped (creators on occupied, annihilators on virtual), tensor `l<n>` |
-| A ket excitation τ_ν\|0⟩ with free indices | **missing**: the mirror of `nfold_projector` |
-| The Λ connectivity rule | **missing**: H̄ must connect to τ_ν (the commutator); Λ may connect to H̄, τ_ν or both. `iter_projected_terms_from_terms(require_connected=...)` is all-or-nothing, and `bucket_terms_by_manifold` drops disconnected products because it assumes BCH commutators (`docs/CCSD_T_SCOPE.md`), so Λ needs its own projection path |
-| Spin adaptation of λ (`spin_adapt_equations`, `ucc_adapt_equations`) | **missing**: λ has t's permutational symmetry with occupied and virtual roles swapped; the adapter knows only `t<n>` names |
+| E and R_μ as `AlgebraTerm` lists from the diagram engine (`generate_cc_equations(..., engine="diagram")`, manifolds `energy`, `singles`, …) | present; note the Python default is still `engine="wick"`, so pass it |
+| Canonicalize and merge a term list (`canonicalize_term_to_fixed_point`, `merge_term_into_buckets`) | present; the diagram engine already runs them |
+| Wick projection (`python/ccgen/wick.py`, `bch_levels`, `nfold_projector`) | present; used only for the Λ-CCSD cross-check |
+| ∂/∂t_ν over an `AlgebraTerm` (`python/ccgen/project.py`: `coeff`, `factors`, `free_indices`, `summed_indices`) | **missing**: the core of step 1 |
+| λ contracted onto R's free indices, tensor `l<n>` | **missing**: one factor added per R term; λ_n has t_n's index slots with the occupied and virtual roles swapped |
 | Emitted Λ kernels and runtime | **missing**: kernels that read both t and λ, a second amplitude set, a solver with T frozen |
-| Density expressions | **missing**: same machinery with {p† q} or {p† q† s r} in place of H |
+| Density expressions | **missing**: the same derivative, taken in a perturbation of H (step 3) |
 
 ## Steps
 
-### 1. Spin-orbital Λ equations (generator only)
+### 1. Spin-orbital Λ equations by differentiation (generator only)
 
-- `build_ln(n)`: Λ_n = (1/n!)² Σ λ_{a…}^{i…} i† … a … (de-excitation), tensor
-  `l<n>`, as `build_tn` with the operator strings swapped.
-- `nfold_excitation(n)`: τ_ν|0⟩ with free indices, the mirror of
-  `nfold_projector`.
-- A projection over ⟨0| (1 + Λ) H̄ τ_ν |0⟩ − ⟨0| (1 + Λ) τ_ν H̄ |0⟩ that
-  keeps exactly the terms where H̄ connects to τ_ν. The second product is
-  what the commutator subtracts; with the vacuum on the right it reduces to
-  E_CC times ⟨0|Λ τ_ν|0⟩, so keeping only H̄–τ_ν-connected terms is the
-  same thing. **Check that reduction by evaluating both forms numerically**
-  before relying on it.
-- Truncation: for CC with ranks up to n, Λ has ranks up to n, and H̄ up to
-  the BCH order that can still reach a full contraction.
+- **Input.** `generate_cc_equations(method, engine="diagram")`, spin-orbital
+  (GCC), at the same `canonical_fock` setting as production. The f_ov terms
+  it drops multiply f_ov = 0, so their derivatives vanish too.
+- **`differentiate(term, rank)`.** For each factor `t<rank>` in the term
+  (a term with two t2 factors gives two derivative terms): remove it, rename
+  its indices to the free ν indices, move them from `summed_indices` to
+  `free_indices`. Terms without a `t<rank>` factor contribute nothing.
+- **Amplitude symmetry.** t_n is antisymmetric within its occupied and its
+  virtual slots, so ∂/∂ of a unique element is a sum over the (n!)² orderings
+  with signs. Equivalently: differentiate as if every element were
+  independent, then antisymmetrize the result over ν. Write down the
+  convention once (L sums λ over all index tuples with (1/n!)², λ
+  antisymmetric, as for t) and fix every factor from it. This is where a
+  wrong 2 or a transpose comes from; the gate below catches it.
+- **The λ contraction.** For an R_μ term, add a factor `l<rank(μ)>` over
+  R's free indices (now summed) and multiply by R's (1/n!)² weight. The
+  energy terms give the inhomogeneous ∂E/∂t_ν.
+- **Then** canonicalize and merge as the diagram engine does. Differentiate
+  the undressed terms; dressing and the factorizer run afterwards, on the Λ
+  terms, as they do on the T terms.
+- **Rank.** For CC up to rank n, ν and μ run over ranks 1..n.
 
-**Gate.** PySCF `gccsd_lambda.update_lambda` at PySCF's converged t and λ:
-the generated spin-orbital Λ residual, evaluated in numpy at those
-amplitudes, is zero to ~1e-12, and nonzero at a perturbed λ. Do this on
-water STO-3G and C1 H2O2 6-31G, the fixtures the (T) gates use. Term counts
-for Λ-CCSD against a published spin-orbital list (Gauss–Stanton or
-Crawford–Schaefer); transcribe, do not rebuild from memory.
+**Gates.**
+1. **Against PySCF.** `gccsd_lambda.update_lambda` at PySCF's converged t
+   and λ: the generated spin-orbital Λ residual, evaluated in numpy at those
+   amplitudes, is zero to ~1e-12, and nonzero at a perturbed λ. Water
+   STO-3G and C1 H2O2 6-31G, the fixtures the (T) gates use.
+2. **Against Wick at Λ-CCSD.** The Wick projection of
+   ⟨0|(1 + Λ)[H̄, τ_ν]|0⟩ and the differentiated terms give the same
+   residual at random antisymmetric t and λ (residual equality, not term
+   equality; the two paths split terms differently, as the diagram and Wick
+   T equations do).
+3. **Rank-independent.** ∂L/∂t_ν by central differences on the T residual
+   code (perturb one antisymmetrized t element, evaluate E + λ·R) against
+   the generated Λ residual, at random t and λ. This needs only the T
+   equations, so it runs at every rank, including where PySCF has nothing.
+   Mutation-check it: drop one derivative term and see it fail.
+
+Term counts for Λ-CCSD against a published spin-orbital list (Gauss–Stanton
+or Crawford–Schaefer) are a further check; transcribe, do not rebuild from
+memory.
 
 ### 2. Closed-shell and UHF lowering
 
-- Teach `spin_adapt_equations` and `ucc_adapt_equations` the λ tensors:
-  the same symmetry as t, with the occupied and virtual slots swapped.
+Two ways, to be decided by the step-1 gates:
+- **Differentiate after spin adaptation** (preferred if it holds): apply
+  step 1's derivative to the spin-adapted RCC (or UCC) E and R_μ. Then λ is
+  the multiplier of the spatial parametrization and never enters the spin
+  adapter. Its λ is not PySCF's (different metric on the spatial residuals),
+  so gate it by the parametrization-independent quantities: the
+  rank-independent FD gate, and the densities in step 3.
+- **Differentiate the spin-orbital terms, then adapt**: teach
+  `spin_adapt_equations` and `ucc_adapt_equations` the λ tensors (t's
+  symmetry with the occupied and virtual slots swapped). The retired
+  dressed route shows adaptation composing wrongly with another transform,
+  so gate it after adaptation.
 - **Gates.** Spatial Λ residual against PySCF `ccsd_lambda.update_lambda`
   (RCCSD) and `uccsd_lambda` (UCCSD), same form as step 1. PySCF's λ
   convention (`l1[i,a]`, `l2[i,j,a,b]`, its normalization) must be
@@ -97,7 +156,10 @@ Crawford–Schaefer); transcribe, do not rebuild from memory.
   T residuals, so the GEMM lowering and the factorizer apply unchanged.
   Measure the Λ iteration cost against the T iteration; it should be about
   the same.
-- **Densities.** Generate D and Γ, emit them as kernels, and assemble the
+- **Densities.** D and Γ are the same derivative taken in another variable:
+  with H → H + εX, D_pq or Γ_pqrs is ∂L/∂X_pq or ∂L/∂X_pqrs at fixed T and
+  Λ. So differentiate E and R_μ with respect to the Fock and ERI factors,
+  as step 1 does with respect to t. Emit them as kernels, and assemble the
   unrelaxed 1-RDM and 2-RDM. Output: unrelaxed dipole and natural
   occupations.
 - **Gates.**
@@ -126,10 +188,15 @@ Crawford–Schaefer); transcribe, do not rebuild from memory.
 
 ## Risks
 
-- **Connectivity.** The existing projection helpers assume BCH-shaped
-  terms and drop disconnected products. Λ terms are "disconnected but
-  linked" (Λ need not touch H̄), so reusing those helpers silently drops
-  terms. Step 1's numeric gate is what catches it.
+- **Symmetry weights in the derivative.** The differentiation route has no
+  connectivity problem, but each term's derivative needs the right weight
+  over equivalent amplitude orderings and repeated t factors. A wrong weight
+  gives a residual that still converges to a wrong λ. Gates 1 and 3 of
+  step 1 catch it; the energy does not.
+- **Connectivity, Wick cross-check only.** The existing projection helpers
+  drop disconnected products, and Λ terms are linked but not connected (Λ
+  need not touch H̄). The Wick cross-check needs its own projection path;
+  reusing the helpers silently drops terms.
 - **Conventions.** λ normalization and index order differ between codes
   (PySCF stores `l2[i,j,a,b]`, a de-excitation amplitude written with
   occupied first). A wrong factor or transpose can still give a converged,
