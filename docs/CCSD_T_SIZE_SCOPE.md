@@ -462,11 +462,66 @@ intermediates). The restricted gain is small: two kernels, and its merged
 which can still repeat a struct member (passing the struct into the
 builders would remove that).
 
+**Where UCC time goes after U3a** (same profile method, 4660 main-thread
+samples; the run's phase shares are as before U3a). The UCC CCSD residual,
+1809 samples:
+
+| part | samples | share |
+|---|---|---|
+| building the intermediates once (`build_ucc_ccsd_residual_ops`) | 753 | 42 % |
+| doubles kernels (αβαβ 360, αααα 332, ββββ 234) | 926 | 51 % |
+| singles kernels | 123 | 7 % |
+
+Of the builder time, t1·v builders are 46 % (the three t1·ovvv builders
+alone 193 samples), t2·v 37 %, builders with two or more amplitudes 18 %.
+
+**U3b plan: the merges for UCC.** `merge_common_operand_reads` (R2, R2b)
+runs only for the restricted emit (`if spin_adapt and not ucc` in
+`print_cpp_planck`). It matches terms by one operand name and a list of
+that operand's equivalent index orders ("spellings"); UCC has six such
+operands (`t2_aaaa`, `t2_abab`, `t2_bbbb`, `v_aaaa`, `v_abab`, `v_bbbb`).
+A dry run of the existing pass on the factorized UCC CCSD equations, one
+operand at a time, cost modelled at o 5, v 54:
+
+| | before | after |
+|---|---|---|
+| kernel terms | 322 | 194 |
+| terms ≥ o³v³ | 68 | 25 |
+| modelled kernel cost | 2.19e9 | 1.20e9 (1.82×) |
+
+Almost all of it is t2 with the identity spelling (terms removed: αααα 34,
+αβαβ 51, ββββ 40); the same-spin double swap (b,a,j,i) (sign +1, valid for
+αααα and ββββ, not αβαβ) adds ~nothing, and R2b on v merges 3. So U3b is:
+run the existing pass over each UCC amplitude block, spellings identity
+(plus the double swap on same-spin blocks), then v. Expected: kernels
+1049 → ~580 samples, the residual ~1.35×, about 0.115 → 0.085 s per
+iteration, before the cost of building the merged sums (|Y| per member,
+small) and GEMM rates that need not follow the flop model.
+
+What to check while building it:
+- **Spellings must be true symmetries of the block.** A single swap on a
+  same-spin block is a symmetry with sign −1, which the pass cannot carry;
+  pass only sign +1 spellings.
+- **The merged sums Y are new derived operators.** The UCC emitter takes
+  their slot spins from their definitions (`_operator_slot_spins`); check
+  each Y's spins are consistent (the emitter refuses a conflict).
+- **Gates:** `UCCRewritePreservesValueTests` (each rewritten term exact to
+  1e-10, mutation-checked) extended to the merged equations; the UCC
+  regression cases; identical output across 1/2/4/8 threads (not against
+  the pre-U3b binary: merging reassociates sums); the UCC emit pins move.
+
+**After U3b, the builders are the larger half.** 42 % of the residual is
+building intermediates, and merges do not remove any. A different lever,
+not scoped: absorb t1 into the integrals once per iteration
+(t1-dressed / T1-transformed Hamiltonian), which removes the t1·v and
+multi-t1 builders (64 % of builder time) at the cost of one integral
+transform per iteration. Measure that transform first.
+
 ## Open, in order
 
 | # | Step | Expected |
 |---|---|---|
-| U3b | UCC: the merges (R2, R2b) | builders are 48 % of UCC CCSD |
+| U3b | UCC: the t2 merge (R2) per amplitude block, then R2b on v (plan below) | modelled UCC CCSD kernel cost 1.82×; ~1.35× on the residual if the builders stay |
 | U4 | UCC (T): the restricted kernel's layouts and GEMM blocks for each spin block | UCC (T) is 25 % of the run |
 | R3c | Accelerate `dgemm` behind the GEMM helper | 2.5–4× on the GEMMs; a build decision |
 | R2c | Share linearly dependent combinations of builders | 4 o³v³ builders → 3 contractions (≤ 1.06×) |
