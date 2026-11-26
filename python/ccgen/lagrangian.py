@@ -29,17 +29,43 @@ from math import factorial
 
 from .canonicalize import canonicalize_term_to_fixed_point, merge_term_into_buckets
 from .indices import Index
-from .project import AlgebraTerm, _NAME_TO_RANK
+from .project import AlgebraTerm
 from .tensors import Tensor
 
 
-def _lambda_tensor(free: tuple[Index, ...]) -> Tensor:
+SPINS = ("gcc", "rcc", "ucc")
+
+
+def _lambda_tensor(free: tuple[Index, ...], name: str, spin: str) -> Tensor:
     occ = [i for i in free if i.space == "occ"]
     vir = [i for i in free if i.space == "vir"]
     n = len(occ)
     assert n == len(vir), f"residual free indices are not an excitation: {free}"
-    groups = (tuple(range(n)), tuple(range(n, 2 * n))) if n > 1 else ()
-    return Tensor(f"l{n}", tuple(i.as_dummy() for i in occ + vir), groups)
+    # Only the GCC λ carries its antisymmetry in the tensor; RCC (abab) and
+    # UCC blocks are plain arrays, like their t factors, and an antisymmetric
+    # same-spin UCC λ is imposed on the solution instead.
+    groups = (tuple(range(n)), tuple(range(n, 2 * n))) if spin == "gcc" and n > 1 else ()
+    return Tensor(name, tuple(i.as_dummy() for i in occ + vir), groups)
+
+
+def _weight(manifold: str, n: int, spin: str) -> Fraction:
+    """1/(n!)², except UCC: 1/(n_α! n_β!)², the number of spin-orbital tuples
+    one stored block element stands for divided into 1/(n!)². With it the UCC
+    Lagrangian is the GCC one restricted to stored blocks, so UCC λ is the
+    spin-orbital λ (PySCF's UCCSD λ). For RCC any weight is valid; it only
+    rescales λ."""
+    if spin == "ucc":
+        occ_tag = manifold.split("_", 1)[1][:n]
+        na = occ_tag.count("a")
+        return Fraction(1, (factorial(na) * factorial(n - na)) ** 2)
+    return Fraction(1, factorial(n) ** 2)
+
+
+def _lambda_name(manifold: str, n: int) -> str:
+    """``l<n>``, plus the sector tag of a rank >= 4 residual key
+    (``quadruples_aaabaaab`` -> ``l4_aaabaaab``), mirroring ``t4_aaabaaab``."""
+    tag = manifold.split("_", 1)[1] if "_" in manifold else ""
+    return f"l{n}_{tag}" if tag else f"l{n}"
 
 
 def _as_dummy(term: AlgebraTerm, factors, free, summed, coeff) -> AlgebraTerm:
@@ -47,30 +73,40 @@ def _as_dummy(term: AlgebraTerm, factors, free, summed, coeff) -> AlgebraTerm:
                        True, term.provenance)
 
 
-def lagrangian_terms(equations: dict[str, list[AlgebraTerm]]) -> list[AlgebraTerm]:
-    """Scalar terms of L: the energy terms, and λ_n contracted onto each R_n
-    term's free indices with weight 1/(n!)²."""
+def lagrangian_terms(equations: dict[str, list[AlgebraTerm]],
+                     spin: str = "gcc") -> list[AlgebraTerm]:
+    """Scalar terms of L: the energy terms, and λ contracted onto each
+    residual term's free indices (weight: :func:`_weight`).
+
+    ``spin`` says what *equations* are: ``gcc`` (spin-orbital), ``rcc``
+    (:func:`spin_adapt_equations`) or ``ucc`` (:func:`ucc_adapt_equations`).
+    Every residual key gets its own λ, named after it: ``doubles`` -> ``l2``,
+    ``quadruples_aaabaaab`` -> ``l4_aaabaaab``, ``doubles_abab`` -> ``l2_abab``."""
+    assert spin in SPINS, spin
     terms = list(equations.get("energy", []))
     for manifold, residual in equations.items():
-        if _NAME_TO_RANK.get(manifold, 0) == 0:
+        if manifold == "energy":
             continue
         for t in residual:
             free = t.free_indices
-            dmap = {i: i.as_dummy() for i in free}
-            factors = [f.reindexed(dmap) for f in t.factors] + [_lambda_tensor(free)]
             n = len(free) // 2
+            dmap = {i: i.as_dummy() for i in free}
+            lam = _lambda_tensor(free, _lambda_name(manifold, n), spin)
+            factors = [f.reindexed(dmap) for f in t.factors] + [lam]
             terms.append(_as_dummy(t, factors, (),
                                    tuple(dmap[i] for i in free) + t.summed_indices,
-                                   t.coeff / factorial(n) ** 2))
+                                   t.coeff * _weight(manifold, n, spin)))
     return terms
 
 
-def differentiate(terms: list[AlgebraTerm], rank: int) -> list[AlgebraTerm]:
-    """G = ∂L/∂t<rank> over every element, canonicalized and merged.
+def differentiate(terms: list[AlgebraTerm], name: str | int) -> list[AlgebraTerm]:
+    """G = ∂L/∂(amplitude *name*) over every element, canonicalized and merged.
+    An int n means ``t<n>``; a sector amplitude is named (``t4_aaabaaab``).
 
     Free indices are named a, b, ... / i, j, ... in t's slot order, so the
     result evaluates in t's (vir..., occ...) layout."""
-    name = f"t{rank}"
+    if isinstance(name, int):
+        name = f"t{name}"
     raw = []
     for term in terms:
         for pos, fac in enumerate(term.factors):
@@ -98,12 +134,32 @@ def differentiate(terms: list[AlgebraTerm], rank: int) -> list[AlgebraTerm]:
     return [buckets[s] for s in order if buckets[s].coeff != 0]
 
 
-def lambda_equations(method: str, engine: str = "diagram",
-                     canonical_fock: bool = True) -> dict[str, list[AlgebraTerm]]:
-    """Spin-orbital Λ equations for *method*, one G list per manifold name
-    (``singles``, ``doubles``, ...). The Λ residual is A(sum of the terms)."""
-    from .generate import generate_cc_equations, manifold_name, parse_cc_level
+def lambda_equations(method: str, engine: str = "diagram", canonical_fock: bool = True,
+                     spin: str = "gcc") -> dict[str, list[AlgebraTerm]]:
+    """Λ equations for *method*, one G list per residual key, the derivative
+    with respect to the amplitude that key solves for (``doubles`` -> t2,
+    ``quadruples_aaabaaab`` -> t4_aaabaaab, ``doubles_abab`` -> t2_abab).
+
+    The Λ residual is the sum of the terms, symmetrized over the amplitude's
+    own symmetry: antisymmetrized for GCC and same-spin UCC blocks, the pair
+    symmetry for RCC. ``rcc``: λ is the multiplier of the spatial
+    parametrization (not PySCF's RCCSD λ). ``gcc`` and ``ucc``: λ is PySCF's
+    (GCCSD, UCCSD) λ."""
+    from .generate import generate_cc_equations
 
     equations = generate_cc_equations(method, engine=engine, canonical_fock=canonical_fock)
-    lag = lagrangian_terms(equations)
-    return {manifold_name(r): differentiate(lag, r) for r in parse_cc_level(method)}
+    if spin == "rcc":
+        from .spin import spin_adapt_equations
+        equations = spin_adapt_equations(equations)
+    elif spin == "ucc":
+        from .spin import ucc_adapt_equations
+        equations = ucc_adapt_equations(equations)
+    lag = lagrangian_terms(equations, spin)
+    out = {}
+    for key, residual in equations.items():
+        if key == "energy":
+            continue
+        n = len(residual[0].free_indices) // 2
+        tag = key.split("_", 1)[1] if "_" in key else ""
+        out[key] = differentiate(lag, f"t{n}_{tag}" if tag else f"t{n}")
+    return out

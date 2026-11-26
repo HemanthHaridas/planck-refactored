@@ -162,6 +162,29 @@ Two ways, to be decided by the step-1 gates:
   convention (`l1[i,a]`, `l2[i,j,a,b]`, its normalization) must be
   matched explicitly; write the mapping down where it is first used.
 
+**Status (2026-11-26): built by differentiating after adaptation, for both
+RCC and UCC; λ never enters the spin adapters.** `lagrangian_terms(eqs,
+spin)` with `spin` in `gcc`/`rcc`/`ucc`; every residual key gets its own λ
+(`l2`, `l4_aaabaaab`, `l2_abab`).
+- **RCC** (`tests/test_lambda_spatial.py`). The spatial λ is not PySCF's,
+  so it is gated on the unrelaxed energy derivative: Λ solved by GMRES at
+  PySCF RCCSD's converged t, then dL/dε for a random Fock perturbation
+  against a four-point FD of PySCF's own E_corr with `eris.fock += εX`.
+  Water STO-3G 4.8e-10, C1 H2O2 6-31G 5.6e-9 (the FD's noise); dropping one
+  λ2-equation term misses by 9e-2. The spatial E_corr and T residuals
+  reproduce PySCF at its t first, which pins the tensor conventions.
+- **UCC** (`tests/test_lambda_ucc.py`). Weight 1/(n_α! n_β!)² per block makes
+  the UCC Lagrangian the GCC one restricted to stored blocks, so UCC λ is
+  PySCF's UCCSD λ unscaled: at PySCF's converged t and λ every block's
+  residual is ≤ 1.0e-10 (CH3 STO-3G, water⁺ 6-31G); the 1/(n!)² weight on
+  the αβαβ block misses by 8e-2.
+- Complex step: exact (≤ 5.4e-15) for every RCC and UCC amplitude block at
+  CCSD and CCSDT, t3 spin blocks included. RCC Λ-CCSDT 795 / 1141 / 345
+  terms, UCC up to 1133 per block, both generated in under 3 s.
+- Not gated yet: RCC and UCC rank ≥ 4 sector blocks numerically (the
+  derivative is name-driven, so `t4_aaabaaab` takes the same path), and the
+  densities (step 3).
+
 ### 3. Λ solver and densities in Planck
 
 - **Runtime.** A λ amplitude set of the same type as t

@@ -249,10 +249,11 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     ccgen at any rank, then the Λ solver, unrelaxed 1-/2-RDMs, ΛCCSD(T)
     and CCSDT(Q)_Λ; the base for analytic CC gradients. Λ comes from
     differentiating L = E + Σ λ R built from the diagram engine's T
-    equations. Step 1 (spin-orbital Λ, `python/ccgen/lagrangian.py`) is
-    built and matches PySCF GCCSD's λ to 3e-11 with a complex-step gate
-    at every rank. Open: the Wick cross-check at Λ-CCSD, the spatial and
-    UHF lowering (step 2), the Λ solver and densities in Planck (step 3).
+    equations. Steps 1–2 are built (`python/ccgen/lagrangian.py`):
+    spin-orbital Λ matches PySCF GCCSD's λ to 3e-11, UCC Λ PySCF UCCSD's
+    λ to 1e-10 unscaled, and RCC Λ the FD energy derivative of PySCF RCCSD
+    to 6e-9; complex-step exact through CCSDT. Open: the Λ solver, emitted
+    kernels and densities in Planck (step 3).
   - CC2, CC3, CCn and CCSDT-n (`docs/CC_APPROXIMATE_MODELS_SCOPE.md`): one
     per-term perturbation-order filter in ccgen; worth building with an
     excited-state CC scope. Its step 0 is a naming defect today: `ccN` /

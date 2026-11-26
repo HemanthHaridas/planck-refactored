@@ -240,8 +240,9 @@ def ucc_resolve_factor(factor, tensors, dims):
             f"ucc_resolve_factor: block tag {tag!r} has {len(tag)} spins but "
             f"{name!r} has {len(factor.indices)} slots.")
 
-    if root.startswith("t"):
-        # amplitudes are stored per block, already in (vir..., occ...) layout
+    if root.startswith(("t", "l")):
+        # amplitudes (and Λ multipliers, `l2_abab`) are stored per block, no
+        # combined space to slice
         return array
 
     # v / f are stored over the combined per-spin orbital space, so each axis is
