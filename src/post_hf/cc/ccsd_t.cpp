@@ -167,24 +167,28 @@ namespace HartreeFock::Correlation::CC
         using UccBlockFn = void (*)(int, int, int, const CanonicalRHFCCReference &,
                                     const TensorCCBlockCache &, const ArbitraryOrderRCCAmplitudes &,
                                     double *);
+        // U4: W per item as shared elementary GEMMs on layouts made once per (T).
+        using UccTripleFn = void (*)(int, int, int, const CanonicalRHFCCReference &,
+                                     const UCCSDTripleLayouts &, double *);
         using UccFullFn = Tensor6D (*)(const CanonicalRHFCCReference &, const TensorCCBlockCache &,
                                        const ArbitraryOrderDenominatorCache &,
                                        const ArbitraryOrderRCCAmplitudes &);
         struct UccTriplesBlock
         {
             const char *tag;
-            UccBlockFn w_block, v_block;
+            UccTripleFn w_triple;
+            UccBlockFn v_block;
             UccFullFn w_full, v_full;
             double weight;
         };
         const std::array<UccTriplesBlock, 4> kUccBlocks{{
-            {"aaaaaa", compute_ucc_ccsd_t_W_aaaaaa_block, compute_ucc_ccsd_t_V_aaaaaa_block,
+            {"aaaaaa", compute_ucc_ccsd_t_W_aaaaaa_triple, compute_ucc_ccsd_t_V_aaaaaa_block,
              compute_ucc_ccsd_t_W_aaaaaa_residual, compute_ucc_ccsd_t_V_aaaaaa_residual, 1.0 / 36.0},
-            {"aabaab", compute_ucc_ccsd_t_W_aabaab_block, compute_ucc_ccsd_t_V_aabaab_block,
+            {"aabaab", compute_ucc_ccsd_t_W_aabaab_triple, compute_ucc_ccsd_t_V_aabaab_block,
              compute_ucc_ccsd_t_W_aabaab_residual, compute_ucc_ccsd_t_V_aabaab_residual, 0.25},
-            {"abbabb", compute_ucc_ccsd_t_W_abbabb_block, compute_ucc_ccsd_t_V_abbabb_block,
+            {"abbabb", compute_ucc_ccsd_t_W_abbabb_triple, compute_ucc_ccsd_t_V_abbabb_block,
              compute_ucc_ccsd_t_W_abbabb_residual, compute_ucc_ccsd_t_V_abbabb_residual, 0.25},
-            {"bbbbbb", compute_ucc_ccsd_t_W_bbbbbb_block, compute_ucc_ccsd_t_V_bbbbbb_block,
+            {"bbbbbb", compute_ucc_ccsd_t_W_bbbbbb_triple, compute_ucc_ccsd_t_V_bbbbbb_block,
              compute_ucc_ccsd_t_W_bbbbbb_residual, compute_ucc_ccsd_t_V_bbbbbb_residual, 1.0 / 36.0},
         }};
 
@@ -267,6 +271,8 @@ namespace HartreeFock::Correlation::CC
                 o3 = std::max(o3, occ.size());
             o3 = o3 * o3 * o3;
             std::vector<double> e_item(items.size(), 0.0);
+            const UCCSDTripleLayouts lay =
+                prepare_ucc_ccsd_t_triple_layouts(state.reference, state.mo_blocks, state.amplitudes);
 #ifdef USE_OPENMP
 #pragma omp parallel
 #endif
@@ -279,7 +285,7 @@ namespace HartreeFock::Correlation::CC
                 {
                     const Item &it = items[static_cast<std::size_t>(t)];
                     const UccTriplesBlock &blk = kUccBlocks[static_cast<std::size_t>(it.blk)];
-                    blk.w_block(it.a, it.b, it.c, state.reference, state.mo_blocks, state.amplitudes, w.data());
+                    blk.w_triple(it.a, it.b, it.c, state.reference, lay, w.data());
                     blk.v_block(it.a, it.b, it.c, state.reference, state.mo_blocks, state.amplitudes, v.data());
                     e_item[static_cast<std::size_t>(t)] =
                         blk.weight * it.mult * ucc_block_sum(blk, e, it.a, it.b, it.c, w.data(), v.data());

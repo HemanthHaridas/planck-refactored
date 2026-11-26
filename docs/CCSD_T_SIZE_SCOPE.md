@@ -31,24 +31,27 @@ flat in the basis (3.1× on the dimer in cc-pVDZ, 2.5× in cc-pVTZ).
 the restricted work; U1 and U2 brought the GEMM lowering to all of its
 CCSD terms.
 
-| Water⁺ / cc-pVTZ spherical `uccsd(t)`, 4 threads (o 5/4, v 53/54) | start | now (U3b) |
+| Water⁺ / cc-pVTZ spherical `uccsd(t)`, 4 threads (o 5/4, v 53/54) | start | now (U4) |
 |---|---|---|
 | UCC CCSD per iteration | 0.339 s | 0.099–0.0995 s (3.4×) |
-| whole run | 9.4 s | 4.96–5.01 s |
+| UCC (T) | | 0.19–0.20 s (was 1.33–1.35 s before U4) |
+| whole run | 9.4 s | 3.67–3.95 s |
 | RCCSD on neutral water, same basis, for scale | | 0.039 s |
 
 U3a built each intermediate once per residual evaluation instead of once
 per kernel (1.12× per iteration); U3b ran the restricted merges on each
 UCC spin block (1.16×). Half of the residual is now building
-intermediates, which no merge removes; UCC (T) (U4) is next. The half
-range does not apply to UCC (see "UCC").
+intermediates, which no merge removes. U4 gave the UCC (T) the
+restricted kernel's shared elementary GEMMs on prepared layouts: (T) 6.9×.
+The run is now 46 % CCSD iterations, 33 % spin-block ERI preparation, 15 %
+SCF, 5 % (T). The half range does not apply to UCC (see "UCC").
 
 The next walls:
 - **Memory:** the ns⁴ AO tensor in the SCF and v⁴ `vvvv` in the CCSD.
   Removing either is a different method (direct or RI integrals, an
   AO-driven or RI `vvvv` contraction), not a fix.
-- **Time:** the restricted CCSD's remaining 2.5×, and the UCC residual and
-  UCC (T) above.
+- **Time:** the restricted CCSD's remaining 2.5×; for UCC, the residual's
+  builders and the spin-block ERI preparation.
 
 ## Memory: one large object per phase
 
@@ -331,7 +334,7 @@ only partly.
 | half range (R1) | not applicable: αβαβ has no i↔j symmetry, and the same-spin blocks already use the orbit fold (below) |
 | intermediates built once per evaluation | yes (U3a); restricted too |
 | merges (R2, R2b) | yes (U3b), per spin block |
-| (T) layouts and GEMM blocks (8–1a) | no: the UCC (T) kernels are one block per spin case, still loops (U4) |
+| (T) layouts and GEMM blocks (8–1a) | yes (U4): shared elementary GEMMs per spin block; the six-ordering sharing has no UCC counterpart |
 
 **The GEMM lowering for UCC** (1c). `_gemm_lowering` accepts the UCC
 operands, which `cc_operand` already took: ERI and Fock spin blocks
@@ -541,57 +544,61 @@ T1-transformed Hamiltonian), which removes the t1·v and multi-t1 builders
 (64 % of builder time after U3a) at the cost of one integral transform per
 iteration. Measure that transform first.
 
-**U4 profile and plan: UCC (T).** After U3b the water⁺ cc-pVTZ run is,
-of 4292 main-thread samples: CCSD iterations 38 %, (T) 27 %, spin-block ERI
-preparation 27 %, SCF ~8 %. Inside (T), over all threads, the W blocks are
-nearly everything:
-
-| (T) kernel, all-thread samples | W | V |
-|---|---|---|
-| αab (`aabaab`) | 1771 | 44 |
-| αbb (`abbabb`) | 1478 | 25 |
-| ααα | 829 | 16 |
-| βββ | 456 | 18 |
-
-The restricted (T) is fast for three reasons (steps 8 and 1a): one work
-item per unordered virtual triple computes W for all six orderings; those
-share 12 elementary GEMM blocks, from which W is assembled by occupied-index
-permutations; and the operands are contiguous layouts built once per (T)
-(`prepare_ccsd_t_triple_layouts`). The UCC (T) has none of them. It runs
-one item per (spin block, a, b, c), exploiting only the antisymmetry within
-a block (distinct triples with a multiplicity), and each item calls a W
-kernel of strided loop nests, one per term, with no GEMM:
+**UCC (T) as shared elementary GEMMs (U4, done).** After U3b, (T) was 27 %
+of the water⁺ cc-pVTZ run and its W blocks ~97 % of it (all-thread samples:
+αab 1771, αbb 1478, ααα 829, βββ 456; V 103 in all). Each W block was one
+strided loop nest per term, per virtual triple, with no GEMM:
 
 | UCC W block | loop nests per item | distinct elementary contractions (up to an occupied permutation) |
 |---|---|---|
 | ααα, βββ | 18 | 6 |
 | αab, αbb | 16 | 10 |
 
-So U4 brings `_emit_triple_kernel`'s mechanism (`python/ccgen/methods/ccsd_t.py`)
-to the UCC blocks: per spin block, compute each distinct elementary
-contraction once as a GEMM on layouts prepared once per (T) (per-spin t2
-blocks and `ovvv`/`ooov` spin blocks), and assemble W by signed occupied
-permutations. That removes 1.6–3× of the arithmetic and replaces strided
-loops with GEMMs, the change that took the restricted (T) from 8.25 to
-4.5 s (1a). The restricted kernel's sharing across the six orderings of a
-triple has no UCC counterpart: within a spin block the orderings are
-related by antisymmetry, which the per-block multiplicity already uses.
-The gain is within one item.
+`_emit_ucc_triple_kernels` (`python/ccgen/methods/ccsd_t.py`) brings the
+restricted triple kernel's mechanism to each spin block, derived from the
+terms rather than matched by shape:
+- every W term is one contraction of two factors over one summed index;
+  occupied externals are renamed u0, u1, u2 by first appearance, so terms
+  equal up to an occupied permutation share one elementary block
+  e(u0, u1, u2) = Σ_s A[u's of A, s] B[s, u's of B], computed once per item
+  as an Eigen GEMM and added through each term's occupied order;
+- each factor read (a same-spin ERI read is the antisymmetrized difference)
+  gets a layout made once per (T), [fixed virtuals][rows][cols] as its GEMM
+  reads it, shared across blocks by a canonical text: 16 layouts in all;
+- `compute_ucc_ccsd_t_W_<tag>_triple(a, b, c, reference, lay, out)` writes
+  the same (i, j, k) block the per-term kernel did, so the driver changed
+  only in building `UCCSDTripleLayouts` once and passing it. V stays per
+  term.
 
-Expected: if W falls 3–5×, (T) 1.3 s → ~0.3–0.45 s and the run ~5.0 →
-~4.1 s. Gates: the full-tensor oracle (`ucc_full_tensor_triples_energy`,
-already printed at verbose output on small systems) to ~1e-14; the
-`*_uccsd_t_*` regression cases (PySCF-pinned); E(T) identical at 1/2/4/8
-threads.
+The restricted kernel's sharing across the six orderings of a triple has
+no UCC counterpart: within a spin block the orderings are related by
+antisymmetry, which the per-block multiplicity already uses.
 
-After U4 the largest UCC phase is the spin-block ERI preparation (27 %),
-then the builders inside the CCSD residual.
+| water⁺ cc-pVTZ `uccsd(t)`, 4 threads, 3 alternating runs | pre-U4, same commit | U4 |
+|---|---|---|
+| (T) | 1.33–1.35 s | 0.19–0.20 s (6.9×) |
+| whole run | 4.86–5.16 s | 3.67–3.95 s |
+| peak footprint | 511–519 MiB | 511–517 MiB |
+
+Above the 3–5× expected: the GEMMs gain more over the strided nests than
+the 1.6–3× cut in arithmetic alone.
+
+Gates: the full-tensor oracle (verbose output) agrees to 1.2e-18 (OH
+6-31G) and 1.7e-18 (water⁺ 6-31G); the `*_uccsd_t_*` cases (PySCF-pinned),
+the MPI smoke, UCC ranks 2 and 4 and the restricted (T) cases pass; E(T)
+and every printed line identical at 1/2/4/8 threads on the three UCC (T)
+cases; targeted ccgen tests 157 passed; core suite 178/178.
+
+**Where UCC time goes after U4** (3505 main-thread samples): CCSD
+iterations 46 % (half of the residual is building intermediates),
+spin-block ERI preparation 33 % (nearly all `build_ucc_spin_block_cache`),
+SCF ~15 %, (T) 5 %. The next UCC levers are the ERI preparation and the
+builders (a t1-dressed Hamiltonian, not scoped).
 
 ## Open, in order
 
 | # | Step | Expected |
 |---|---|---|
-| U4 | UCC (T): shared elementary GEMM blocks on prepared layouts, per spin block (plan below) | UCC (T) is 27 % of the run; W is ~97 % of it |
 | R3c | Accelerate `dgemm` behind the GEMM helper | 2.5–4× on the GEMMs; a build decision |
 | R2c | Share linearly dependent combinations of builders | 4 o³v³ builders → 3 contractions (≤ 1.06×) |
 | T1 | (T): V through layouts, energy loops | ~20 % of (T) |

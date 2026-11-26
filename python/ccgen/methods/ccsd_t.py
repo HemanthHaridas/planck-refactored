@@ -137,8 +137,12 @@ def emit_planck_ccsd_t_translation_unit() -> str:
     for key, terms in ueqs.items():
         parts.append(_emit_kernel("ccsd", f"t_{key}", terms, force_arbitrary=True, ucc=True))
         parts.append("")
-        parts.append(_emit_block_kernel(key, terms, ucc=True))
-        parts.append("")
+        # W per item as shared GEMMs (U4); V stays per term (~2 % of (T)).
+        if key.startswith("V_"):
+            parts.append(_emit_block_kernel(key, terms, ucc=True))
+            parts.append("")
+    parts.append(_emit_ucc_triple_kernels(ueqs))
+    parts.append("")
     parts.append("} // namespace HartreeFock::Correlation::CC")
     from ..emit.planck_tensor_cpp import with_gemm_include
     return with_gemm_include("\n".join(parts))
@@ -348,6 +352,181 @@ def _emit_triple_kernel(target: str, terms) -> str:
         lines.append("    }")
     lines.append("}")
     return "\n".join(lines)
+
+
+_UCC_TOKEN = re.compile(r"\b([a-z]\d?)\b")
+
+
+def _emit_ucc_triple_kernels(ueqs) -> str:
+    """UCC W blocks as shared elementary GEMMs (U4, docs/CCSD_T_SIZE_SCOPE.md).
+
+    Every UCC W term is one contraction of two factors over one summed index
+    with fixed virtuals a, b, c, so per (a, b, c) it is an o^3 elementary block
+    e(u0, u1, u2) = sum_s A[u's of A, s] B[s, u's of B], up to a renaming of
+    the occupied externals (u numbered by first appearance, so A holds the
+    lower ones). Terms equal up to that renaming share one block, computed once
+    as a GEMM and added through each term's occupied order: 16-18 loop nests
+    per item become 6-10 GEMMs.
+
+    Each factor read (a same-spin ERI read is the antisymmetrized difference
+    `_map_factor` writes) gets a layout made once per (T): [its fixed virtuals]
+    then [A's occupied][summed] or [summed][B's occupied], so every slice an
+    item reads is contiguous. Layouts are shared across blocks by a canonical
+    text (virtuals x0.., occupied p0.., summed s).
+
+    Emits the `UCCSDTripleLayouts` struct, `prepare_ucc_ccsd_t_triple_layouts`,
+    and `compute_ucc_ccsd_t_W_<tag>_triple(a, b, c, reference, lay, out)`, whose
+    `out` is the (i, j, k) block the per-term `_block` kernel wrote. Not bitwise
+    equal to it (GEMM order); independent of the thread count.
+    """
+    from ..emit.planck_tensor_cpp import (
+        _amplitude_view_bindings, _coeff_literal, _eri_view_bindings, _map_factor,
+        _orbital_count_preamble)
+    from ..spin import ucc_term_index_spins
+
+    def dim(space, spin):
+        return ("no" if space == "occ" else "nv") + spin
+
+    def sub(text, mapping):
+        return _UCC_TOKEN.sub(lambda m: mapping.get(m.group(1), m.group(1)), text)
+
+    def flat(names, dims):
+        expr = f"static_cast<std::size_t>({names[0]})"
+        for n, d in zip(names[1:], dims[1:]):
+            expr = f"({expr} * {d} + {n})"
+        return expr
+
+    layouts: dict[tuple, dict] = {}   # (canonical text, role) -> layout
+    kernels: list[str] = []
+    all_terms = []
+    for key in sorted(k for k in ueqs if k.startswith("W_")):
+        tag, terms = key[2:], ueqs[key]
+        all_terms += terms
+        spins = ucc_term_index_spins(terms[0])
+        out_dims = {x: dim("occ", spins[x]) for x in "ijk"}
+        slots: dict[tuple, int] = {}
+        gemms: list[str] = []
+        adds: list[tuple] = []        # (slot, coeff, occupied order)
+        for term in terms:
+            assert len(term.summed_indices) == 1 and len(term.factors) == 2, term
+            s_idx = term.summed_indices[0]
+            s = s_idx.name
+            tsp = ucc_term_index_spins(term)
+            sign, exprs = 1, []
+            for f in term.factors:
+                fs, e = _map_factor(f, None, True)
+                sign *= fs
+                exprs.append(e)
+            occ: list[str] = []
+            for e in exprs:
+                for x in _UCC_TOKEN.findall(e):
+                    if x in "ijk" and x not in occ:
+                        occ.append(x)
+            assert sorted(occ) == ["i", "j", "k"], occ
+            ren = {x: f"u{n}" for n, x in enumerate(occ)}
+            ktext = tuple(sub(e, ren) for e in exprs)
+            space = {ren[x]: "occ" for x in occ} | {s: s_idx.space} | {v: "vir" for v in "abc"}
+            kspin = {ren[x]: tsp[x] for x in occ} | {s: tsp[s]} | {v: tsp[v] for v in "abc"}
+            if ktext not in slots:
+                slots[ktext] = len(slots)
+                sides = []
+                for role, e in zip("AB", ktext):
+                    names: list[str] = []
+                    for x in _UCC_TOKEN.findall(e):
+                        if x not in names and x in kspin:
+                            names.append(x)
+                    us = sorted(x for x in names if x.startswith("u"))
+                    vs = [x for x in names if x in "abc"]
+                    assert s in names and us, (e, names)
+                    canon = ({v: f"x{n}" for n, v in enumerate(vs)}
+                             | {u: f"p{n}" for n, u in enumerate(us)} | {s: "s"})
+                    order = vs + (us + [s] if role == "A" else [s] + us)
+                    dims = [dim(space[x], kspin[x]) for x in order]
+                    lid = (sub(e, canon), role)
+                    if lid not in layouts:
+                        layouts[lid] = {"name": f"L{len(layouts)}", "expr": lid[0],
+                                        "order": [canon[x] for x in order], "dims": dims}
+                    tail = dims[len(vs):]
+                    off = (f"{flat(vs, dims[:len(vs)])} * {' * '.join(tail)}" if vs else "0")
+                    sides.append((layouts[lid]["name"], off,
+                                  " * ".join(dim("occ", kspin[u]) for u in us),
+                                  dim(space[s], kspin[s])))
+                (la, oa, rows, sdim), (lb, ob, cols, _) = sides
+                gemms += [
+                    f"    // Elementary block {slots[ktext]}: {' * '.join(ktext)}",
+                    f"    Eigen::Map<RowMat>(&e[{slots[ktext]} * o3], {rows}, {cols}).noalias() ="
+                    f" Eigen::Map<const RowMat>(lay.{la}.data() + {oa}, {rows}, {sdim}) *"
+                    f" Eigen::Map<const RowMat>(lay.{lb}.data() + {ob}, {sdim}, {cols});",
+                ]
+            adds.append((slots[ktext], term.coeff * sign, tuple(occ)))
+
+        ni, nj, nk = (out_dims[x] for x in "ijk")
+        body = [
+            f"void compute_ucc_ccsd_t_W_{tag}_triple(",
+            "    int a, int b, int c,",
+            "    const CanonicalRHFCCReference &reference,",
+            "    const UCCSDTripleLayouts &lay,",
+            "    double *out)",
+            "{",
+        ]
+        body += _orbital_count_preamble(True)
+        body += ["    (void)a; (void)b; (void)c; (void)nva; (void)nvb;",
+                 f"    const std::size_t o3 = static_cast<std::size_t>({ni}) * {nj} * {nk};",
+                 "    std::fill(out, out + o3, 0.0);",
+                 "    using RowMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;",
+                 "    static thread_local std::vector<double> e, t;",
+                 f"    if (e.size() < {len(slots)} * o3) e.resize({len(slots)} * o3);",
+                 "    if (t.size() < o3) t.resize(o3);"]
+        body += gemms
+        # Terms reading their blocks in the same occupied order are summed
+        # contiguously, then added once through that order. Fixed order, so
+        # the result does not depend on the thread count.
+        groups: dict[tuple, list] = {}
+        for slot, coeff, occ in adds:
+            groups.setdefault(occ, []).append((slot, coeff))
+        for occ, members in groups.items():
+            rhs = " ".join(f"+ {_coeff_literal(c)}e[{sl} * o3 + x]" for sl, c in members).replace("+ -", "- ")
+            rhs = rhs[2:] if rhs.startswith("+ ") else "-" + rhs[2:]
+            if occ == ("i", "j", "k"):
+                body += ["    for (std::size_t x = 0; x < o3; ++x)", f"        out[x] += {rhs};"]
+                continue
+            src = flat(list(occ), [out_dims[x] for x in occ])
+            body += ["    for (std::size_t x = 0; x < o3; ++x)", f"        t[x] = {rhs};",
+                     f"    for (int i = 0; i < {ni}; ++i)",
+                     f"    for (int j = 0; j < {nj}; ++j)",
+                     f"    for (int k = 0; k < {nk}; ++k)",
+                     f"        out[{flat(['i', 'j', 'k'], [ni, nj, nk])}] += t[{src}];"]
+        body.append("}")
+        kernels.append("\n".join(body))
+
+    lines = [
+        "// Layouts for compute_ucc_ccsd_t_W_<tag>_triple, made once per (T): each",
+        "// factor read, indexed [fixed virtuals][rows][cols] as its GEMM reads it.",
+        "struct UCCSDTripleLayouts",
+        "{",
+        "    std::vector<double> " + ", ".join(L["name"] for L in layouts.values()) + ";",
+        "};",
+        "",
+        "UCCSDTripleLayouts prepare_ucc_ccsd_t_triple_layouts(",
+        "    const CanonicalRHFCCReference &reference,",
+        "    const TensorCCBlockCache &mo_blocks,",
+        "    const ArbitraryOrderRCCAmplitudes &amplitudes)",
+        "{",
+    ]
+    lines += _orbital_count_preamble(True)
+    lines += _amplitude_view_bindings(all_terms)
+    lines += _eri_view_bindings(all_terms)
+    lines.append("    UCCSDTripleLayouts lay;")
+    for L in layouts.values():
+        order, dims = L["order"], L["dims"]
+        lines += [f"    lay.{L['name']}.resize(static_cast<std::size_t>({' * '.join(dims)}));",
+                  "#ifdef USE_OPENMP",
+                  "#pragma omp parallel for schedule(static)",
+                  "#endif"]
+        lines += [f"    for (int {n} = 0; {n} < {d}; ++{n})" for n, d in zip(order, dims)]
+        lines.append(f"        lay.{L['name']}[{flat(order, dims)}] = {L['expr']};")
+    lines += ["    return lay;", "}", ""]
+    return "\n".join(lines + kernels)
 
 
 def _emit_block_kernel(target: str, terms, ucc: bool = False) -> str:

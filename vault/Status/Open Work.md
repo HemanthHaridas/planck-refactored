@@ -236,7 +236,7 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     U2 the batched t1·vvvv builders, U3a each intermediate built once per
     residual evaluation, U3b the restricted merges per spin block); the GEMM
     helper's parallel regions now run serially on tiny calls, which also
-    made the small CC gates 3–6× faster. Building intermediates is now half the UCC residual. Next for UCC: the UCC (T) kernels (U4). The half range
+    made the small CC gates 3–6× faster. UCC (T) as shared elementary GEMMs on prepared layouts (U4): (T) 1.33 → 0.19 s, whole run ~5.0 → 3.8 s. The U series is done; the UCC run is now 46 % CCSD (half of it building intermediates), 33 % spin-block ERI preparation, 15 % SCF, 5 % (T). The half range
     does not apply to UCC (the orbit fold already covers it).
     Open, in order: R3c
     Accelerate behind the helper (2.5–4× on the GEMMs; B1 build decision),
