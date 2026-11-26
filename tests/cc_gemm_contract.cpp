@@ -4,6 +4,7 @@
 // contraction shapes the generated spatial doubles kernel uses. Under
 // pair_half every element with j >= i must equal the reference and every
 // element with j < i must be left as it was (the kernel's mirror owns it).
+// Also covers the batched products (U2).
 // Non-square o and v so a transposed group shows up.
 
 #include "post_hf/cc/gemm_contract.h"
@@ -57,14 +58,16 @@ namespace
     }
 
     int check(const char *name, const std::string &al, const std::string &bl,
-              const char *m, const char *k, const char *n, bool pair_half, std::mt19937 &rng)
+              const char *m, const char *k, const char *n, bool pair_half, std::mt19937 &rng,
+              const char *batch = "")
     {
         const TensorND a = random_tensor(al, rng), b = random_tensor(bl, rng);
         const double coeff = -0.75, init = 3.25;
         TensorND out({no, no, nv, nv});
         for (double &x : out.data)
             x = init;
-        cc_gemm_contract(out, "ijab", coeff, cc_operand(a), al, cc_operand(b), bl, m, k, n, pair_half);
+        cc_gemm_contract(out, "ijab", coeff, cc_operand(a), al, cc_operand(b), bl, m, k, n, pair_half,
+                         batch);
 
         int failures = 0;
         double worst = 0.0;
@@ -98,6 +101,12 @@ int main()
     // i and j in one group (the ladder's filter), and no pair_half at all.
     failures += check("same-group ab|cd|ij", "abcd", "ijcd", "ab", "cd", "ij", true, rng);
     failures += check("full ia|kc|jb", "ikac", "jkbc", "ia", "kc", "jb", false, rng);
+    // Batched (U2): the batch labels lead one operand's storage. Slice used
+    // in place, transposed, or copied; the batch on B and on A.
+    failures += check("batch ia: j|c|b, slice in place", "jc", "iacb", "j", "c", "b", false, rng, "ia");
+    failures += check("batch ia: j|c|b, slice transposed", "jc", "iabc", "j", "c", "b", false, rng, "ia");
+    failures += check("batch i: j|c|ab, slice copied", "jc", "iacb", "j", "c", "ab", false, rng, "i");
+    failures += check("batch ij on A: b|k|a", "ijkb", "ka", "b", "k", "a", false, rng, "ij");
     if (failures) {
         std::printf("FAIL: %d element(s) differ\n", failures);
         return 1;

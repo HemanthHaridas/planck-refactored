@@ -232,10 +232,11 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     on contiguous layouts built once per (T): (T) 4.5–4.8 s, faster than
     PySCF's 6.0 s; whole run ~37 s. R3b (staircase GEMMs on j ≥ i) done:
     CCSD 1.04–1.08× per iteration. UCC (1c): the GEMM lowering reaches
-    UCC, water⁺ cc-pVTZ UCC CCSD 0.339 → 0.145 s per iteration (with U1); the GEMM
+    UCC, water⁺ cc-pVTZ UCC CCSD 0.339 → 0.128 s per iteration (with U1
+    and U2, the batched t1·vvvv builders); the GEMM
     helper's parallel regions now run serially on tiny calls, which also
-    made the small CC gates 3–6× faster. Next for UCC: batched t1·vvvv
-    builders, half range and merges, the UCC (T) kernels.
+    made the small CC gates 3–6× faster. Next for UCC: half range and
+    merges (U3), the UCC (T) kernels (U4).
     Open, in order: R3c
     Accelerate behind the helper (2.5–4× on the GEMMs; B1 build decision),
     R2c shared builder combinations, R4 re-measure. The hand-written

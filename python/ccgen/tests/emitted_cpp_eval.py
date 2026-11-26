@@ -25,10 +25,12 @@ import numpy as np
 # A lowered contraction (`cc_gemm_contract`, R3) is the same einsum as the
 # loop nest it replaced: out(labels) += coeff * A(a_labels) * B(b_labels).
 # The trailing `pair_half` flag only narrows loop bounds, which this
-# evaluator ignores anyway.
+# evaluator ignores anyway; a trailing batch group (U2) only splits the
+# product into slices, so the einsum is the same.
 GEMM_CALL = re.compile(
     r'cc_gemm_contract\((\w+), "(\w+)", ([-+.\de]+), cc_operand\(([\w.]+)\), "(\w+)", '
-    r'cc_operand\(([\w.]+)\), "(\w+)", "\w+", "\w+", "\w+"(?:, true)?\);')
+    r'cc_operand\(([\w.]+)\), "(\w+)", "\w*", "\w+", "\w*"'
+    r'(?:, true|, false, "\w+")?\);')
 
 
 def gemm_write(m):

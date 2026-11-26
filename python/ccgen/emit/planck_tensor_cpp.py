@@ -1007,6 +1007,7 @@ def _gemm_lowering(term, factors, free, summed, lhs, intermediate_names,
     n = "".join(c for c in b_lab if c not in sum_names)
     if not m or not n:
         return None
+
     def allowed(lab, r, c):
         # Used in place, or small enough to copy (never vvvv).
         return lab in (r + c, c + r) or n_vir(lab) <= 3
@@ -1014,9 +1015,32 @@ def _gemm_lowering(term, factors, free, summed, lhs, intermediate_names,
     def swapped(lab, x, y):
         return lab.translate(str.maketrans({x: y, y: x}))
 
+    def batched(a_lab, b_lab):
+        """(m, n, batch) when one operand's leading free labels can be
+        batched so that each slice is used in place or is small enough to
+        copy, e.g. t1(ic) vvvv(abcd): batch `ab`, slices vvvv(ab, c, d)."""
+        for lab, own, other_ok in ((b_lab, n, allowed(a_lab, m, k)),
+                                   (a_lab, m, allowed(b_lab, k, n))):
+            if not other_ok:
+                continue
+            batch = ""
+            for c in lab:
+                if c in sum_names:
+                    break
+                batch += c
+            rest_own = "".join(c for c in own if c not in batch)
+            if not batch or not rest_own:
+                continue
+            rest = lab[len(batch):]
+            pair = (k, rest_own) if lab is b_lab else (rest_own, k)
+            if allowed(rest, *pair):
+                return ((m, rest_own, batch) if lab is b_lab else (rest_own, n, batch))
+        return None
+
     calls = []
     for a_sign, a_name, a_lab in alternatives[0]:
         for b_sign, b_name, b_lab in alternatives[1]:
+            mm, nn, batch = m, n, ""
             if not (allowed(a_lab, m, k) and allowed(b_lab, k, n)):
                 # Rename two summed (dummy) indices in both operands: the same
                 # sum, with the permutation moved onto the operand that may be
@@ -1027,12 +1051,18 @@ def _gemm_lowering(term, factors, free, summed, lhs, intermediate_names,
                         a_lab, b_lab = a2, b2
                         break
                 else:
-                    return None
+                    # Else batch over the leading free labels of the operand
+                    # that cannot be copied (U2).
+                    found = batched(a_lab, b_lab)
+                    if found is None:
+                        return None
+                    mm, nn, batch = found
             coeff = float(term.coeff * sign * a_sign * b_sign)
+            tail = f', false, "{batch}");' if batch else ");"
             calls.append(
                 f'{pad}cc_gemm_contract({lhs}, "{"".join(free_names)}", {coeff!r}, '
                 f'cc_operand({a_name}), "{a_lab}", cc_operand({b_name}), "{b_lab}", '
-                f'"{m}", "{k}", "{n}");')
+                f'"{mm}", "{k}", "{nn}"{tail}')
     return "\n".join(calls)
 
 
@@ -1456,8 +1486,9 @@ def _pair_half_kernel(text: str) -> str:
     text = text.replace(_PAIR_J_FULL, _PAIR_J_HALF)
     # Lowered contractions (R3) take the same half: a GEMM group holding both
     # i and j keeps j >= i (the ladder); other groups compute in full and the
-    # mirror below overwrites j < i.
-    text = re.sub(r"^(\s*cc_gemm_contract\(result, .*)\);$", r"\1, true);",
+    # mirror below overwrites j < i. A batched call (U2, `false, "batch"`)
+    # stays full range; the mirror covers it the same way.
+    text = re.sub(r'^(\s*cc_gemm_contract\(result, (?!.*, false, ").*)\);$', r"\1, true);",
                   text, flags=re.M)
     # GCC refuses `schedule` on a non-rectangular collapsed loop. The default
     # schedule is harmless here: each element is written by one iteration.

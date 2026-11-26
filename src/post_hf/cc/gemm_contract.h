@@ -157,16 +157,102 @@ namespace HartreeFock::Correlation::CC
             }
             return m;
         }
+        // Calls f with a matrix's Eigen expression: the map, or its transpose.
+        template <class F>
+        void cc_with_matrix(const double *data, bool transposed, Eigen::Index rows,
+                            Eigen::Index cols, F &&f)
+        {
+            const CCMap map(data, transposed ? cols : rows, transposed ? rows : cols);
+            if (transposed)
+                f(map.transpose());
+            else
+                f(map);
+        }
+
+        // One product per combination of the `batch` labels (U2). They are
+        // free indices of one operand that lead its storage, so each batch
+        // is a contiguous slice of it, e.g. vvvv(a,b,·,·) in
+        // t1(i,c) vvvv(a,b,c,d) -> W(i,a,b,d). The other operand is mapped
+        // or copied once. Batches write disjoint parts of the output, and
+        // each element is one fixed-size product, so the result does not
+        // depend on the thread count.
+        template <class Out>
+        void cc_gemm_batched(Out &out_tensor, std::string_view out_labels, double coeff,
+                             const CCOperand &a, std::string_view a_labels,
+                             const CCOperand &b, std::string_view b_labels,
+                             std::string_view m, std::string_view k, std::string_view n,
+                             std::string_view batch)
+        {
+            double *const out = out_tensor.data.data();
+            const std::vector<int> out_dims = cc_operand(out_tensor).dims;
+            const bool in_a = a_labels.find(batch[0]) != std::string_view::npos;
+            const CCOperand &x = in_a ? a : b;
+            const std::string_view x_labels = in_a ? a_labels : b_labels;
+            const std::string_view xr = in_a ? m : k, xc = in_a ? k : n;
+
+            const auto xb = cc_group_offsets(x_labels, x.dims, batch);
+            const auto ob = cc_group_offsets(out_labels, out_dims, batch);
+            const auto ro = cc_group_offsets(x_labels, x.dims, xr);
+            const auto co = cc_group_offsets(x_labels, x.dims, xc);
+            const Eigen::Index xrows = static_cast<Eigen::Index>(ro.size());
+            const Eigen::Index xcols = static_cast<Eigen::Index>(co.size());
+            const bool x_direct = cc_is_range(co, 1) && cc_is_range(ro, xcols);
+            const bool x_transposed = !x_direct && cc_is_range(ro, 1) && cc_is_range(co, xrows);
+
+            const CCMatrix fixed = in_a ? cc_matrix(b, b_labels, k, n, false)
+                                        : cc_matrix(a, a_labels, m, k, false);
+            const Eigen::Index M = in_a ? xrows : fixed.rows;
+            const Eigen::Index N = in_a ? fixed.cols : xcols;
+            const Eigen::Index K = in_a ? xcols : fixed.cols;
+            const auto mo = cc_group_offsets(out_labels, out_dims, m);
+            const auto no = cc_group_offsets(out_labels, out_dims, n);
+            const std::ptrdiff_t n_batch = static_cast<std::ptrdiff_t>(xb.size());
+
+#pragma omp parallel for schedule(static) if (n_batch * M * N * K >= cc_parallel_min)
+            for (std::ptrdiff_t t = 0; t < n_batch; ++t) {
+                thread_local CCRowMat slice, prod;
+                const double *base = x.data + xb[t];
+                if (!x_direct && !x_transposed) {
+                    slice.resize(xrows, xcols);
+                    for (Eigen::Index i = 0; i < xrows; ++i)
+                        for (Eigen::Index j = 0; j < xcols; ++j)
+                            slice(i, j) = base[ro[i] + co[j]];
+                    base = slice.data();
+                }
+                prod.resize(M, N);
+                cc_with_matrix(base, x_transposed, xrows, xcols, [&](const auto &X)
+                {
+                    cc_with_matrix(fixed.data, fixed.transposed, fixed.rows, fixed.cols,
+                                   [&](const auto &F)
+                    {
+                        if (in_a)
+                            prod.noalias() = X * F;
+                        else
+                            prod.noalias() = F * X;
+                    });
+                });
+                for (Eigen::Index i = 0; i < M; ++i)
+                    for (Eigen::Index j = 0; j < N; ++j)
+                        out[ob[t] + mo[i] + no[j]] += coeff * prod(i, j);
+            }
+        }
     } // namespace detail
 
+    // `batch` (U2): free labels of one operand that lead its storage; the
+    // contraction then runs as one product per batch (cc_gemm_batched).
     template <class Out>
     void cc_gemm_contract(Out &out_tensor, std::string_view out_labels, double coeff,
                                  const CCOperand &a, std::string_view a_labels,
                                  const CCOperand &b, std::string_view b_labels,
                                  std::string_view m, std::string_view k, std::string_view n,
-                                 bool pair_half = false)
+                                 bool pair_half = false, std::string_view batch = {})
     {
         using namespace detail;
+        if (!batch.empty()) {
+            assert(!pair_half && "cc_gemm_contract: batching has no half range");
+            cc_gemm_batched(out_tensor, out_labels, coeff, a, a_labels, b, b_labels, m, k, n, batch);
+            return;
+        }
         double *const out = out_tensor.data.data();
         const std::vector<int> out_dims = cc_operand(out_tensor).dims;
         const CCMatrix am = cc_matrix(a, a_labels, m, k, pair_half);

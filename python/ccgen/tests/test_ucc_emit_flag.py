@@ -117,7 +117,10 @@ class UccSwitchTests(unittest.TestCase):
             # Restated 2026-11-24 for GEMM lowering (R3); with `_gemm_lowering`
             # returning None it reproduces 7095e69cac9dc826. The rank-2/3 pins
             # above are unchanged by it.
-            ("ccsdtq", "diagram"): "b35851fc3c02bb34",
+            # Restated 2026-11-26 for batched GEMM calls (U2): 19 t4 · oooo/vvvv
+            # terms lower; with the emitter at the pre-U2 commit it reproduces
+            # b35851fc3c02bb34. The rank-2/3 pins are unchanged by it.
+            ("ccsdtq", "diagram"): "4674eb8d9ff6cdd2",
         }
         for (method, engine), digest in expected.items():
             with self.subTest(method=method, engine=engine):

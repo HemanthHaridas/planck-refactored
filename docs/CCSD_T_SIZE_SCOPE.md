@@ -310,7 +310,7 @@ only partly.
 
 | | reaches UCC? |
 |---|---|
-| GEMM lowering (R3) | yes (1c, U1) |
+| GEMM lowering (R3) | yes (1c, U1, U2) |
 | small calls serial | yes |
 | half range (R1) | no: the mirror maps `abab` to `baba`, another block |
 | merges (R2, R2b) | no |
@@ -324,11 +324,11 @@ emitted text (`_block_needs_explicit_exchange`), as `(v(..cd) − v(..dc))`;
 each side becomes its own call with its sign. Lowered calls: UCC CCSD 350,
 CCSDT 1309, CCSDTQ 2964. The restricted rank-2 TU is byte-identical.
 
-| water⁺ cc-pVTZ spherical (o 5/4, v 53/54), 4 threads | before | now (1c + U1) |
-|---|---|---|
-| UCC CCSD per iteration (median of 18) | 0.339 s | 0.145–0.146 s (2.33×) |
-| whole `uccsd(t)` run | 9.4 s | 5.9–6.0 s |
-| RCCSD on neutral water, same basis, for scale | 0.039 s | |
+| water⁺ cc-pVTZ spherical (o 5/4, v 53/54), 4 threads | before | 1c + U1 | now (+ U2) |
+|---|---|---|---|
+| UCC CCSD per iteration (median of 18) | 0.339 s | 0.145–0.146 s | 0.127–0.129 s (2.65×) |
+| whole `uccsd(t)` run | 9.4 s | 5.9–6.0 s | 5.7–6.1 s |
+| RCCSD on neutral water, same basis, for scale | 0.039 s | | |
 
 **Small systems.** The lowering first made B STO-3G `ucc4` slower, 1.82 →
 5.82 s: thousands of calls on tiny matrices, each opening up to four
@@ -366,12 +366,36 @@ identical at 1/2/4/8 threads. UCC CCSD 0.226–0.231 → 0.145–0.146 s per
 iteration (1.56×), now 3.7× the RCCSD in the same basis against the ~3×
 UCC inherently costs.
 
+**The `t1 · vvvv` builders (U2, done).** `t1(i,c) · vvvv(a,b,c,d) →
+W(i,a,b,d)` was a loop: no grouping of the labels makes `vvvv` one matrix
+in place, and copying it is forbidden. When neither a rename nor a copy
+works, `_gemm_lowering` now batches over the leading free labels of the
+operand that cannot be copied (`ab` here), so each slice `vvvv(a,b,·,·)` is
+a contiguous v × v matrix used in place, and the call carries the batch as
+a trailing `false, "ab"`. `cc_gemm_contract` runs one product per batch
+(`cc_gemm_batched`), threaded over batches; each batch writes its own part
+of the output, so the result does not depend on the thread count. Batched
+calls keep the full range under the pair half; the mirror covers them. UCC
+CCSD has three (the `aaaa`, `abab`, `bbbb` builders). UCC CCSD
+0.145–0.146 → 0.127–0.129 s per iteration (1.14×, 3 runs; the 0.145 s is
+the U1 measurement, not a same-session control), 18 iterations, E_corr
+−0.2253381491 and E(T) −0.0048503368 in every run.
+`planck-cc-gemm-contract` covers the batch on either operand with the slice
+in place, transposed and copied.
+
+U2 also reaches restricted rank 4: t4 · `oooo` and t4 · `vvvv` terms lower
+as batched calls (19 in the plain spin-adapted `ccsdtq` emit, 178 in the
+production build's dressed one). The restricted rank-2 and rank-3 emits are
+byte-identical; the `ccsdtq` pin moved and reproduces with the emitter at the
+pre-U2 commit. Gates: `be_rccsdtq_sto3g`, `b_ucc{2,3,4}_sto3g`, the UCC and
+RCC (T) cases and `oh_uccsd_t_631g_mpi_smoke` pass; `be_rccsdtq_sto3g`,
+`b_ucc4_sto3g` and `oh_uccsd_t_631g` print identical iterations at 1/2/4/8
+threads.
+
 ## Open, in order
 
 | # | Step | Expected |
 |---|---|---|
-| U1 | UCC: same-spin vvvv ladder by renaming dummies, differences of two arrays: done | UCC CCSD 1.56× per iteration |
-| U2 | UCC: `t1 · vvvv` builders as batched GEMMs over the leading (a, b) of `vvvv` (helper gains batch indices) | ~7 % of UCC |
 | U3 | UCC: half range on the same-spin doubles, and the merges | to be measured |
 | U4 | UCC (T): the restricted kernel's layouts and GEMM blocks for each spin block | the 16 % UCC (T) share |
 | R3c | Accelerate `dgemm` behind the GEMM helper | 2.5–4× on the GEMMs; a build decision |
