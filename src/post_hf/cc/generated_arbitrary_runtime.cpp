@@ -199,15 +199,34 @@ namespace HartreeFock::Correlation::CC
             const char *v = std::getenv("PLANCK_CC_RANK_TIME");
             return v != nullptr && v[0] != '\0' && v[0] != '0';
         }();
+
+        // U3a: one call that shares the intermediates across every kernel, in
+        // the order the two loops below consume (by rank, then sectors).
+        std::vector<TensorND> all;
+        std::size_t next = 0;
+        if (kernels.all_residuals)
+        {
+            all = kernels.all_residuals(
+                state.reference, state.mo_blocks, state.denominators, state.amplitudes);
+            const std::size_t expected =
+                (kernels.is_all_sectors() ? 0u : static_cast<std::size_t>(state.max_excitation_rank))
+                + kernels.sector_residuals.size();
+            if (all.size() != expected)
+                return std::unexpected(std::format(
+                    "evaluate_generated_arbitrary_order_residuals: all_residuals returned {} "
+                    "tensors, the bundle declares {}.", all.size(), expected));
+        }
+        const auto residual = [&](const GeneratedArbitraryOrderKernels::ResidualKernel &kernel) {
+            if (kernels.all_residuals)
+                return std::move(all[next++]);
+            return kernel(state.reference, state.mo_blocks, state.denominators, state.amplitudes);
+        };
+
         for (int rank = 1; !kernels.is_all_sectors() && rank <= state.max_excitation_rank; ++rank)
         {
             const auto rank_start = std::chrono::steady_clock::now();
             const auto &kernel = kernels.residuals_by_rank[static_cast<std::size_t>(rank - 1)];
-            TensorND tensor = kernel(
-                state.reference,
-                state.mo_blocks,
-                state.denominators,
-                state.amplitudes);
+            TensorND tensor = residual(kernel);
             if (time_ranks)
             {
                 HartreeFock::Logger::logging(
@@ -242,11 +261,7 @@ namespace HartreeFock::Correlation::CC
         residuals.sectors.reserve(kernels.sector_residuals.size());
         for (const auto &sr : kernels.sector_residuals)
         {
-            TensorND tensor = sr.kernel(
-                state.reference,
-                state.mo_blocks,
-                state.denominators,
-                state.amplitudes);
+            TensorND tensor = residual(sr.kernel);
             // U2.2: validate against the BLOCK's denominator, not the rank's
             // reference one -- under an unrestricted reference they have different
             // shapes (see ensure_amplitude_sectors). Falls back to the rank's on

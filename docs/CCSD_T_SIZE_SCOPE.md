@@ -31,18 +31,17 @@ flat in the basis (3.1× on the dimer in cc-pVDZ, 2.5× in cc-pVTZ).
 the restricted work; U1 and U2 brought the GEMM lowering to all of its
 CCSD terms.
 
-| Water⁺ / cc-pVTZ spherical `uccsd(t)`, 4 threads (o 5/4, v 53/54) | start | now (U2) |
+| Water⁺ / cc-pVTZ spherical `uccsd(t)`, 4 threads (o 5/4, v 53/54) | start | now (U3a) |
 |---|---|---|
-| UCC CCSD per iteration | 0.339 s | 0.127–0.129 s (2.65×) |
-| whole run | 9.4 s | 5.7–6.1 s |
+| UCC CCSD per iteration | 0.339 s | 0.115–0.116 s (2.9×) |
+| whole run | 9.4 s | 5.26–5.34 s |
 | RCCSD on neutral water, same basis, for scale | | 0.039 s |
 
 The run is now 43 % CCSD residual, 25 % (T), 23 % spin-block ERI
 preparation, 7 % SCF. Half the residual is building intermediates, and each
 kernel rebuilds the ones it reads: 10 % of the residual is repeat builds.
-U3a (build each intermediate once per residual evaluation) is implemented,
-not yet measured or gated; U3b (the merges) and U4 (UCC (T) kernels)
-follow. The half range does not apply to UCC (see "UCC").
+U3a (build each intermediate once per residual evaluation) removed those,
+1.12× per iteration; U3b (the merges) and U4 (UCC (T) kernels) follow. The half range does not apply to UCC (see "UCC").
 
 The next walls:
 - **Memory:** the ns⁴ AO tensor in the SCF and v⁴ `vvvv` in the CCSD.
@@ -330,7 +329,7 @@ only partly.
 | GEMM lowering (R3) | yes (1c, U1, U2) |
 | small calls serial | yes |
 | half range (R1) | not applicable: αβαβ has no i↔j symmetry, and the same-spin blocks already use the orbit fold (below) |
-| intermediates built once per evaluation | implemented (U3a), being measured; restricted too |
+| intermediates built once per evaluation | yes (U3a); restricted too |
 | merges (R2, R2b) | no (U3b) |
 | (T) layouts and GEMM blocks (8–1a) | no: the UCC (T) kernels are one block per spin case, still loops (U4) |
 
@@ -435,11 +434,38 @@ RCC (T) cases and `oh_uccsd_t_631g_mpi_smoke` pass; `be_rccsdtq_sto3g`,
 `b_ucc4_sto3g` and `oh_uccsd_t_631g` print identical iterations at 1/2/4/8
 threads.
 
+**Intermediates built once per residual evaluation (U3a, done).** A
+generated file that emits a kernel bundle now defines one
+`<method>_residual_ops` struct holding every intermediate its residual
+kernels read, built once per residual evaluation by
+`build_<method>_residual_ops`; each residual kernel takes it as a last
+`const&` and binds its intermediates from it (chunked kernels pass it to
+their parts). The bundle gains `all_residuals`, which builds the struct
+once and evaluates every residual; the runtime uses it when set, and the
+per-kernel entries (each building the struct itself) otherwise. The energy
+kernel, and files without a bundle, are unchanged.
+
+| | pre-U3a, same commit | U3a |
+|---|---|---|
+| water⁺ cc-pVTZ UCC CCSD per iteration (3 alternating runs) | 0.129–0.131 s | 0.115–0.116 s (1.12×) |
+| whole `uccsd(t)` run | 5.51–5.59 s | 5.26–5.34 s |
+| peak footprint | 512–519 MiB | 511–512 MiB |
+| water cc-pVTZ RCCSD per iteration | 0.038–0.039 s | 0.037–0.038 s (noise) |
+
+The footprint does not move: the run peaks in the ERI preparation, not in
+the iterations. Output is bitwise identical to the pre-U3a binary, and
+across 1/2/4/8 threads, on `be_rccsdtq_sto3g`, `lih_rccsdt_generated_sto3g`,
+`b_ucc4_sto3g`, `oh_uccsd_t_631g` and `h2o2_c1_rccsd_t_631g`; the 12 CC
+regression cases pass; no emit pin moved (the pinned emits have no
+intermediates). The restricted gain is small: two kernels, and its merged
+`t2merge` builders build the intermediates they read inside themselves,
+which can still repeat a struct member (passing the struct into the
+builders would remove that).
+
 ## Open, in order
 
 | # | Step | Expected |
 |---|---|---|
-| U3a | Build each intermediate once per residual evaluation: one `<method>_residual_ops` struct per generated file with a bundle, passed to every residual kernel; `all_residuals` on the bundle. Implemented 2026-11-26, not yet measured or gated | ≤ 10 % of UCC CCSD; restricted too |
 | U3b | UCC: the merges (R2, R2b) | builders are 48 % of UCC CCSD |
 | U4 | UCC (T): the restricted kernel's layouts and GEMM blocks for each spin block | UCC (T) is 25 % of the run |
 | R3c | Accelerate `dgemm` behind the GEMM helper | 2.5–4× on the GEMMs; a build decision |

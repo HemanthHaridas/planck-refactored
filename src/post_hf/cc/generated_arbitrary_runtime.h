@@ -79,6 +79,18 @@ namespace HartreeFock::Correlation::CC
         // (Gap B1) that `sector_residuals` evaluate and B4 updates.
         std::vector<std::pair<int, std::string>> sector_tags;
         std::vector<SectorResidual> sector_residuals;
+
+        // U3a (docs/CCSD_T_SIZE_SCOPE.md): every residual from one set of
+        // intermediates, built once, in the order residuals_by_rank then
+        // sector_residuals. Optional: the evaluation uses it when set, and the
+        // per-kernel entries above otherwise. Generated bundles set it; each
+        // per-kernel entry then builds the intermediates on its own.
+        using AllResidualsKernel = std::function<std::vector<TensorND>(
+            const CanonicalRHFCCReference &,
+            const TensorCCBlockCache &,
+            const ArbitraryOrderDenominatorCache &,
+            const ArbitraryOrderRCCAmplitudes &)>;
+        AllResidualsKernel all_residuals;
     };
 
     struct GeneratedArbitraryOrderSolveResult
