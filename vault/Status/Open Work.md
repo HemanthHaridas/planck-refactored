@@ -235,8 +235,10 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
     UCC, water⁺ cc-pVTZ UCC CCSD 0.339 → 0.128 s per iteration (with U1
     and U2, the batched t1·vvvv builders); the GEMM
     helper's parallel regions now run serially on tiny calls, which also
-    made the small CC gates 3–6× faster. Next for UCC: half range and
-    merges (U3), the UCC (T) kernels (U4).
+    made the small CC gates 3–6× faster. Next for UCC: build each
+    intermediate once per residual evaluation (U3a, implemented, being
+    measured), the merges (U3b), the UCC (T) kernels (U4). The half range
+    does not apply to UCC (the orbit fold already covers it).
     Open, in order: R3c
     Accelerate behind the helper (2.5–4× on the GEMMs; B1 build decision),
     R2c shared builder combinations, R4 re-measure. The hand-written

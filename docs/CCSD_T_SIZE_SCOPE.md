@@ -27,12 +27,29 @@ footprint, paging), and once it did it took 512 s, CCSD 29× and (T) 47×
 behind PySCF, with the gap growing with the basis. Now the CCSD ratio is
 flat in the basis (3.1× on the dimer in cc-pVDZ, 2.5× in cc-pVTZ).
 
+**UCC (`uccsd(t)`) is the active work (the U steps).** It had only part of
+the restricted work; U1 and U2 brought the GEMM lowering to all of its
+CCSD terms.
+
+| Water⁺ / cc-pVTZ spherical `uccsd(t)`, 4 threads (o 5/4, v 53/54) | start | now (U2) |
+|---|---|---|
+| UCC CCSD per iteration | 0.339 s | 0.127–0.129 s (2.65×) |
+| whole run | 9.4 s | 5.7–6.1 s |
+| RCCSD on neutral water, same basis, for scale | | 0.039 s |
+
+The run is now 43 % CCSD residual, 25 % (T), 23 % spin-block ERI
+preparation, 7 % SCF. Half the residual is building intermediates, and each
+kernel rebuilds the ones it reads: 10 % of the residual is repeat builds.
+U3a (build each intermediate once per residual evaluation) is implemented,
+not yet measured or gated; U3b (the merges) and U4 (UCC (T) kernels)
+follow. The half range does not apply to UCC (see "UCC").
+
 The next walls:
 - **Memory:** the ns⁴ AO tensor in the SCF and v⁴ `vvvv` in the CCSD.
   Removing either is a different method (direct or RI integrals, an
   AO-driven or RI `vvvv` contraction), not a fix.
-- **Time:** the CCSD's remaining 2.5×, and the UCC residual, which has only
-  part of the restricted work (see "UCC").
+- **Time:** the restricted CCSD's remaining 2.5×, and the UCC residual and
+  UCC (T) above.
 
 ## Memory: one large object per phase
 
@@ -312,9 +329,10 @@ only partly.
 |---|---|
 | GEMM lowering (R3) | yes (1c, U1, U2) |
 | small calls serial | yes |
-| half range (R1) | no: the mirror maps `abab` to `baba`, another block |
-| merges (R2, R2b) | no |
-| (T) layouts and GEMM blocks (8–1a) | no: the UCC (T) kernels are one block per spin case, still loops |
+| half range (R1) | not applicable: αβαβ has no i↔j symmetry, and the same-spin blocks already use the orbit fold (below) |
+| intermediates built once per evaluation | implemented (U3a), being measured; restricted too |
+| merges (R2, R2b) | no (U3b) |
+| (T) layouts and GEMM blocks (8–1a) | no: the UCC (T) kernels are one block per spin case, still loops (U4) |
 
 **The GEMM lowering for UCC** (1c). `_gemm_lowering` accepts the UCC
 operands, which `cc_operand` already took: ERI and Fock spin blocks
@@ -342,12 +360,37 @@ small restricted cases, which had paid the same cost since R3:
 | `be_rccsdtq_sto3g` | 6.99 s | 1.16 s |
 | `lih_rccsdt_generated_sto3g` | 3.18 s | 0.51 s |
 
-**Where UCC time goes now** (`sample`, water⁺ cc-pVTZ, whole run): thread
-waits 23 %, loop code in the same-spin doubles kernels 19 % (aaaa 12 %,
-bbbb 7 %; abab 0.5 %), the UCC (T) W kernels 16 %, `transform_eri` 13 %,
-the `t1 · vvvv` builders ~7 %, operand copies ~3 %. The census of the UCC
-CCSD residual before 1c (modelled at o 10, v 50): two-read contractions
-53 %, antisymmetrized differences 31 %, three or more factors 15 %.
+**Where UCC time goes now (after U2).** `sample` of the water⁺ cc-pVTZ
+`uccsd(t)` run, 4 threads, main thread only (it runs every parallel region
+as thread 0 and waits at the barriers, so its samples track wall time; 4684
+samples):
+
+| phase | share |
+|---|---|
+| UCC CCSD residuals | 43 % (doubles αβαβ 16, αααα 14, ββββ 10, singles 4) |
+| UCC (T) | 25 % |
+| spin-block ERI preparation | 23 % |
+| UHF SCF | 7 % |
+
+Inside the CCSD residual, building intermediates (`build_W_*`) is 48 % and
+the kernels' GEMM calls about half; operand reshaping (`cc_matrix`,
+`cc_group_offsets`) is ~12 % of all GEMM-call samples. Each kernel built
+the intermediates it reads, every iteration: 18 are built in two of the
+five kernels and 13 in three, and the repeat builds are 10 % of the CCSD
+residual. The restricted rank-2 file has the same pattern (19 of 57 built
+in both of its kernels). Hence U3a, then U3b.
+
+**The half range does not apply to UCC.** The same-spin doubles kernels
+use the orbit fold: they compute one representative per orbit of
+{e, (ij), (ab), (ij)(ab)} into X over all (i, j), then R = A(X). X has no
+i↔j symmetry, so R1's j ≥ i rewrite cannot run on it, and the fold already
+removes more than a half range would (4× against 2×).
+
+**Before U1** (same profile method, whole run): loop code in the same-spin
+doubles kernels was 19 % (aaaa 12 %, bbbb 7 %), the `t1 · vvvv` builders
+~7 %. The census of the UCC CCSD residual before 1c (modelled at o 10,
+v 50): two-read contractions 53 %, antisymmetrized differences 31 %, three
+or more factors 15 %.
 
 **The same-spin loop code (U1, done).** Two kinds of term were still
 loops, the 19 % above:
@@ -396,8 +439,9 @@ threads.
 
 | # | Step | Expected |
 |---|---|---|
-| U3 | UCC: half range on the same-spin doubles, and the merges | to be measured |
-| U4 | UCC (T): the restricted kernel's layouts and GEMM blocks for each spin block | the 16 % UCC (T) share |
+| U3a | Build each intermediate once per residual evaluation: one `<method>_residual_ops` struct per generated file with a bundle, passed to every residual kernel; `all_residuals` on the bundle. Implemented 2026-11-26, not yet measured or gated | ≤ 10 % of UCC CCSD; restricted too |
+| U3b | UCC: the merges (R2, R2b) | builders are 48 % of UCC CCSD |
+| U4 | UCC (T): the restricted kernel's layouts and GEMM blocks for each spin block | UCC (T) is 25 % of the run |
 | R3c | Accelerate `dgemm` behind the GEMM helper | 2.5–4× on the GEMMs; a build decision |
 | R2c | Share linearly dependent combinations of builders | 4 o³v³ builders → 3 contractions (≤ 1.06×) |
 | T1 | (T): V through layouts, energy loops | ~20 % of (T) |
@@ -405,6 +449,8 @@ threads.
 
 Beyond these: build the MO blocks from a direct or RI transform without
 storing the AO tensor. RI-CCSD would be its own scope.
+
+The U3 profile and why the half range is out are under "UCC".
 
 **R3c, Accelerate behind the GEMM helper.** Every lowered contraction goes
 through one product call, so swapping Eigen for `cblas_dgemm` is a change in
