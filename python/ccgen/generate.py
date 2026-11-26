@@ -1274,30 +1274,10 @@ def print_cpp_planck(
         # docs/CCGEN_GENERATED_CC_COST.md.
         eqs, dressed_intermediates = factorize_equations(
             eqs, spatial=spin_adapt, merge_transposes=True)
-        if spin_adapt and not ucc:
-            from .optimization.factorize import (
-                drop_unread_specs, merge_common_operand_reads,
-                single_use_specs)
-            # R2: terms reading t2 the same way share one contraction against
-            # the sum of their other factors (spatial t2 symmetry; on rank-2
-            # doubles 31 o^3v^3 contractions -> 6). After the factorizer, so
-            # the summed factors are its W's. Then R2b: the same on v, over
-            # what R2 left reading v, seeing through W's read once; the ladder
-            # t2.v and t1.(t1 v) become one contraction with tau = t2 + t1 t1.
-            # docs/CCSD_T_SIZE_SCOPE.md.
-            eqs = dict(eqs)
-            specs = list(dressed_intermediates or [])
-            for operand, max_rest in (("t2", 1), ("v", 2)):
-                inline = (single_use_specs(eqs, specs) if operand == "v"
-                          else None)
-                for target in list(eqs):
-                    if target == "energy":
-                        continue
-                    eqs[target], merged_specs = merge_common_operand_reads(
-                        eqs[target], target, operand=operand,
-                        max_rest=max_rest, inline=inline)
-                    specs += merged_specs
-            dressed_intermediates = drop_unread_specs(eqs, specs)
+        if spin_adapt or ucc:
+            from .optimization.factorize import merge_operand_reads
+            eqs, dressed_intermediates = merge_operand_reads(
+                eqs, dressed_intermediates, ucc=ucc)
         dressed_intermediates = dressed_intermediates or None
 
     if dressed_intermediates is not None:

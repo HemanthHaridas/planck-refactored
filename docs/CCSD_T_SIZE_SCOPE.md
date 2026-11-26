@@ -31,17 +31,17 @@ flat in the basis (3.1× on the dimer in cc-pVDZ, 2.5× in cc-pVTZ).
 the restricted work; U1 and U2 brought the GEMM lowering to all of its
 CCSD terms.
 
-| Water⁺ / cc-pVTZ spherical `uccsd(t)`, 4 threads (o 5/4, v 53/54) | start | now (U3a) |
+| Water⁺ / cc-pVTZ spherical `uccsd(t)`, 4 threads (o 5/4, v 53/54) | start | now (U3b) |
 |---|---|---|
-| UCC CCSD per iteration | 0.339 s | 0.115–0.116 s (2.9×) |
-| whole run | 9.4 s | 5.26–5.34 s |
+| UCC CCSD per iteration | 0.339 s | 0.099–0.0995 s (3.4×) |
+| whole run | 9.4 s | 4.96–5.01 s |
 | RCCSD on neutral water, same basis, for scale | | 0.039 s |
 
-The run is now 43 % CCSD residual, 25 % (T), 23 % spin-block ERI
-preparation, 7 % SCF. Half the residual is building intermediates, and each
-kernel rebuilds the ones it reads: 10 % of the residual is repeat builds.
-U3a (build each intermediate once per residual evaluation) removed those,
-1.12× per iteration; U3b (the merges) and U4 (UCC (T) kernels) follow. The half range does not apply to UCC (see "UCC").
+U3a built each intermediate once per residual evaluation instead of once
+per kernel (1.12× per iteration); U3b ran the restricted merges on each
+UCC spin block (1.16×). Half of the residual is now building
+intermediates, which no merge removes; UCC (T) (U4) is next. The half
+range does not apply to UCC (see "UCC").
 
 The next walls:
 - **Memory:** the ns⁴ AO tensor in the SCF and v⁴ `vvvv` in the CCSD.
@@ -330,7 +330,7 @@ only partly.
 | small calls serial | yes |
 | half range (R1) | not applicable: αβαβ has no i↔j symmetry, and the same-spin blocks already use the orbit fold (below) |
 | intermediates built once per evaluation | yes (U3a); restricted too |
-| merges (R2, R2b) | no (U3b) |
+| merges (R2, R2b) | yes (U3b), per spin block |
 | (T) layouts and GEMM blocks (8–1a) | no: the UCC (T) kernels are one block per spin case, still loops (U4) |
 
 **The GEMM lowering for UCC** (1c). `_gemm_lowering` accepts the UCC
@@ -475,53 +475,76 @@ samples; the run's phase shares are as before U3a). The UCC CCSD residual,
 Of the builder time, t1·v builders are 46 % (the three t1·ovvv builders
 alone 193 samples), t2·v 37 %, builders with two or more amplitudes 18 %.
 
-**U3b plan: the merges for UCC.** `merge_common_operand_reads` (R2, R2b)
-runs only for the restricted emit (`if spin_adapt and not ucc` in
-`print_cpp_planck`). It matches terms by one operand name and a list of
-that operand's equivalent index orders ("spellings"); UCC has six such
-operands (`t2_aaaa`, `t2_abab`, `t2_bbbb`, `v_aaaa`, `v_abab`, `v_bbbb`).
-A dry run of the existing pass on the factorized UCC CCSD equations, one
-operand at a time, cost modelled at o 5, v 54:
+**The merges on UCC (U3b, done).** `merge_common_operand_reads` (R2,
+R2b) had run only for the restricted emit. Its loop moved into one
+function, `merge_operand_reads(eqs, specs, ucc)` (`optimization/factorize.py`),
+which `print_cpp_planck` and the value gate both call. Under UCC it runs
+once per spin block (`t2_aaaa`, `t2_abab`, `t2_bbbb`, then the three `v`
+blocks). Same-spin blocks get the pair swap (b,a,j,i), a sign +1 symmetry;
+αβαβ gets identity only (the swap lands on βαβα, another block), and no
+single swap is offered (sign −1, which the pass cannot carry). The
+restricted emit is byte-identical.
 
-| | before | after |
+Before building it, a dry run of the pass on the factorized UCC CCSD
+equations (cost modelled at o 5, v 54) took kernel terms 322 → 194 and
+modelled kernel cost 2.19e9 → 1.20e9 (1.82×), almost all t2 with the
+identity spelling.
+
+**Two emitter defects, both found by the first build failing to compile.**
+A merged sum Y is defined through the factorizer's W's, whose names carry
+no spin, so a term reading only W's has no spin of its own:
+- Y's builder took loop bounds and extents from that term and fell back to
+  the restricted `no`/`nv`. Fixed: the builder emitter takes a slot-spin
+  table built once per file (`_operator_slot_spins`, in dependency order,
+  each operator resolved through the slots already known), and a builder's
+  own slots set its extents.
+- The triples kernels took their result spins from their first term alone,
+  which after merging can read only a Y. Fixed: the free indices' spins
+  come from every term through the same table, and a disagreement is
+  refused.
+
+| water⁺ cc-pVTZ `uccsd(t)`, 4 threads, 3 alternating runs | pre-U3b, same commit | U3b |
 |---|---|---|
-| kernel terms | 322 | 194 |
-| terms ≥ o³v³ | 68 | 25 |
-| modelled kernel cost | 2.19e9 | 1.20e9 (1.82×) |
+| UCC CCSD per iteration | 0.114–0.115 s | 0.099–0.0995 s (1.16×) |
+| whole run | 5.23–5.34 s | 4.96–5.01 s |
+| peak footprint | 511–512 MiB | 511–512 MiB |
+| GEMM calls in the UCC CCSD / CCSDT / CCSDTQ files | 371 / 1309 / 2964 | 268 / 1039 / 2767 |
 
-Almost all of it is t2 with the identity spelling (terms removed: αααα 34,
-αβαβ 51, ββββ 40); the same-spin double swap (b,a,j,i) (sign +1, valid for
-αααα and ββββ, not αβαβ) adds ~nothing, and R2b on v merges 3. So U3b is:
-run the existing pass over each UCC amplitude block, spellings identity
-(plus the double swap on same-spin blocks), then v. Expected: kernels
-1049 → ~580 samples, the residual ~1.35×, about 0.115 → 0.085 s per
-iteration, before the cost of building the merged sums (|Y| per member,
-small) and GEMM rates that need not follow the flop model.
+Short of the modelled 1.35× on the residual. The profile (main thread):
 
-What to check while building it:
-- **Spellings must be true symmetries of the block.** A single swap on a
-  same-spin block is a symmetry with sign −1, which the pass cannot carry;
-  pass only sign +1 spellings.
-- **The merged sums Y are new derived operators.** The UCC emitter takes
-  their slot spins from their definitions (`_operator_slot_spins`); check
-  each Y's spins are consistent (the emitter refuses a conflict).
-- **Gates:** `UCCRewritePreservesValueTests` (each rewritten term exact to
-  1e-10, mutation-checked) extended to the merged equations; the UCC
-  regression cases; identical output across 1/2/4/8 threads (not against
-  the pre-U3b binary: merging reassociates sums); the UCC emit pins move.
+| UCC CCSD residual | post-U3a | post-U3b |
+|---|---|---|
+| building intermediates | 753 | 811 (+58, the merged sums) |
+| doubles αβαβ | 360 | 186 |
+| doubles αααα | 332 | 269 |
+| doubles ββββ | 234 | 196 |
+| singles | 123 | 114 |
+| total | 1809 | 1581 (1.14×) |
 
-**After U3b, the builders are the larger half.** 42 % of the residual is
-building intermediates, and merges do not remove any. A different lever,
-not scoped: absorb t1 into the integrals once per iteration
-(t1-dressed / T1-transformed Hamiltonian), which removes the t1·v and
-multi-t1 builders (64 % of builder time) at the cost of one integral
-transform per iteration. Measure that transform first.
+The kernels fell 1.37× (1049 → 765), not 1.82×: αβαβ halved, the folded
+same-spin kernels gained less, and building the merged sums costs 58
+samples. A flop model over kernel terms overstates the gain.
+
+Gates: `UCCMergeTests` (adapt → fold → factorize → merge, every block
+against the plain residual, UCC CCSD and CCSDT exact to 1e-10; dropping one
+merged term fails exactly the block it came from); the 12 CC regression
+cases including the MPI smoke; identical output at 1/2/4/8 threads on
+`oh_uccsd_t_631g`, `water_cation_uccsd_t_631g`, `b_ucc3_sto3g`,
+`b_ucc4_sto3g`, `h2o2_c1_rccsd_t_631g`; final energies equal to the
+pre-U3b binary's to every printed digit; targeted ccgen tests pass (no pin
+moved: the pinned emits are undressed).
+
+**The builders are now the larger half.** 811 of 1581 samples (51 %) is
+building intermediates, and merges remove none. A different lever, not
+scoped: absorb t1 into the integrals once per iteration (t1-dressed /
+T1-transformed Hamiltonian), which removes the t1·v and multi-t1 builders
+(64 % of builder time after U3a) at the cost of one integral transform per
+iteration. Measure that transform first.
 
 ## Open, in order
 
 | # | Step | Expected |
 |---|---|---|
-| U3b | UCC: the t2 merge (R2) per amplitude block, then R2b on v (plan below) | modelled UCC CCSD kernel cost 1.82×; ~1.35× on the residual if the builders stay |
 | U4 | UCC (T): the restricted kernel's layouts and GEMM blocks for each spin block | UCC (T) is 25 % of the run |
 | R3c | Accelerate `dgemm` behind the GEMM helper | 2.5–4× on the GEMMs; a build decision |
 | R2c | Share linearly dependent combinations of builders | 4 o³v³ builders → 3 contractions (≤ 1.06×) |

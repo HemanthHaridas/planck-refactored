@@ -861,11 +861,16 @@ def _apply_group_element(arr, names, mapping):
     return np.transpose(arr, [names.index(s) for s in src])
 
 
-def _ucc_fold_disagreements(method, corrupt=None):
+def _ucc_fold_disagreements(method, corrupt=None, merge=False, drop=None):
     """(bad, folded_targets, terms_before, terms_after) for the production UCC
     composition with the orbit fold: adapt -> fold -> factorize -> symmetrize,
-    compared per block against the unfolded residual."""
-    from ccgen.optimization.factorize import factorize_equations
+    compared per block against the unfolded residual.
+
+    ``merge`` (U3b) adds the operand merges `print_cpp_planck` runs after the
+    factorizer (`merge_operand_reads`), and then checks every block, folded
+    or not, since a merge touches all of them; ``drop`` names a block whose
+    first term is removed after merging (mutation control)."""
+    from ccgen.optimization.factorize import factorize_equations, merge_operand_reads
     from ccgen.optimization.permutation import (
         fold_external_symmetry, spin_class_group)
     from ccgen.spin import ucc_adapt_equations
@@ -884,6 +889,13 @@ def _ucc_fold_disagreements(method, corrupt=None):
         groups = corrupt(groups)
     rewritten, specs = factorize_equations(
         folded, spatial=False, merge_transposes=True)
+    if merge:
+        rewritten, specs = merge_operand_reads(rewritten, specs, ucc=True)
+        groups = {t: groups.get(t, [({}, 1)]) for t in eqs
+                  if t != "energy" and eqs[t]}
+    if drop is not None:
+        rewritten = dict(rewritten)
+        rewritten[drop] = rewritten[drop][1:]
     tensors = ucc_random_tensors(UCC_DIMS["noa"], UCC_DIMS["nva"],
                                  UCC_DIMS["nob"], UCC_DIMS["nvb"], seed=0)
     built = _ucc_build_operators(list(specs or []), tensors)
@@ -902,6 +914,26 @@ def _ucc_fold_disagreements(method, corrupt=None):
     before = sum(len(eqs[t]) for t in groups)
     after = sum(len(rewritten[t]) for t in groups)
     return bad, sorted(groups), before, after
+
+
+class UCCMergeTests(unittest.TestCase):
+    """U3b: the operand merges (R2, R2b) on UCC, composed exactly as
+    `print_cpp_planck` runs them (adapt -> fold -> factorize -> merge), every
+    block against the plain residual (docs/CCSD_T_SIZE_SCOPE.md)."""
+
+    def test_ccsd_merge_is_value_preserving(self):
+        bad, targets, before, after = _ucc_fold_disagreements("ccsd", merge=True)
+        self.assertEqual(len(targets), 5)
+        self.assertEqual(bad, [])
+
+    def test_ccsdt_merge_is_value_preserving(self):
+        bad, targets, _, _ = _ucc_fold_disagreements("ccsdt", merge=True)
+        self.assertEqual(len(targets), 9)
+        self.assertEqual(bad, [])
+
+    def test_gate_catches_a_dropped_merged_term(self):
+        bad, _, _, _ = _ucc_fold_disagreements("ccsd", merge=True, drop="doubles_abab")
+        self.assertEqual([t for t, _ in bad], ["doubles_abab"])
 
 
 class UCCOrbitFoldTests(unittest.TestCase):

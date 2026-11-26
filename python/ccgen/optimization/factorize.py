@@ -1221,6 +1221,40 @@ def drop_unread_specs(eqs, specs):
         specs = kept
 
 
+def merge_operand_reads(eqs, specs, ucc=False):
+    """R2 then R2b over a whole residual manifold, after the factorizer:
+    returns (eqs, specs) with merged terms and the dead specs dropped.
+
+    R2: terms reading t2 the same way share one contraction against the sum
+    of their other factors (spatial t2 symmetry; on rank-2 doubles 31
+    o^3v^3 contractions -> 6); the summed factors are the factorizer's W's.
+    R2b: the same on v, over what R2 left reading v, seeing through W's read
+    once; the ladder t2.v and t1.(t1 v) become one contraction with
+    tau = t2 + t1 t1. docs/CCSD_T_SIZE_SCOPE.md.
+
+    U3b, ``ucc``: the same passes once per spin block (`t2_aaaa`, ...,
+    `v_bbbb`). The pair swap (b,a,j,i) is a sign +1 symmetry of a same-spin
+    block, as of the spatial one; on abab it lands on baba, another block,
+    so abab merges on the identity spelling only. The pass carries no sign,
+    so a single swap (sign -1 on a same-spin block) is never offered."""
+    blocks = ("aaaa", "abab", "bbbb") if ucc else ("",)
+    eqs = dict(eqs)
+    specs = list(specs or [])
+    for base, max_rest in (("t2", 1), ("v", 2)):
+        for block in blocks:
+            operand = f"{base}_{block}" if block else base
+            spellings = ((0, 1, 2, 3),) if block == "abab" else _PAIR_SWAP_SPELLINGS
+            inline = single_use_specs(eqs, specs) if base == "v" else None
+            for target in list(eqs):
+                if target == "energy":
+                    continue
+                eqs[target], merged = merge_common_operand_reads(
+                    eqs[target], target, operand=operand, spellings=spellings,
+                    max_rest=max_rest, inline=inline)
+                specs += merged
+    return eqs, drop_unread_specs(eqs, specs)
+
+
 # ── M3.0: factor an operator's OWN builder body ────────────────────
 
 

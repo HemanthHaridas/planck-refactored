@@ -1399,11 +1399,22 @@ def _emit_kernel(
         lines.append(f"    const {amplitude_type} &amplitudes)")
     lines.append("{")
     lines.extend(_orbital_count_preamble(ucc))
-    # U3b.2c: the result's extents are per-spin under UCC. The spins come from the
-    # kernel's own terms -- every term of a block-tagged target carries the same
-    # free-index spins (measured across the CCSD UCC manifold: 352 terms, zero
-    # disagreements with the target's tag), so the first term is representative.
-    result_spins = ucc_term_index_spins(terms[0]) if (ucc and terms) else None
+    # U3b.2c: the result's extents are per-spin under UCC, read off the kernel's
+    # own terms. Not the first term alone: after the merges (U3b) a term can
+    # read only a merged sum, whose name carries no spin, so every term is
+    # resolved through the operators' slot table and the free indices must
+    # agree across them.
+    slot_spins = _operator_slot_spins(intermediates) if ucc else None
+    result_spins = None
+    if ucc and terms:
+        free = {i.name for i in terms[0].free_indices}
+        result_spins = {}
+        for term in terms:
+            for name, spin in _term_index_spins(term, slot_spins).items():
+                if name in free and result_spins.setdefault(name, spin) != spin:
+                    raise ValueError(
+                        f"{target}: free index {name!r} is both spin "
+                        f"{result_spins[name]!r} and {spin!r} across its terms")
     if result_rank == 0:
         lines.append("    double result = 0.0;")
     else:
@@ -1459,7 +1470,7 @@ def _emit_kernel(
             method, target, lines, emitted_terms, result_type, free_indices,
             denominator_type, amplitude_type, required_intermediates,
             intermediate_names, arbitrary, ucc, symmetrizer=symmetrizer,
-            result_spins=result_spins, shared_ops=shared_ops)
+            result_spins=result_spins, shared_ops=shared_ops, slot_spins=slot_spins)
 
     if arbitrary:
         bindings = (_amplitude_view_bindings(emitted_terms)
@@ -1471,7 +1482,7 @@ def _emit_kernel(
     lines.extend(_emit_terms(
         emitted_terms, intermediate_names, arbitrary, ucc, _fuse_loops_setting(),
         omp_collapse=_omp_collapse_setting(),
-        factor_spins=_operator_slot_spins(required_intermediates) if ucc else None))
+        factor_spins=slot_spins))
     lines.extend(_symmetrize_lines(result_type, free_indices, symmetrizer,
                                    result_spins))
     lines.append("    return result;")
@@ -1573,7 +1584,7 @@ def _emit_chunked_kernel(
     method, target, header_lines, emitted_terms, result_type, free_indices,
     denominator_type, amplitude_type, required_intermediates,
     intermediate_names, arbitrary, ucc=False, symmetrizer=None,
-    result_spins=None, shared_ops=None,
+    result_spins=None, shared_ops=None, slot_spins=None,
 ):
     """Emit a large residual kernel as `_partN` sub-functions accumulating into a
     by-reference `result`, plus the main kernel that allocates `result`, calls
@@ -1655,8 +1666,7 @@ def _emit_chunked_kernel(
         out.extend(_emit_terms(
             chunk, intermediate_names, arbitrary, ucc, fuse, annotate=False,
             omp_collapse=_omp_collapse_setting(),
-            factor_spins=(_operator_slot_spins(required_intermediates)
-                          if ucc else None)))
+            factor_spins=slot_spins))
         out.append("}")
         out.append("")
 
@@ -1700,12 +1710,24 @@ def _term_index_spins(term, factor_spins) -> dict[str, str]:
 
 
 def _operator_slot_spins(specs) -> dict[str, tuple[str, ...]]:
-    """Slot spins of each derived operator, read off its own definition."""
-    table = {}
+    """Slot spins of each derived operator, read off its own definition.
+
+    Specs come in dependency order, so a definition that reads other derived
+    operators (a merged sum Y over the factorizer's W's, U3b) resolves their
+    untagged factors from the slots already in the table. Only the operator's
+    own indices must agree across its definition terms; dummies are per term."""
+    table: dict[str, tuple[str, ...]] = {}
     for spec in specs or ():
         if not spec.definition_terms:
             continue
-        spins = _builder_index_spins(spec, ())
+        own = {i.name for i in spec.indices}
+        spins: dict[str, str] = {}
+        for term in spec.definition_terms:
+            for name, spin in _term_index_spins(term, table).items():
+                if name in own and spins.setdefault(name, spin) != spin:
+                    raise ValueError(
+                        f"{spec.name}: index {name!r} is both spin "
+                        f"{spins[name]!r} and {spin!r} across its definition")
         table[spec.name] = tuple(spins[i.name] for i in spec.indices)
     return table
 
@@ -1737,8 +1759,15 @@ def _emit_intermediate_builder(
     force_arbitrary: bool = False,
     sibling_specs: dict[str, IntermediateSpec] | None = None,
     ucc: bool = False,
+    slot_spins: dict[str, tuple[str, ...]] | None = None,
 ) -> str:
+    """``slot_spins`` (UCC): every derived operator's slot spins, built once
+    per file by `_operator_slot_spins`. A definition term that reads only
+    other operators (a merged sum, U3b) has no spin-tagged factor of its own,
+    so its loop bounds and this builder's extents come from this table."""
     result_type = _tensor_type(spec.rank)
+    if ucc and slot_spins is None:
+        slot_spins = _operator_slot_spins((sibling_specs or {}).values())
     amplitude_type = _amplitude_type(method, force_arbitrary)
     denominator_type = _denominator_type(method, force_arbitrary)
     # UCC definition terms are already spin-resolved AlgebraTerms, like the UCC
@@ -1766,6 +1795,9 @@ def _emit_intermediate_builder(
     steps = factored_builder_steps(spec, stride_order=stride_order)
     result_spins = (_builder_index_spins(spec, steps)
                     if (ucc and spec.definition_terms) else None)
+    if result_spins is not None and spec.name in slot_spins:
+        result_spins.update(
+            {i.name: s for i, s in zip(spec.indices, slot_spins[spec.name])})
     lines.append(
         f"    {result_type} result({_dims_expr(builder_indices, result_type, result_spins)});"
     )
@@ -1824,8 +1856,7 @@ def _emit_intermediate_builder(
         scratch_names = frozenset(
             lhs for lhs, _ in steps if lhs != "result")
         names_in_scope = (sibling_names or frozenset()) | scratch_names
-        factor_spins = (_operator_slot_spins(sibling_specs.values())
-                        if (ucc and sibling_specs) else {})
+        factor_spins = dict(slot_spins) if ucc else {}
         for lhs, step in steps:
             if lhs != "result":
                 stype = _tensor_type(len(step.free_indices))
@@ -1848,7 +1879,8 @@ def _emit_intermediate_builder(
             lines.append(emit_planck_term(
                 term, lhs="result", indent=4, intermediate_names=sibling_names,
                 arbitrary_amplitudes=arbitrary, ucc=ucc,
-                omp_collapse=_omp_collapse_setting()))
+                omp_collapse=_omp_collapse_setting(),
+                factor_spins=slot_spins if ucc else None))
             lines.append("")
     lines.append("    return result;")
     lines.append("}")
@@ -2027,13 +2059,14 @@ def emit_planck_translation_unit(
         # Ordered by construction: `intermediates` is dependency-ordered, so a sibling
         # referenced by a later spec already has its `build_` emitted above it (V1.3).
         sibling_spec_map = {spec.name: spec for spec in intermediates}
+        file_slot_spins = _operator_slot_spins(intermediates) if ucc else None
         for spec in intermediates:
             if not _is_supported_tensor_rank(spec.rank):
                 continue
             lines.append(_emit_intermediate_builder(
                 method, spec, sibling_names, factor_body=factor_builder_bodies,
                 stride_order=factor_builder_bodies, force_arbitrary=force_arbitrary,
-                sibling_specs=sibling_spec_map, ucc=ucc))
+                sibling_specs=sibling_spec_map, ucc=ucc, slot_spins=file_slot_spins))
             lines.append("")
 
     # U3a: a file that emits a kernel bundle builds every intermediate its
