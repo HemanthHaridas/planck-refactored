@@ -65,6 +65,9 @@ in the table needs all three.
 
 ## What each step needs
 
+**Steps 0–3 wait for MRCC access** (user decision, 2026-11-26). Each gate
+needs a CFOUR or MRCC value, and neither is available. Step 4 (Λ) does not.
+
 ### 0. CCSD[T]: one term, no new kernels
 
 [T] is (T) without V: `(wx + v)·wx/D` becomes `wx·wx/D`
