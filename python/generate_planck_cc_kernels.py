@@ -115,6 +115,14 @@ def main() -> None:
              "factorizer route (not yet wired -- W3.2).",
     )
     parser.add_argument(
+        "--lambda",
+        dest="lambda_",
+        action="store_true",
+        help="Emit the Λ (left-hand) residual kernels instead of the T ones, as "
+             "<method>[_ucc]_lambda_planck_generated.cpp (docs/CC_LAMBDA_SCOPE.md, "
+             "3b). Needs --spin-adapt or --ucc.",
+    )
+    parser.add_argument(
         "--dress-operators",
         action="store_true",
         help="Deprecated alias for --dressing recognized. Kept so existing "
@@ -132,7 +140,22 @@ def main() -> None:
         default=None,
         help="Optional per-target live memory budget in MB for emitted intermediates.",
     )
+    parser.add_argument(
+        "--shards",
+        nargs="*",
+        default=[],
+        metavar="METHOD=N",
+        help="Write each method's TU as <stem>.h plus N sources <stem>_s<k>.cpp "
+             "(default 1). The planck_cc_generated library compiles them separately, "
+             "so no single compile holds a whole rank-4 file (ccgen/emit/shard.py).",
+    )
     args = parser.parse_args()
+    shard_counts = {}
+    for item in args.shards:
+        name, _, n = item.partition("=")
+        if not n.isdigit() or int(n) < 1:
+            parser.error(f"--shards expects METHOD=N with N >= 1, got {item!r}")
+        shard_counts[name.lower()] = int(n)
 
     # Resolve the alias onto the one axis before anything reads it, so there is a
     # single source of truth for "which dressing".
@@ -153,6 +176,23 @@ def main() -> None:
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    def write_tu(stem: str, method: str, code: str) -> None:
+        """<stem>.h and <stem>_s<k>.cpp; prints each path and the largest shard."""
+        from ccgen.emit.shard import shard_translation_unit
+        n = shard_counts.get(method.lower(), 1)
+        header, shards = shard_translation_unit(code, n, f"{stem}.h")
+        (output_dir / f"{stem}.h").write_text(header, encoding="utf-8")
+        for k, text in enumerate(shards):
+            path = output_dir / f"{stem}_s{k}.cpp"
+            path.write_text(text, encoding="utf-8")
+            print(path)
+        biggest = max(len(t) for t in shards) / 1e6
+        # ponytail: shard counts are a CMake table (_planck_cc_shards); this
+        # warning is how a new rank finds out its count is too low.
+        if biggest > 4.0:
+            print(f"[ccgen] warning: {stem} largest shard {biggest:.1f} MB; raise its "
+                  "count in CMakeLists.txt _planck_cc_shards", file=sys.stderr)
 
     if args.ccsd_t:
         from ccgen.methods.ccsd_t import emit_planck_ccsd_t_translation_unit
@@ -193,6 +233,7 @@ def main() -> None:
             spin_adapt=args.spin_adapt,
             ucc=args.ucc,
             force_arbitrary=force_arbitrary,
+            lambda_=args.lambda_,
             intermediate_threshold=args.intermediate_threshold,
             intermediate_memory_budget_bytes=(
                 None
@@ -209,26 +250,25 @@ def main() -> None:
     # U5.0: a UCC run writes its own file. Without this it would OVERWRITE the RCC
     # TU for the same method -- the two are separate translation units, not
     # variants of one, and both are meant to be linkable into the same binary.
-    suffix = "_ucc_planck_generated.cpp" if args.ucc else "_planck_generated.cpp"
+    suffix = "_ucc_planck_generated" if args.ucc else "_planck_generated"
+    if args.lambda_:
+        # One file per method, always arbitrary-order: the Λ bundle has no
+        # plain tensor_backend form.
+        for method in args.methods:
+            write_tu(f"{method.lower()}{'_ucc' if args.ucc else ''}_lambda_planck_generated",
+                     method, emit(method, force_arbitrary=True))
+        return
 
     for method in args.methods:
-        code = emit(method, force_arbitrary=False)
-        out_path = output_dir / f"{method.lower()}{suffix}"
-        out_path.write_text(code + "\n", encoding="utf-8")
-        print(out_path)
+        write_tu(f"{method.lower()}{suffix}", method, emit(method, force_arbitrary=False))
 
         # Lower-rank arbitrary-order companion TUs (spatial RCC amplitude type),
         # for cross-rank .ccamp restart / the generated runtime. Rank >= 4 methods
         # are already arbitrary-order, so no companion is needed there.
         from ccgen.cluster import parse_cc_level  # local: avoid import cost when unused
         if args.arbitrary_lower_ranks and max(parse_cc_level(method.lower()), default=0) < 4:
-            arb_code = emit(method, force_arbitrary=True)
-            arb_path = output_dir / (
-                f"{method.lower()}_arbitrary"
-                + ("_ucc" if args.ucc else "")
-                + "_planck_generated.cpp")
-            arb_path.write_text(arb_code + "\n", encoding="utf-8")
-            print(arb_path)
+            write_tu(f"{method.lower()}_arbitrary{'_ucc' if args.ucc else ''}_planck_generated",
+                     method, emit(method, force_arbitrary=True))
 
 
 if __name__ == "__main__":

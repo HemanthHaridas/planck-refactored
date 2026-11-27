@@ -6146,6 +6146,80 @@
    ]
   },
   {
+   "id": "water_rccsd_lambda_631g",
+   "input": "tests/inputs/regression/post_hf/water_rccsd_lambda_631g.hfinp",
+   "_pyscf_reference": "Spatial Λ equations (ccgen) solved by GMRES at PySCF 2.15.0 RCCSD t, cart=True, Planck's GBS (tests/pyscf/cc_lambda_references.py, 2026-11-26; SCF converged on the orbital gradient too). E_corr -0.1353220151.",
+   "tags": [
+    "core",
+    "post_hf"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Λ converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l1",
+     "expected": 0.004679933426,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l2",
+     "expected": 0.024618462126,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "oh_uccsd_lambda_631g",
+   "input": "tests/inputs/regression/post_hf/oh_uccsd_lambda_631g.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 UCCSD solve_lambda, cart=True, Planck's GBS (tests/pyscf/cc_lambda_references.py, 2026-11-26; UHF converged on the orbital gradient too, which moves λ1 by 7e-9). E_corr -0.0988276827.",
+   "tags": [
+    "extended",
+    "ucc",
+    "post_hf"
+   ],
+   "requires_build_option": "PLANCK_CC_UCC",
+   "expected_exit_code": 0,
+   "contains": [
+    "Λ converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l1_aa",
+     "expected": 0.0029167382498,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l1_bb",
+     "expected": 0.0020198176194,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l2_aaaa",
+     "expected": 0.0038830901861,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l2_abab",
+     "expected": 0.0058001225848,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l2_bbbb",
+     "expected": 0.002531289884,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "water_cation_uccsd_t_631g",
    "input": "tests/inputs/regression/post_hf/water_cation_uccsd_t_631g.hfinp",
    "_pyscf_reference": "PySCF 2.15.0 UHF (conv_tol_grad 1e-10) + UCCSD + uccsd_t, cart=True, Planck's GBS: E_UCCSD(T) -75.6836253364, E(T) -0.0006729001. Equal to the last printed digit (2026-11-20).",

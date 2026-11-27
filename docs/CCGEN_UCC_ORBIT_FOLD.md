@@ -50,6 +50,19 @@ not change (333 at CCSDT): the orbit representatives use the same contraction
 shapes, so no operator is lost and none is added. Generation costs 14 s per
 order-576 block; regenerating all three UCC files takes 52 s.
 
+**Canonical orbit keys: tried and reverted (2026-11-26).** The fold keys
+each image by its text with dummies as named, so images that differ only
+in dummy names are separate orbits. Keying on the canonical form instead
+(factors sorted, then `canonicalize_term_to_fixed_point`, joining an
+existing representative when any image is one) is exact (2e-15 against the
+unfolded residual) but buys little: UCC CCSDT 802 → 790 terms, RCC T
+triples 331 → 306, Λ residuals no change (they hold few images). Its cost
+is the canonicalizer's, which grows steeply with summed indices: the
+Λ-CCSDTQ fold went from under a second to many minutes (single large
+terms took minutes), and a bound at six summed indices did not rescue it.
+Reverted. A cheaper complete canonical form is the route if the ~8 % on
+the T triples is wanted.
+
 ## Where the logic lives
 
 - `ccgen/optimization/permutation.py`: `spin_class_group(term)` (the group) and

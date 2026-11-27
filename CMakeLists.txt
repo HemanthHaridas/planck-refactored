@@ -685,20 +685,6 @@ target_link_libraries(hartree-fock
 
 add_dependencies(hartree-fock libmsym)
 
-# The generated CC kernel registry (#includes the spin-adapted ccsdtq TU) is a
-# ~230k-line TU whose two quadruples residuals are single ~5000-statement
-# functions. At -O3 the optimizer is super-linear in function-body size and the
-# compile takes 40+ min (and can appear to hang); the contraction loops here are
-# simple and gain almost nothing from -O3, while the perf-critical work is in
-# Eigen elsewhere. Compile just this object at -O1 so the build finishes in
-# minutes. Applies to hartree-fock, planck-dft, and planck-mpi (all include it
-# via POSTHF_SRC). See docs/CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md.
-# (A proper fix is to chunk the giant residual kernels into sub-functions in the
-# ccgen emit so any optimization level stays cheap; tracked as follow-on.)
-set_source_files_properties(
-    ${SRC_DIR}/post_hf/cc/generated_kernel_registry.cpp
-    PROPERTIES COMPILE_OPTIONS "-O1")
-
 # OpenMP linkage
 if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_link_libraries(hartree-fock OpenMP::OpenMP_CXX)
@@ -751,6 +737,51 @@ add_executable(planck-dft
     ${FREQ_SRC}
 )
 
+# Generated CC TUs are compiled in shards into planck_cc_generated (below):
+# <stem>.h plus <stem>_s0.cpp ... _s<N-1>.cpp (python/ccgen/emit/shard.py).
+# One compile holding every kernel needed > 8 GiB at rank 4 with UCC (76 MB of
+# source). N per (rank, kind) keeps a shard near 1.4 MB, measured at rank 4:
+# T 3.7 MB, UCC T 2.1 MB, Λ 21.9 MB, UCC Λ 42.5 MB. Peak compile memory at -O1
+# is 1.31 GB for a 1.4 MB shard and 1.74 GB for 2.8 MB (headers alone 0.35 GB;
+# GCC's ggc params do not lower it), so -j4 stays near 5 GB. The generator
+# warns when a shard passes 4 MB.
+# ponytail: ranks 5-6 are unmeasured guesses; raise them when the warning fires.
+function(_planck_cc_shards method kind out)
+    list(FIND _planck_cc_method_by_rank ${method} _idx)
+    math(EXPR _rank "${_idx} + 2")
+    set(_n 1)
+    if(_rank EQUAL 3)
+        set(_counts T 1 T_UCC 1 L 1 L_UCC 2)   # UCC Λ-CCSDT is 3.3 MB
+    elseif(_rank EQUAL 4)
+        set(_counts T 3 T_UCC 2 L 16 L_UCC 32)
+    elseif(_rank GREATER 4)
+        set(_counts T 12 T_UCC 8 L 64 L_UCC 128)
+    endif()
+    if(_rank GREATER_EQUAL 3)
+        list(FIND _counts ${kind} _k)
+        math(EXPR _k "${_k} + 1")
+        list(GET _counts ${_k} _n)
+    endif()
+    set(${out} ${_n} PARENT_SCOPE)
+endfunction()
+
+# Append <stem>.h and its shard sources to OUT_FILES and the .cpp to the
+# library sources, and `METHOD=N` to OUT_ARGS (the generator's --shards).
+function(_planck_cc_tu stem method kind out_files out_args)
+    _planck_cc_shards(${method} ${kind} _n)
+    set(_files ${${out_files}} ${CMAKE_BINARY_DIR}/generated/cc/${stem}.h)
+    math(EXPR _last "${_n} - 1")
+    foreach(_k RANGE 0 ${_last})
+        list(APPEND _files ${CMAKE_BINARY_DIR}/generated/cc/${stem}_s${_k}.cpp)
+        list(APPEND _planck_cc_generated_sources
+            ${CMAKE_BINARY_DIR}/generated/cc/${stem}_s${_k}.cpp)
+    endforeach()
+    set(${out_files} ${_files} PARENT_SCOPE)
+    set(${out_args} ${${out_args}} ${method}=${_n} PARENT_SCOPE)
+    set(_planck_cc_generated_sources ${_planck_cc_generated_sources} PARENT_SCOPE)
+endfunction()
+
+set(_planck_cc_generated_sources "")
 if(Python3_Interpreter_FOUND)
     # RCC methods to emit. The plain <method>_planck_generated.cpp TU is consumed
     # only at rank >= 4 (generated_kernel_registry.cpp); rank 3 runs through its
@@ -848,19 +879,23 @@ if(Python3_Interpreter_FOUND)
     # 20+ MB of it) unconditionally, even though the emitted content is
     # deterministic and was almost always unchanged.
     set(_ccgen_planck_outputs "")
+    set(_ccgen_planck_shards "")
     set(_ccgen_ucc_outputs "")
+    set(_ccgen_ucc_shards "")
     foreach(_planck_cc_method ${PLANCK_CC_METHODS})
-        list(APPEND _ccgen_ucc_outputs
-            ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_ucc_planck_generated.cpp)
+        if(PLANCK_CC_UCC)
+            _planck_cc_tu(${_planck_cc_method}_ucc_planck_generated ${_planck_cc_method}
+                          T_UCC _ccgen_ucc_outputs _ccgen_ucc_shards)
+        endif()
         list(FIND _planck_cc_method_by_rank ${_planck_cc_method} _planck_cc_method_rank_idx)
         if(_planck_cc_method_rank_idx GREATER_EQUAL 2)
-            list(APPEND _ccgen_planck_outputs
-                ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_planck_generated.cpp)
+            _planck_cc_tu(${_planck_cc_method}_planck_generated ${_planck_cc_method}
+                          T _ccgen_planck_outputs _ccgen_planck_shards)
         elseif(_planck_cc_method_rank_idx EQUAL 1 AND PLANCK_CC_ARBITRARY_LOWER_RANKS)
             # Rank-3 arbitrary-order companion, RCC side only -- the UCC
             # invocation never passes --arbitrary-lower-ranks, so it emits none.
-            list(APPEND _ccgen_planck_outputs
-                ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_arbitrary_planck_generated.cpp)
+            _planck_cc_tu(${_planck_cc_method}_arbitrary_planck_generated ${_planck_cc_method}
+                          T _ccgen_planck_outputs _ccgen_planck_shards)
         endif()
     endforeach()
 
@@ -870,7 +905,7 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
         COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
-                ${_ccgen_planck_kernel_args}
+                ${_ccgen_planck_kernel_args} --shards ${_ccgen_planck_shards}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
         DEPENDS
             ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
@@ -897,13 +932,15 @@ if(Python3_Interpreter_FOUND)
             ${_ccgen_omp_stamp}
         COMMENT "Generating CCSD(T) kernels with ccgen")
 
-    set(_ccgen_rank2_output ${CMAKE_BINARY_DIR}/generated/cc/ccsd_arbitrary_planck_generated.cpp)
+    set(_ccgen_rank2_output "")
+    set(_ccgen_rank2_shards "")
+    _planck_cc_tu(ccsd_arbitrary_planck_generated ccsd T _ccgen_rank2_output _ccgen_rank2_shards)
     add_custom_command(
         OUTPUT ${_ccgen_rank2_output}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
         COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
-                ${_ccgen_rank2_kernel_args}
+                ${_ccgen_rank2_kernel_args} --shards ${_ccgen_rank2_shards}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
         DEPENDS
             ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
@@ -911,8 +948,37 @@ if(Python3_Interpreter_FOUND)
             ${_ccgen_omp_stamp}
         COMMENT "Generating the dressed rank-2 RCCSD kernel with ccgen")
 
+    # Λ residual kernels (docs/CC_LAMBDA_SCOPE.md, 3b), for the RCC ranks
+    # this build runs generated (rank 2 always, rank 3 with
+    # PLANCK_CC_ARBITRARY_LOWER_RANKS, ranks >= 4 by PLANCK_CC_MAXORDER).
+    # Always spin-adapted and dressed (derived), like the rank-2 T kernels:
+    # the emitter has no spin-orbital or `recognized` Λ route.
+    set(_ccgen_lambda_methods ccsd ${_ccgen_rcc_methods})
+    set(_ccgen_lambda_outputs "")
+    set(_ccgen_lambda_shards "")
+    foreach(_m ${_ccgen_lambda_methods})
+        _planck_cc_tu(${_m}_lambda_planck_generated ${_m} L _ccgen_lambda_outputs _ccgen_lambda_shards)
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_ccgen_lambda_outputs}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
+        COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                --output-dir ${CMAKE_BINARY_DIR}/generated/cc
+                --methods ${_ccgen_lambda_methods}
+                --engine ${PLANCK_CC_ENGINE}
+                --spin-adapt --dressing derived --lambda
+                --shards ${_ccgen_lambda_shards}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+        DEPENDS
+            ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+            ${_ccgen_package_sources}
+            ${_ccgen_omp_stamp}
+        COMMENT "Generating the Λ residual kernels with ccgen (${_ccgen_lambda_methods})")
+
     add_custom_target(ccgen-planck-kernels
-        DEPENDS ${_ccgen_planck_outputs} ${_ccgen_ccsd_t_output} ${_ccgen_rank2_output})
+        DEPENDS ${_ccgen_planck_outputs} ${_ccgen_ccsd_t_output} ${_ccgen_rank2_output}
+                ${_ccgen_lambda_outputs})
 
     # The UCC emit is a separate add_custom_command with its own OUTPUT, not a
     # POST_BUILD step on the target above: POST_BUILD commands are tied to
@@ -925,7 +991,7 @@ if(Python3_Interpreter_FOUND)
             OUTPUT ${_ccgen_ucc_outputs}
             COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
                     ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
-                    ${_ccgen_ucc_kernel_args}
+                    ${_ccgen_ucc_kernel_args} --shards ${_ccgen_ucc_shards}
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
             DEPENDS
                 ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
@@ -933,7 +999,31 @@ if(Python3_Interpreter_FOUND)
                 ${_ccgen_omp_stamp}
             COMMENT "Generating unrestricted (UCC) CC kernels with ccgen")
 
-        add_custom_target(ccgen-planck-ucc-kernels DEPENDS ${_ccgen_ucc_outputs})
+        # The UCC Λ kernels, one per UCC method (docs/CC_LAMBDA_SCOPE.md, 3b).
+        set(_ccgen_ucc_lambda_outputs "")
+        set(_ccgen_ucc_lambda_shards "")
+        foreach(_m ${PLANCK_CC_METHODS})
+            _planck_cc_tu(${_m}_ucc_lambda_planck_generated ${_m} L_UCC
+                          _ccgen_ucc_lambda_outputs _ccgen_ucc_lambda_shards)
+        endforeach()
+        add_custom_command(
+            OUTPUT ${_ccgen_ucc_lambda_outputs}
+            COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                    --output-dir ${CMAKE_BINARY_DIR}/generated/cc
+                    --methods ${PLANCK_CC_METHODS}
+                    --engine ${PLANCK_CC_ENGINE}
+                    --ucc --dressing derived --lambda
+                    --shards ${_ccgen_ucc_lambda_shards}
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+            DEPENDS
+                ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                ${_ccgen_package_sources}
+                ${_ccgen_omp_stamp}
+            COMMENT "Generating the UCC Λ residual kernels with ccgen")
+
+        add_custom_target(ccgen-planck-ucc-kernels
+            DEPENDS ${_ccgen_ucc_outputs} ${_ccgen_ucc_lambda_outputs})
         add_dependencies(ccgen-planck-kernels ccgen-planck-ucc-kernels)
     endif()
 
@@ -942,6 +1032,20 @@ endif()
 
 if(Python3_Interpreter_FOUND)
     add_dependencies(hartree-fock ccgen-planck-kernels)
+
+    # The generated CC kernels, compiled once for every binary that runs them,
+    # one shard per TU. -O1: the residual kernels are long straight-line
+    # functions on which -O3 is super-linear in compile time and gains little
+    # (docs/CCGEN_GENERATED_CC_COST.md).
+    add_library(planck_cc_generated STATIC ${_planck_cc_generated_sources})
+    add_dependencies(planck_cc_generated ccgen-planck-kernels)
+    target_compile_options(planck_cc_generated PRIVATE -O1)
+    target_include_directories(planck_cc_generated PRIVATE
+        ${SRC_DIR} ${CMAKE_BINARY_DIR} ${eigen_SOURCE_DIR})
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck_cc_generated PUBLIC OpenMP::OpenMP_CXX)
+    endif()
+    target_link_libraries(hartree-fock planck_cc_generated)
 endif()
 
 target_include_directories(planck-dft PUBLIC
@@ -1017,6 +1121,7 @@ if(BUILD_MPI)
     add_dependencies(planck-mpi libmsym libxc)
     if(Python3_Interpreter_FOUND)
         add_dependencies(planck-mpi ccgen-planck-kernels)
+        target_link_libraries(planck-mpi planck_cc_generated)
     endif()
     # USING_Libxc enables the libxc-backed XC path (same as planck-dft).
     target_compile_definitions(planck-mpi PRIVATE USING_Libxc ${_planck_posthf_cc_defs})

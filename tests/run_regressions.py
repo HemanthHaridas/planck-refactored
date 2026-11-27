@@ -201,6 +201,11 @@ def extract_metrics(output: str) -> dict[str, Any]:
         else:
             metrics[key] = float(value)
 
+    # `cc_lambda`: one line per λ block (docs/CC_LAMBDA_SCOPE.md, 3c), e.g.
+    # "Lambda rms l2_abab = 5.80e-03" -> metric lambda_rms_l2_abab.
+    for name, value in re.findall(r"Lambda rms (l\w+) = ([-+0-9Ee\.]+)", output):
+        metrics[f"lambda_rms_{name}"] = float(value)
+
     for key, pattern in COUNT_PATTERNS.items():
         metrics[key] = len(pattern.findall(output))
 

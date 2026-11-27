@@ -539,7 +539,7 @@ def _map_factor(
     # independent Sz sector of the same amplitude (t4_aaabaaab), stored/read as a
     # distinct block. Both are rank-`\d+` amplitudes; the tag routes the read to
     # the sector's own tensor.
-    amplitude_match = re.fullmatch(r"t(\d+)(?:_([ab]+))?", tensor_obj.name)
+    amplitude_match = re.fullmatch(r"([tl])(\d+)(?:_([ab]+))?", tensor_obj.name)
 
     # v/f may carry a UCC spin-block suffix (`v_abab`, `f_aa`). RCC emits bare
     # `v`/`f`, so this is a strict superset: `re.fullmatch(r"v(?:_([ab]+))?", "v")`
@@ -578,8 +578,9 @@ def _map_factor(
         return _map_eri_tensor(tensor, integral_tag)
 
     if amplitude_match is not None:
-        excitation_rank = int(amplitude_match.group(1))
-        sector_tag = amplitude_match.group(2)      # None for the reference sector
+        root = amplitude_match.group(1)            # t, or l for a Λ multiplier
+        excitation_rank = int(amplitude_match.group(2))
+        sector_tag = amplitude_match.group(3)      # None for the reference sector
         occ = [idx.name for idx in indices if idx.space == "occ"]
         vir = [idx.name for idx in indices if idx.space == "vir"]
         if len(occ) != excitation_rank or len(vir) != excitation_rank:
@@ -596,9 +597,11 @@ def _map_factor(
         if arbitrary_amplitudes:
             # R3.1.3d: a higher Sz sector reads from its own bound view
             # `t<rank>_<tag>` (sector_tag), the reference from `t<rank>`.
-            view = (f"t{excitation_rank}_{sector_tag}" if sector_tag
-                    else f"t{excitation_rank}")
+            view = (f"{root}{excitation_rank}_{sector_tag}" if sector_tag
+                    else f"{root}{excitation_rank}")
             return 1, f"{view}({', '.join(occ + vir)})"
+        if root == "l":
+            raise ValueError(f"λ factor {tensor_obj!r} outside the arbitrary-order emit")
         if excitation_rank == 1:
             return 1, f"amplitudes.t1({occ[0]}, {vir[0]})"
         if excitation_rank == 2:
@@ -980,7 +983,7 @@ def _gemm_lowering(term, factors, free, summed, lhs, intermediate_names,
             labels = [x.strip() for x in args.split(",")]
             known = (name.startswith("mo_blocks.")
                      or name in (intermediate_names or ())
-                     or (arbitrary_amplitudes and re.fullmatch(r"t\d+(?:_[ab]+)?", name))
+                     or (arbitrary_amplitudes and re.fullmatch(r"[tl]\d+(?:_[ab]+)?", name))
                      or _UCC_OPERAND.fullmatch(name))
             if not known or any(len(x) != 1 for x in labels) or len(set(labels)) != len(labels):
                 return None
@@ -1174,7 +1177,7 @@ def _amplitude_type(method: str, force_arbitrary: bool = False) -> str:
     return "RCCSDAmplitudes"
 
 
-def _amplitude_ranks_used(terms) -> list[tuple[int, str | None]]:
+def _amplitude_ranks_used(terms, root: str = "t") -> list[tuple[int, str | None]]:
     """Distinct t-amplitude `(rank, sector_tag)` pairs referenced across `terms`,
     sorted. `sector_tag` is None for the reference Sz sector (`t<rank>`) and the
     tag string for a higher sector (`t<rank>_<tag>`, R3.1.3d). Drives the
@@ -1182,7 +1185,7 @@ def _amplitude_ranks_used(terms) -> list[tuple[int, str | None]]:
     used: set[tuple[int, str | None]] = set()
     for term in terms:
         for factor in term.factors:
-            m = re.fullmatch(r"t(\d+)(?:_([ab]+))?", _source_tensor(factor).name)
+            m = re.fullmatch(root + r"(\d+)(?:_([ab]+))?", _source_tensor(factor).name)
             if m:
                 used.add((int(m.group(1)), m.group(2)))
     return sorted(used, key=lambda rt: (rt[0], rt[1] or ""))
@@ -1198,15 +1201,17 @@ def _amplitude_view_bindings(terms, indent: int = 4) -> list[str]:
     in `fixed_rank_view<2*rank>` so the loops index it with inline arithmetic."""
     pad = " " * indent
     lines: list[str] = []
-    for rank, tag in _amplitude_ranks_used(terms):
-        if tag is None:
-            lines.append(
-                f"{pad}const auto t{rank} = "
-                f"fixed_rank_view<{2 * rank}>(amplitudes.tensor({rank}).value());")
-        else:
-            lines.append(
-                f'{pad}const auto t{rank}_{tag} = fixed_rank_view<{2 * rank}>('
-                f'amplitudes.sector_tensor({rank}, "{tag}").value());')
+    # λ (`l<rank>`, Λ kernels) binds from the `lambdas` argument the same way.
+    for root, source in (("t", "amplitudes"), ("l", "lambdas")):
+        for rank, tag in _amplitude_ranks_used(terms, root):
+            if tag is None:
+                lines.append(
+                    f"{pad}const auto {root}{rank} = "
+                    f"fixed_rank_view<{2 * rank}>({source}.tensor({rank}).value());")
+            else:
+                lines.append(
+                    f'{pad}const auto {root}{rank}_{tag} = fixed_rank_view<{2 * rank}>('
+                    f'{source}.sector_tensor({rank}, "{tag}").value());')
     return lines
 
 
@@ -1284,7 +1289,7 @@ def _target_expr(lhs: str, indices: Sequence[Index]) -> str:
     return _accessor(lhs, [idx.name for idx in indices])
 
 
-def _kernel_name(method: str, target: str, ucc: bool = False) -> str:
+def _kernel_name(method: str, target: str, ucc: bool = False, lam: bool = False) -> str:
     """The C++ name of one emitted kernel.
 
     U5.0: `ucc=True` prefixes the symbol so a UCC translation unit does not
@@ -1300,7 +1305,7 @@ def _kernel_name(method: str, target: str, ucc: bool = False) -> str:
     both roles is what makes this look like a one-line change and then fail at
     the rank parse.
     """
-    prefix = "ucc_" if ucc else ""
+    prefix = ("ucc_" if ucc else "") + ("lambda_" if lam else "")
     if target == "energy":
         return f"compute_{prefix}{method}_energy"
     return f"compute_{prefix}{method}_{target}_residual"
@@ -1320,7 +1325,7 @@ def _target_rank(
     raise ValueError(f"Cannot infer excitation rank for target {target!r}")
 
 
-def _builder_symbol(method: str, name: str) -> str:
+def _builder_symbol(method: str, name: str, lam: bool = False, ucc: bool = False) -> str:
     """The C++ symbol for intermediate ``name``'s builder in ``method``'s TU (V1.3.2).
 
     Method-suffixed (``build_tau_ccsdt``), because the kernel registry ``#include``s several
@@ -1339,7 +1344,24 @@ def _builder_symbol(method: str, name: str) -> str:
     One function for all four emission sites (the definition plus three call sites), so a
     definition and its calls cannot drift apart.
     """
-    return f"build_{name}_{method.lower()}"
+    # `ucc_` as on the entry points: a UCC builder with no `v` factor carries no
+    # spin block in its name, so RCC and UCC Λ-CCSDTQ both emitted
+    # build_W_l4_aaabaaabt4_aaabaaabv_oovv_<tag>_lambda_ccsdtq into one registry TU.
+    return f"build_{name}_{'ucc_' if ucc else ''}{'lambda_' if lam else ''}{method.lower()}"
+
+
+def _amp_params(amplitude_type: str, lam: bool) -> list[str]:
+    """The amplitude parameters of every emitted function: t, and for a Λ
+    kernel (``lam``) the multipliers λ beside it, in the same container type."""
+    out = [f"const {amplitude_type} &amplitudes"]
+    if lam:
+        out.append("const ArbitraryOrderRCCAmplitudes &lambdas")
+    return out
+
+
+def _call_args(lam: bool) -> str:
+    """The matching argument list for a call from one emitted function to another."""
+    return "reference, mo_blocks, denominators, amplitudes" + (", lambdas" if lam else "")
 
 
 def _required_intermediates(terms, intermediate_map) -> list[IntermediateSpec]:
@@ -1366,6 +1388,7 @@ def _emit_kernel(
     symmetrizer: Sequence[tuple[dict[str, str], int]] | None = None,
     pair_half: bool = False,
     shared_ops: str | None = None,
+    lam: bool = False,
 ) -> str:
     """``shared_ops`` (U3a): the name of the file's residual-ops struct. The
     kernel then takes it as a last `const&` argument and binds its
@@ -1373,7 +1396,7 @@ def _emit_kernel(
     if pair_half:
         return _pair_half_kernel(_emit_kernel(
             method, target, terms, lowered_terms, intermediates, free_indices,
-            force_arbitrary, ucc, symmetrizer, shared_ops=shared_ops))
+            force_arbitrary, ucc, symmetrizer, shared_ops=shared_ops, lam=lam))
     lowered_terms = tuple(lowered_terms or ())
     if free_indices is None:
         if lowered_terms:
@@ -1388,15 +1411,13 @@ def _emit_kernel(
     intermediate_map = {spec.name: spec for spec in intermediates or ()}
 
     lines: list[str] = []
-    lines.append(f"{result_type} {_kernel_name(method, target, ucc)}(")
+    lines.append(f"{result_type} {_kernel_name(method, target, ucc, lam)}(")
     lines.append("    const CanonicalRHFCCReference &reference,")
     lines.append("    const TensorCCBlockCache &mo_blocks,")
-    lines.append(f"    const {denominator_type} &denominators,")
+    params = [f"const {denominator_type} &denominators", *_amp_params(amplitude_type, lam)]
     if shared_ops:
-        lines.append(f"    const {amplitude_type} &amplitudes,")
-        lines.append(f"    const {shared_ops} &ops)")
-    else:
-        lines.append(f"    const {amplitude_type} &amplitudes)")
+        params.append(f"const {shared_ops} &ops")
+    lines.extend(f"    {p}{',' if k + 1 < len(params) else ')'}" for k, p in enumerate(params))
     lines.append("{")
     lines.extend(_orbital_count_preamble(ucc))
     # U3b.2c: the result's extents are per-spin under UCC, read off the kernel's
@@ -1448,8 +1469,8 @@ def _emit_kernel(
             lines.append("    // Build reused intermediates once for this kernel")
             for spec in required_intermediates:
                 lines.append(
-                    f"    const auto {spec.name} = {_builder_symbol(method, spec.name)}("
-                    "reference, mo_blocks, denominators, amplitudes);"
+                    f"    const auto {spec.name} = {_builder_symbol(method, spec.name, lam, ucc)}("
+                    f"{_call_args(lam)});"
                 )
     lines.append("")
     lines.append(f"    // {target} kernel ({len(terms)} terms)")
@@ -1470,7 +1491,8 @@ def _emit_kernel(
             method, target, lines, emitted_terms, result_type, free_indices,
             denominator_type, amplitude_type, required_intermediates,
             intermediate_names, arbitrary, ucc, symmetrizer=symmetrizer,
-            result_spins=result_spins, shared_ops=shared_ops, slot_spins=slot_spins)
+            result_spins=result_spins, shared_ops=shared_ops, slot_spins=slot_spins,
+            lam=lam)
 
     if arbitrary:
         bindings = (_amplitude_view_bindings(emitted_terms)
@@ -1584,13 +1606,13 @@ def _emit_chunked_kernel(
     method, target, header_lines, emitted_terms, result_type, free_indices,
     denominator_type, amplitude_type, required_intermediates,
     intermediate_names, arbitrary, ucc=False, symmetrizer=None,
-    result_spins=None, shared_ops=None, slot_spins=None,
+    result_spins=None, shared_ops=None, slot_spins=None, lam=False,
 ):
     """Emit a large residual kernel as `_partN` sub-functions accumulating into a
     by-reference `result`, plus the main kernel that allocates `result`, calls
     each part, and returns it. Keeps per-function body size bounded so any -O
     level compiles in ~linear time. See _emit_kernel for why."""
-    kernel = _kernel_name(method, target, ucc)
+    kernel = _kernel_name(method, target, ucc, lam)
 
     # F3: with fusion on, reorder so each loop-signature group is CONTIGUOUS
     # before slicing into parts. Chunks are contiguous slices, so an unsorted
@@ -1643,10 +1665,10 @@ def _emit_chunked_kernel(
         out.append(f"    {result_type} &result,")
         out.append("    const CanonicalRHFCCReference &reference,")
         out.append("    const TensorCCBlockCache &mo_blocks,")
-        out.append(f"    const {denominator_type} &denominators,")
-        out.append(f"    const {amplitude_type} &amplitudes{',' if ops_struct else ')'}")
+        params = [f"const {denominator_type} &denominators", *_amp_params(amplitude_type, lam)]
         if ops_struct:
-            out.append(f"    const {ops_struct} &ops)")
+            params.append(f"const {ops_struct} &ops")
+        out.extend(f"    {q}{',' if k + 1 < len(params) else ')'}" for k, q in enumerate(params))
         out.append("{")
         out.extend(_orbital_count_preamble(ucc))
         if ucc:
@@ -1678,13 +1700,12 @@ def _emit_chunked_kernel(
         body.append(f"    const {ops_struct} ops{{")
         for spec in required_intermediates:
             body.append(
-                f"        {_builder_symbol(method, spec.name)}("
-                "reference, mo_blocks, denominators, amplitudes),")
+                f"        {_builder_symbol(method, spec.name, lam, ucc)}({_call_args(lam)}),")
         body.append("    };")
     call_tail = ", ops);" if ops_struct else ");"
     for p in range(n_parts):
         body.append(
-            f"    {kernel}_part{p}(result, reference, mo_blocks, denominators, amplitudes"
+            f"    {kernel}_part{p}(result, {_call_args(lam)}"
             f"{call_tail}")
     body.extend(_symmetrize_lines(result_type, free_indices, symmetrizer,
                                   result_spins))
@@ -1760,6 +1781,7 @@ def _emit_intermediate_builder(
     sibling_specs: dict[str, IntermediateSpec] | None = None,
     ucc: bool = False,
     slot_spins: dict[str, tuple[str, ...]] | None = None,
+    lam: bool = False,
 ) -> str:
     """``slot_spins`` (UCC): every derived operator's slot spins, built once
     per file by `_operator_slot_spins`. A definition term that reads only
@@ -1784,11 +1806,12 @@ def _emit_intermediate_builder(
         builder_indices = spec.indices
 
     lines: list[str] = []
-    lines.append(f"{result_type} {_builder_symbol(method, spec.name)}(")
+    lines.append(f"{result_type} {_builder_symbol(method, spec.name, lam, ucc)}(")
     lines.append("    const CanonicalRHFCCReference &reference,")
     lines.append("    const TensorCCBlockCache &mo_blocks,")
     lines.append(f"    const {denominator_type} &denominators,")
-    lines.append(f"    const {amplitude_type} &amplitudes)")
+    params = _amp_params(amplitude_type, lam)
+    lines.extend(f"    {q}{',' if k + 1 < len(params) else ')'}" for k, q in enumerate(params))
     lines.append("{")
     lines.extend(_orbital_count_preamble(ucc))
     from ..optimization.factorize import factored_builder_steps
@@ -1830,8 +1853,8 @@ def _emit_intermediate_builder(
         if referenced:
             for name in referenced:
                 lines.append(
-                    f"    const auto {name} = {_builder_symbol(method, name)}("
-                    "reference, mo_blocks, denominators, amplitudes);"
+                    f"    const auto {name} = {_builder_symbol(method, name, lam, ucc)}("
+                    f"{_call_args(lam)});"
                 )
             lines.append("")
 
@@ -1892,11 +1915,11 @@ def _bundle_emitted(method: str, force_arbitrary: bool) -> bool:
     return force_arbitrary or max(parse_cc_level(method), default=0) >= 4
 
 
-def _residual_ops_name(method: str, ucc: bool) -> str:
-    return f"{'ucc_' if ucc else ''}{method}_residual_ops"
+def _residual_ops_name(method: str, ucc: bool, lam: bool = False) -> str:
+    return f"{'ucc_' if ucc else ''}{'lambda_' if lam else ''}{method}_residual_ops"
 
 
-def _emit_residual_ops(method, struct, specs, force_arbitrary) -> list[str]:
+def _emit_residual_ops(method, struct, specs, force_arbitrary, lam=False, ucc=False) -> list[str]:
     """The residual-ops struct and its builder (U3a). A builder builds what
     it reads itself (the restricted `t2merge` builders call sibling
     builders), so member order does not matter.
@@ -1910,12 +1933,12 @@ def _emit_residual_ops(method, struct, specs, force_arbitrary) -> list[str]:
               f"static {struct} build_{struct}(",
               "    const CanonicalRHFCCReference &reference,",
               "    const TensorCCBlockCache &mo_blocks,",
-              f"    const {denominator_type} &denominators,",
-              f"    const {amplitude_type} &amplitudes)",
-              "{",
-              f"    return {struct}{{"]
-    lines += [f"        {_builder_symbol(method, spec.name)}("
-              "reference, mo_blocks, denominators, amplitudes)," for spec in specs]
+              f"    const {denominator_type} &denominators,"]
+    params = _amp_params(amplitude_type, lam)
+    lines += [f"    {q}{',' if k + 1 < len(params) else ')'}" for k, q in enumerate(params)]
+    lines += ["{", f"    return {struct}{{"]
+    lines += [f"        {_builder_symbol(method, spec.name, lam, ucc)}({_call_args(lam)}),"
+              for spec in specs]
     lines += ["    };", "}"]
     return lines
 
@@ -2011,6 +2034,52 @@ def _emit_arbitrary_order_kernel_bundle(
     return "\n".join(lines)
 
 
+def _emit_lambda_kernel_bundle(method, equations, lowered_equations, shared_ops,
+                               ucc=False, scales=None) -> str:
+    """`make_generated_[ucc_]lambda_<method>_kernels()`: every Λ residual from
+    one evaluation, read with t and λ (docs/CC_LAMBDA_SCOPE.md, 3b). Order: the
+    per-rank reference residuals by rank, then the block-tagged ones in
+    `sector_tags` order (UCC has only the latter, as its T bundle).
+    `diagonal_scale` holds each output's c (`lagrangian.lambda_diagonal_scale`),
+    in the same order: the solver divides by c·D."""
+    ranked, sectors = [], []
+    for target, terms in equations.items():
+        if target == "energy":
+            continue
+        rank = _target_rank(target, terms, lowered_equations.get(target))
+        m = re.search(r"_([ab]+)$", target)
+        (sectors.append((rank, m.group(1), target)) if m else ranked.append((rank, target)))
+    ranked.sort()
+    sectors.sort()
+    args = _call_args(True)
+    factory = f"make_generated_{'ucc_' if ucc else ''}lambda_{method}_kernels"
+    lines = [f"GeneratedLambdaKernels {factory}()",
+             "{",
+             "    GeneratedLambdaKernels kernels;",
+             f"    kernels.max_excitation_rank = {max(parse_cc_level(method))};"]
+    lines += [f'    kernels.sector_tags.push_back({{{r}, "{tag}"}});' for r, tag, _ in sectors]
+    order = [t for _, t in ranked] + [t for _, _, t in sectors]
+    lines.append("    kernels.diagonal_scale = {"
+                 + ", ".join(repr(float(scales[t])) for t in order) + "};")
+    lines += ["    kernels.residuals = [](",
+              "        const CanonicalRHFCCReference &reference,",
+              "        const TensorCCBlockCache &mo_blocks,",
+              "        const ArbitraryOrderDenominatorCache &denominators,",
+              "        const ArbitraryOrderRCCAmplitudes &amplitudes,",
+              "        const ArbitraryOrderRCCAmplitudes &lambdas) -> std::vector<TensorND>",
+              "    {"]
+    if shared_ops:
+        lines.append(f"        const auto ops = build_{shared_ops}({args});")
+    lines += ["        std::vector<TensorND> out;",
+              f"        out.reserve({len(ranked) + len(sectors)});"]
+    tail = ", ops" if shared_ops else ""
+    for target in order:
+        lines.append(f"        out.push_back(to_tensor_nd("
+                     f"{_kernel_name(method, target, ucc, True)}({args}{tail})));")
+    lines += ["        return out;", "    };", "    return kernels;", "}"]
+    return "\n".join(lines)
+
+
 def emit_planck_translation_unit(
     method: str,
     equations: dict[str, list[AlgebraTerm]],
@@ -2021,6 +2090,7 @@ def emit_planck_translation_unit(
     spin_adapted: bool = False,
     ucc: bool = False,
     symmetrizers: dict[str, Sequence[tuple[dict[str, str], int]]] | None = None,
+    lambda_scales: dict[str, float] | None = None,
 ) -> str:
     """Emit a Planck-compatible C++ translation unit.
 
@@ -2034,8 +2104,12 @@ def emit_planck_translation_unit(
     contraction (2*(direct)-(exchange)), the whole point of the spin adaptation.
     Skip the relabel-only ``lower_equations_restricted_closed_shell`` (which would
     both re-apply the defect it was meant to replace AND crash on the multi-Sz
-    target names like ``quadruples_aaabaaab``); emit the AlgebraTerms directly."""
+    target names like ``quadruples_aaabaaab``); emit the AlgebraTerms directly.
+
+    ``lambda_scales`` (Λ kernels, docs/CC_LAMBDA_SCOPE.md): the equations are
+    Λ residuals, and this maps each to its Jacobi diagonal scale."""
     method = method.lower()
+    lam = lambda_scales is not None
     if spin_adapted:
         lowered_equations = {}                  # emit AlgebraTerms directly
     else:
@@ -2066,7 +2140,8 @@ def emit_planck_translation_unit(
             lines.append(_emit_intermediate_builder(
                 method, spec, sibling_names, factor_body=factor_builder_bodies,
                 stride_order=factor_builder_bodies, force_arbitrary=force_arbitrary,
-                sibling_specs=sibling_spec_map, ucc=ucc, slot_spins=file_slot_spins))
+                sibling_specs=sibling_spec_map, ucc=ucc, slot_spins=file_slot_spins,
+                lam=lam))
             lines.append("")
 
     # U3a: a file that emits a kernel bundle builds every intermediate its
@@ -2089,8 +2164,8 @@ def emit_planck_translation_unit(
                     seen.add(spec.name)
                     union.append(spec)
         if union:
-            shared_ops = _residual_ops_name(method, ucc)
-            lines.extend(_emit_residual_ops(method, shared_ops, union, force_arbitrary))
+            shared_ops = _residual_ops_name(method, ucc, lam)
+            lines.extend(_emit_residual_ops(method, shared_ops, union, force_arbitrary, lam, ucc))
             lines.append("")
 
     for target, terms in equations.items():
@@ -2106,20 +2181,26 @@ def emit_planck_translation_unit(
                 symmetrizer=(symmetrizers or {}).get(target),
                 # Spatial doubles: R(i,j,a,b) = R(j,i,b,a). Under UCC the swap
                 # maps an abab block to baba, another block, so not there.
-                pair_half=spin_adapted and not ucc and target == "doubles",
+                # Not for Λ: G is not pair symmetric; the symmetrizer makes R so.
+                pair_half=spin_adapted and not ucc and not lam and target == "doubles",
                 shared_ops=shared_ops if target != "energy" else None,
+                lam=lam,
             )
         )
         lines.append("")
 
-    bundle_code = _emit_arbitrary_order_kernel_bundle(
-        method,
-        equations,
-        lowered_equations,
-        force_arbitrary=force_arbitrary,
-        ucc=ucc,
-        shared_ops=shared_ops,
-    )
+    if lam:
+        bundle_code = _emit_lambda_kernel_bundle(
+            method, equations, lowered_equations, shared_ops, ucc, lambda_scales)
+    else:
+        bundle_code = _emit_arbitrary_order_kernel_bundle(
+            method,
+            equations,
+            lowered_equations,
+            force_arbitrary=force_arbitrary,
+            ucc=ucc,
+            shared_ops=shared_ops,
+        )
     if bundle_code:
         lines.append(bundle_code)
         lines.append("")

@@ -146,7 +146,7 @@ class EmittedExchangeTests(unittest.TestCase):
         ):
             with self.subTest(method=method):
                 self.assertEqual(
-                    hashlib.sha256(print_cpp_planck(method).encode()).hexdigest(),
+                    hashlib.sha256(print_cpp_planck(method, engine="wick").encode()).hexdigest(),
                     digest)
 
 

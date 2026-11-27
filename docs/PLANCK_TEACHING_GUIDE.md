@@ -7315,6 +7315,75 @@ UCCSD(T) needs the generated UCC kernels (`-DPLANCK_CC_UCC=ON`). The
 hand-written UCCSD is a determinant-space solver and has no amplitude
 blocks to hand over.
 
+### The Λ Equations
+
+The CC energy is not variational: it is a projection, \(E = \langle 0|\bar H|0\rangle\)
+with \(\bar H = e^{-T} H e^{T}\), and it is not stationary in \(T\). So
+the energy alone gives no density and no cheap derivative. The fix is a
+Lagrangian that *is* stationary:
+
+\[
+\mathcal{L}(T, \Lambda) = E(T) + \sum_\mu \lambda_\mu R_\mu(T),
+\]
+
+where \(R_\mu = \langle\mu|\bar H|0\rangle\) are the T residuals. Making
+\(\mathcal{L}\) stationary in \(\lambda\) gives back \(R_\mu = 0\), the T
+equations. Making it stationary in \(t_\nu\) gives the **Λ equations**,
+
+\[
+\frac{\partial E}{\partial t_\nu} + \sum_\mu \lambda_\mu \frac{\partial R_\mu}{\partial t_\nu} = 0,
+\]
+
+one linear set per excitation rank. With both converged, \(\mathcal{L} = E\)
+and every first-order property is \(\partial\mathcal{L}\) with respect to
+the operator's integrals: the densities.
+
+**How Planck gets them.** Hand-written Λ-CCSD exists in most codes;
+Λ-CCSDT and beyond almost nowhere. Planck does not derive Λ separately. ccgen
+already has the T equations as symbolic terms, so it builds \(\mathcal{L}\)
+from them and differentiates: each Λ term is an \(\mathcal{L}\) term with one
+\(t\) factor removed and its indices freed (`python/ccgen/lagrangian.py`).
+That works at any rank, restricted or unrestricted, and the result goes
+through the same factorizer and GEMM lowering as the T kernels.
+
+Two details decide whether the kernels are right:
+
+- **Symmetry.** \(\partial\mathcal{L}/\partial t\) treats every stored
+  amplitude element as independent, but the elements are not: a spatial
+  \(t_2\) has \(t_{ij}^{ab} = t_{ji}^{ba}\), and a UCC same-spin block is
+  antisymmetric. The residual for an independent element is the derivative
+  summed over the block's symmetry group,
+  \(R = \sum_g s_g\, g(G)\). The group comes from the block's spins: signed
+  permutations within each (space, spin) class, plus the closed-shell spin
+  flip for a balanced restricted block. At rank 2 that is the pair symmetry,
+  at rank 3 the aab group the T kernels already use.
+- **The Jacobi diagonal.** The solver is the T solver's Jacobi + DIIS with
+  T frozen. Its step divides by the diagonal of the Λ equations,
+  \(c_n D\), where \(D = \sum \varepsilon_{\text{occ}} - \sum \varepsilon_{\text{vir}}\)
+  as for T and \(c_n\) is the λ weight times the group order: 1, 1/2, 1/9
+  for restricted ranks 1–3, and 1 for every UCC block. ccgen computes it
+  when it emits the kernels.
+
+The converged λ does not depend on \(c_n\); it only sets how fast the
+iteration gets there. So a wrong \(c_n\) shows up as slow or failed
+convergence, never as a wrong λ. The gates therefore test the kernels
+directly: the emitted C++ text, evaluated with numpy, against the Python
+Λ residual, for every block (restricted and UCC, ranks 2–3); and the
+converged λ of water/6-31G against the spatial Λ equations solved at
+PySCF's RCCSD amplitudes (`water_rccsd_lambda_631g`). For water Λ converges
+in 16 iterations, as many as T.
+
+The restricted λ is the multiplier of Planck's spatial parametrization,
+not PySCF's RCCSD λ, so it cannot be compared with PySCF directly; what
+can be compared is what does not depend on that choice (the energy
+derivative, and later the densities). The unrestricted λ is PySCF's
+UCCSD λ unscaled, because the UCC weights make the Lagrangian the
+spin-orbital one restricted to stored blocks.
+
+Run it with `cc_lambda .true.` after any generated method. Densities,
+dipoles and natural orbitals built from λ are the next steps
+(`docs/CC_LAMBDA_SCOPE.md`).
+
 ---
 
 ## 17. Full Configuration Interaction (FCI)

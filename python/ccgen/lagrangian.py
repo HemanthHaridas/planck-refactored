@@ -184,6 +184,15 @@ def lambda_equations(method: str, engine: str = "diagram", canonical_fock: bool 
     elif spin == "ucc":
         from .spin import ucc_adapt_equations
         equations = ucc_adapt_equations(equations)
+    return lambda_residual_terms(equations, spin)
+
+
+def lambda_residual_terms(equations: dict[str, list[AlgebraTerm]], spin: str = "gcc",
+                          occ_first: bool = False) -> dict[str, list[AlgebraTerm]]:
+    """G per residual key of the (already adapted) T *equations*; see
+    :func:`lambda_equations`. ``occ_first`` reorders each term's free indices to
+    (occ..., vir...), λ's own layout, which is what the C++ emitter writes the
+    residual in (``l2(i,j,a,b)``); the default keeps t's (vir..., occ...)."""
     lag = lagrangian_terms(equations, spin)
     out = {}
     for key, residual in equations.items():
@@ -191,5 +200,94 @@ def lambda_equations(method: str, engine: str = "diagram", canonical_fock: bool 
             continue
         n = len(residual[0].free_indices) // 2
         tag = key.split("_", 1)[1] if "_" in key else ""
-        out[key] = differentiate(lag, f"t{n}_{tag}" if tag else f"t{n}")
+        terms = differentiate(lag, f"t{n}_{tag}" if tag else f"t{n}")
+        if occ_first:
+            terms = [AlgebraTerm(t.coeff, t.factors,
+                                 tuple(sorted(t.free_indices, key=lambda i: i.space != "occ")),
+                                 t.summed_indices, t.connected, t.provenance)
+                     for t in terms]
+        out[key] = terms
     return out
+
+
+def lambda_diagonal_scale(terms: list[AlgebraTerm], group, ucc: bool = False) -> float:
+    """c with R_Λ ≈ b − c·D·λ on the diagonal, D = Σ ε_occ − Σ ε_vir: the Λ
+    Jacobi step is λ += R / (c D), the T step with its denominators scaled
+    (docs/CC_LAMBDA_SCOPE.md, 3c).
+
+    *terms* are one block's G (occ-first free indices, as
+    :func:`lambda_residual_terms` gives them) and *group* its symmetry group;
+    R = Σ_g s_g g(G). Only the f·λ terms carry the diagonal (canonical Fock,
+    so f is block-diagonal). Evaluated with distinct orbital energies and a
+    symmetrized unit λ at an element whose indices are all distinct, so only
+    the identity maps it to itself and λ there is 1.
+    """
+    # Pure Python, sparse: this runs in the build-time generator, which needs
+    # no numpy. λ is one symmetrized unit element and f is diagonal, so every
+    # array here has at most |G| nonzeros.
+    free = terms[0].free_indices
+    names = [i.name for i in free]
+    n = len(names) // 2
+    no = n + 1
+    eps = {"a": [(p + 1) * 0.37 - 3.0 for p in range(2 * no)],
+           "b": [(p + 1) * 0.29 - 2.0 for p in range(2 * no)]}
+    # This block's own λ: the one its f·λ terms read.
+    lam_name = None
+    for t in terms:
+        if len(t.factors) == 2 and {f.name[0] for f in t.factors} == {"f", "l"}:
+            lam = next(f for f in t.factors if f.name[0] == "l")
+            if len(lam.indices) == 2 * n:      # this rank's λ, not an f_ov·λ_{n±1}
+                lam_name = lam.name
+                break
+    if lam_name is None:
+        raise ValueError("no f·λ term in this Λ block; cannot form its diagonal")
+    spins = {}
+    if ucc:
+        from .spin import ucc_term_index_spins
+        for t in terms:
+            spins.update(ucc_term_index_spins(t))
+    # The probe element: position j in each space, so all indices are distinct.
+    k = {nm: j for half in (names[:n], names[n:]) for j, nm in enumerate(half)}
+
+    # λ = Σ_g s_g g(unit): g(unit) is 1 where y[g(name)] = k[name].
+    lam = {}
+    for m, s in group:
+        y = {m.get(nm, nm): k[nm] for nm in names}
+        key = tuple(y[nm] for nm in names)
+        lam[key] = lam.get(key, 0.0) + s
+
+    def f_diag(f, pos):
+        sp = f.name.split("_")[1][0] if "_" in f.name else "a"
+        return eps[sp][pos if f.indices[0].space == "occ" else no + pos]
+
+    out = {}
+    for t in terms:
+        # Only f·(this block's λ) reaches the diagonal; f_ov·λ of another rank
+        # (general-Fock equations) does not.
+        if (len(t.factors) != 2 or {f.name[0] for f in t.factors} != {"f", "l"}
+                or lam_name not in {f.name for f in t.factors}):
+            continue
+        fock = next(f for f in t.factors if f.name[0] == "f")
+        lfac = next(f for f in t.factors if f.name[0] == "l")
+        if fock.indices[0].space != fock.indices[1].space:
+            continue                            # f_ov: zero on a canonical reference
+        for key, val in lam.items():
+            bound = {}
+            if any(bound.setdefault(i, v) != v for i, v in zip(lfac.indices, key)):
+                continue                        # λ read with a repeated index
+            a, b = fock.indices
+            pos = bound.get(a, bound.get(b))    # f diagonal: both ends equal
+            if any(bound.setdefault(i, pos) != pos for i in (a, b)):
+                continue
+            okey = tuple(bound[i] for i in t.free_indices)
+            out[okey] = out.get(okey, 0.0) + float(t.coeff) * f_diag(fock, pos) * val
+    # R = Σ_g s_g g(out) at the probe: g(out)[at] = out[at with names mapped].
+    at = {nm: k[nm] for nm in names}
+    R = sum(s * out.get(tuple(at[m.get(nm, nm)] for nm in names), 0.0) for m, s in group)
+
+    def e(nm):
+        sp = spins.get(nm, "a") if ucc else "a"
+        return eps[sp][k[nm] if nm in "ijklmno" else no + k[nm]]
+    D = sum(e(nm) for nm in names[:n]) - sum(e(nm) for nm in names[n:])
+    # A ratio of exact rationals (the λ weight times |G|); drop the roundoff.
+    return round(float(-R / D), 12)

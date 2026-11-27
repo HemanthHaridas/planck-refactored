@@ -561,12 +561,19 @@ def generate_cc_equations(
     debug: bool = False,
     parallel_workers: int | None = None,
     cache_dir: str | None = None,
-    engine: str = "wick",
+    engine: str = "diagram",
 ) -> dict[str, list[AlgebraTerm]]:
     """Generate coupled-cluster equations for a given method.
 
     Parameters
     ----------
+    engine : str
+        ``"diagram"`` (default) builds each manifold from enumerated diagrams:
+        connected by construction and ~200x faster than Wick at CCSDT.
+        ``"wick"`` is the textbook BCH + Wick projection; the options below
+        marked wick-only (``connected_only=False``, ``collect_denominators``,
+        ``permutation_grouping``, ``exploit_symmetry``, ``parallel_workers``,
+        ``cache_dir``, ``debug``) need it, and the diagram engine refuses them.
     collect_denominators : bool
         If True, apply orbital energy denominator collection as a
         post-canonicalization pass.  Diagonal Fock terms like
@@ -595,6 +602,20 @@ def generate_cc_equations(
         targets = targets_for_method(method)
 
     if engine == "diagram":
+        wick_only = {
+            "connected_only=False": not connected_only,
+            "collect_denominators": collect_denominators,
+            "permutation_grouping": permutation_grouping,
+            "exploit_symmetry": exploit_symmetry,
+            "parallel_workers": parallel_workers not in (None, 1),
+            "cache_dir": cache_dir is not None,
+            "debug": debug,
+        }
+        requested = [name for name, on in wick_only.items() if on]
+        if requested:
+            raise ValueError(
+                f"{', '.join(requested)} need engine='wick'; the diagram "
+                "engine does not implement them")
         return _generate_diagram_equations(method, targets, canonical_fock)
     if engine != "wick":
         raise ValueError(f"unknown engine {engine!r}; expected 'wick' or 'diagram'")
@@ -1033,9 +1054,15 @@ def print_cpp_planck(
     force_arbitrary: bool = False,
     spin_adapt: bool = False,
     ucc: bool = False,
+    lambda_: bool = False,
     **kwargs: Any,
 ) -> str:
     """Generate Planck-compatible C++ tensor kernels.
+
+    ``lambda_`` emits the Λ residual kernels instead of the T ones
+    (docs/CC_LAMBDA_SCOPE.md, 3b): the derivative of the CC Lagrangian built
+    from the adapted T equations, read with t and λ, written in λ's
+    (occ..., vir...) layout, at any rank, restricted or UCC.
 
     ``dress_operators=True`` (D7.3) rewrites the residual to reference the
     recognized CC intermediates (Wmnij/Wabef/Wmbej + tau/tau_c) and emits their
@@ -1167,6 +1194,30 @@ def print_cpp_planck(
         if include_intermediates:
             include_intermediates = False
 
+    lambda_symmetrizers = None
+    if lambda_:
+        if not (spin_adapt or ucc) or dressing == "recognized":
+            raise NotImplementedError(
+                "Λ kernels are emitted from spin-adapted or UCC equations, undressed "
+                "or dressing='derived' (docs/CC_LAMBDA_SCOPE.md, 3b)")
+        from .lagrangian import lambda_diagonal_scale, lambda_residual_terms
+        from .optimization.permutation import block_symmetry_group, fold_external_symmetry
+        eqs = lambda_residual_terms(eqs, "ucc" if ucc else "rcc", occ_first=True)
+        # Each Λ residual is G symmetrized over its amplitude block's group,
+        # R = Σ_g s_g g(G). Folding G gives X with Σ_g s_g g(X) = R / |G| and
+        # merges the G terms that are images of each other, so X is scaled by |G|.
+        lambda_symmetrizers = {}
+        lambda_scales = {}
+        for key, terms in eqs.items():
+            n = len(terms[0].free_indices) // 2
+            tag = key.split("_", 1)[1] if "_" in key else None
+            k_alpha = tag[:n].count("a") if (tag and not ucc) else None
+            group = block_symmetry_group(terms[0], ucc, k_alpha)
+            lambda_scales[key] = lambda_diagonal_scale(terms, group, ucc)
+            if len(group) > 1:
+                eqs[key] = [t.scaled(len(group)) for t in fold_external_symmetry(terms, group)]
+                lambda_symmetrizers[key] = group
+
     # Symmetrize once: the spin-adapted rank-3 residual is the aabaab block,
     # antisymmetric under a<->b and under i<->j. Emit one term per orbit (X) and
     # let the kernel form R = sum_g s_g g(X) in one o^3v^3 pass. 806 ccsdt
@@ -1174,13 +1225,13 @@ def print_cpp_planck(
     # (docs/CCGEN_GENERATED_CC_COST.md #9). Before factorization, so no
     # operator is built for a folded-away term.
     symmetrizers = None
-    if spin_adapt and "triples" in eqs:
+    if spin_adapt and "triples" in eqs and not lambda_:
         from .optimization.permutation import (
             AAB_TRIPLES_GROUP, fold_external_symmetry)
         eqs = dict(eqs)
         eqs["triples"] = fold_external_symmetry(eqs["triples"], AAB_TRIPLES_GROUP)
         symmetrizers = {"triples": AAB_TRIPLES_GROUP}
-    if ucc:
+    if ucc and not lambda_:
         # Same fold on every UCC block whose free indices include two of one
         # (space, spin): same-spin doubles and all four triples blocks. CCSDT
         # 2484 -> 802 terms (docs/CCGEN_UCC_ORBIT_FOLD.md). Exact because
@@ -1198,6 +1249,9 @@ def print_cpp_planck(
             if len(group) > 1:
                 eqs[target] = fold_external_symmetry(terms, group)
                 symmetrizers[target] = group
+
+    if lambda_:
+        symmetrizers = lambda_symmetrizers
 
     if ucc and include_intermediates:
         # Same reasoning as the spin_adapt force-off above: CSE was built for the
@@ -1304,6 +1358,7 @@ def print_cpp_planck(
         # one for the same method (they collide otherwise).
         ucc=ucc,
         symmetrizers=symmetrizers,
+        lambda_scales=lambda_scales if lambda_ else None,
     )
 
 

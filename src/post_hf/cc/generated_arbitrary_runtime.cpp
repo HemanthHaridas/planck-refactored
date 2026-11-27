@@ -281,6 +281,143 @@ namespace HartreeFock::Correlation::CC
         return residuals;
     }
 
+    std::expected<GeneratedLambdaSolveResult, std::string>
+    run_generated_lambda_iterations(
+        const ArbitraryOrderTensorCCState &state,
+        const GeneratedLambdaKernels &kernels,
+        unsigned int max_iterations,
+        double tol_residual,
+        double damping,
+        bool use_diis,
+        int diis_dim,
+        const std::string &log_tag)
+    {
+        if (max_iterations == 0)
+            return std::unexpected("run_generated_lambda_iterations: max_iterations must be positive.");
+        const std::size_t n_ranked = state.amplitudes.by_rank.size();
+        const std::size_t n_out = n_ranked + kernels.sector_tags.size();
+        if (kernels.max_excitation_rank != state.max_excitation_rank ||
+            kernels.diagonal_scale.size() != n_out ||
+            state.amplitudes.sectors.size() != kernels.sector_tags.size())
+            return std::unexpected(std::format(
+                "run_generated_lambda_iterations: the Λ bundle (rank {}, {} outputs, {} sectors) "
+                "does not match the T state (rank {}, {} ranked, {} sectors).",
+                kernels.max_excitation_rank, kernels.diagonal_scale.size(), kernels.sector_tags.size(),
+                state.max_excitation_rank, n_ranked, state.amplitudes.sectors.size()));
+        for (std::size_t s = 0; s < kernels.sector_tags.size(); ++s)
+            if (state.amplitudes.sectors[s].first != kernels.sector_tags[s])
+                return std::unexpected(
+                    "run_generated_lambda_iterations: Λ and T sector orders differ.");
+
+        // λ has t's shape; start at zero.
+        GeneratedLambdaSolveResult result{.lambdas = state.amplitudes};
+        for (auto &t : result.lambdas.by_rank)
+            std::fill(t.data.begin(), t.data.end(), 0.0);
+        for (auto &[key, t] : result.lambdas.sectors)
+            std::fill(t.data.begin(), t.data.end(), 0.0);
+
+        // Denominators scaled by c, per output. A sector gets its own entry,
+        // since its c can differ from its rank's (RHF sectors otherwise fall
+        // back to the rank's denominator).
+        ArbitraryOrderDenominatorCache scaled;
+        scaled.by_rank = state.denominators.by_rank;
+        for (std::size_t r = 0; r < n_ranked; ++r)
+            for (double &d : scaled.by_rank[r].data)
+                d *= kernels.diagonal_scale[r];
+        for (std::size_t s = 0; s < kernels.sector_tags.size(); ++s)
+        {
+            const auto &[rank, tag] = kernels.sector_tags[s];
+            auto denom = state.denominators.sector_tensor(rank, tag);
+            if (!denom)
+                return std::unexpected("run_generated_lambda_iterations: " + denom.error());
+            TensorND block;
+            block.dims = denom->dims;
+            block.data.assign(denom->data, denom->data + denom->size());
+            for (double &d : block.data)
+                d *= kernels.diagonal_scale[n_ranked + s];
+            scaled.sectors.push_back({{rank, tag}, std::move(block)});
+        }
+
+        AmplitudeDIIS diis(diis_dim);
+        for (unsigned int iter = 1; iter <= max_iterations; ++iter)
+        {
+            const auto iter_start = std::chrono::steady_clock::now();
+            std::vector<TensorND> out = kernels.residuals(
+                state.reference, state.mo_blocks, state.denominators, state.amplitudes,
+                result.lambdas);
+            if (out.size() != n_out)
+                return std::unexpected(std::format(
+                    "run_generated_lambda_iterations: the Λ kernels returned {} tensors, expected {}.",
+                    out.size(), n_out));
+            ArbitraryOrderResiduals residuals;
+            for (std::size_t k = 0; k < n_ranked; ++k)
+                residuals.by_rank.push_back(std::move(out[k]));
+            for (std::size_t s = 0; s < kernels.sector_tags.size(); ++s)
+                residuals.sectors.push_back({kernels.sector_tags[s], std::move(out[n_ranked + s])});
+
+            auto metrics = update_amplitudes_with_jacobi_diis(
+                result.lambdas, residuals, scaled, diis, damping, use_diis);
+            if (!metrics)
+                return std::unexpected("run_generated_lambda_iterations: " + metrics.error());
+            result.metrics = std::move(*metrics);
+            result.iterations = iter;
+
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, log_tag + " Iter :",
+                std::format("{:3d}  rms(res)={:.3e}  rms(step)={:.3e}  diis={}  t={:.3f}s",
+                            iter, result.metrics.residual_rms, result.metrics.update_rms, diis.size(),
+                            std::chrono::duration<double>(
+                                std::chrono::steady_clock::now() - iter_start).count()));
+
+            // The residual is evaluated before the step, so it measures the
+            // previous λ; that λ has already moved by one more step here.
+            if (result.metrics.residual_rms < tol_residual)
+            {
+                result.converged = true;
+                return result;
+            }
+        }
+        return result;
+    }
+
+    std::expected<GeneratedLambdaSolveResult, std::string>
+    solve_lambda_after_t(
+        HartreeFock::Calculator &calculator,
+        const ArbitraryOrderTensorCCState &state,
+        const std::expected<GeneratedLambdaKernels, std::string> &kernels,
+        const std::string &tag)
+    {
+        if (!kernels)
+            return std::unexpected(kernels.error());
+        const unsigned int max_iter =
+            std::max(calculator._scf.get_max_cycles(calculator._shells.nbasis()), 100u);
+        auto res = run_generated_lambda_iterations(
+            state, *kernels, max_iter, calculator._scf._tol_density, calculator._scf._cc_damping,
+            calculator._scf._use_DIIS, static_cast<int>(std::max(2u, calculator._scf._DIIS_dim)),
+            tag + "[LAMBDA]");
+        if (!res)
+            return std::unexpected(res.error());
+        if (!res->converged)
+            return std::unexpected(std::format(
+                "Λ did not converge within {} iterations (rms(res)={:.3e}).",
+                res->iterations, res->metrics.residual_rms));
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, tag,
+            std::format("Λ converged in {} iterations, rms(res)={:.3e}.",
+                        res->iterations, res->metrics.residual_rms));
+        for (std::size_t r = 0; r < res->lambdas.by_rank.size(); ++r)
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, tag,
+                std::format("Lambda rms l{} = {:.10e}", r + 1,
+                            tensor_rms(ConstDenseTensorView{res->lambdas.by_rank[r].dims, res->lambdas.by_rank[r].data.data()})));
+        for (const auto &[key, block] : res->lambdas.sectors)
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, tag,
+                std::format("Lambda rms l{}_{} = {:.10e}", key.first, key.second,
+                            tensor_rms(ConstDenseTensorView{block.dims, block.data.data()})));
+        return res;
+    }
+
     std::expected<GeneratedArbitraryOrderSolveResult, std::string>
     run_generated_arbitrary_order_iterations(
         ArbitraryOrderTensorCCState state,

@@ -29,7 +29,8 @@ spin-adapted `ccsdtq` while every combination above stayed green. Rank coverage 
 behaviour could vary with rank, pin it there too rather than assuming rank 2 is
 representative.
 
-Also rank-2-only and worth knowing: these baselines use the DEFAULT engine. `engine="diagram"`
+Also rank-2-only and worth knowing: these baselines use `engine="wick"`, the default when they
+were recorded (the default is "diagram" since 2026-11-27). `engine="diagram"`
 -- what the generator and every UCC gate actually use -- emits different text (2038 differing
 lines at rank 2, at identical byte length).
 """
@@ -110,6 +111,7 @@ BASELINES = (
 
 
 def _emit(**kwargs) -> str:
+    kwargs.setdefault("engine", "wick")
     return print_cpp_planck(METHOD, **kwargs)
 
 

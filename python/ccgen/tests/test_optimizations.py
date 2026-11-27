@@ -88,12 +88,12 @@ class IntermediateDetectionTests(unittest.TestCase):
     """Tests for intermediate tensor detection."""
 
     def test_ccsd_detects_intermediates(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=2)
         self.assertGreater(len(intms), 0, "Should detect at least one intermediate")
 
     def test_intermediates_have_valid_specs(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=5)
         for spec in intms:
             self.assertIsInstance(spec, IntermediateSpec)
@@ -112,7 +112,7 @@ class IntermediateDetectionTests(unittest.TestCase):
             )
 
     def test_intermediates_sorted_by_usage(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=2)
         for i in range(len(intms) - 1):
             self.assertGreaterEqual(
@@ -122,7 +122,7 @@ class IntermediateDetectionTests(unittest.TestCase):
             )
 
     def test_threshold_filters_correctly(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms_low = detect_intermediates(eqs, threshold=2)
         intms_high = detect_intermediates(eqs, threshold=20)
         self.assertGreaterEqual(len(intms_low), len(intms_high))
@@ -130,7 +130,7 @@ class IntermediateDetectionTests(unittest.TestCase):
             self.assertGreaterEqual(spec.usage_count, 20)
 
     def test_no_intermediates_for_ccd_energy_only(self) -> None:
-        eqs = generate_cc_equations("ccd", targets=["energy"])
+        eqs = generate_cc_equations("ccd", engine="wick", targets=["energy"])
         intms = detect_intermediates(eqs, threshold=2)
         # Energy-only CCD has very few terms, unlikely to find reuse
         # (This is a sanity check, not a hard requirement)
@@ -236,11 +236,13 @@ class MethodParsingAndCacheReuseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             generate_cc_equations(
                 "ccsd",
+                engine="wick",
                 targets=["energy"],
                 cache_dir=tmpdir,
             )
             eqs_prefix = generate_cc_equations(
                 "ccsdt",
+                engine="wick",
                 targets=["energy"],
                 cache_dir=tmpdir,
             )
@@ -248,6 +250,7 @@ class MethodParsingAndCacheReuseTests(unittest.TestCase):
 
             eqs_fresh = generate_cc_equations(
                 "ccsdt",
+                engine="wick",
                 targets=["energy"],
             )
             self.assertEqual(eqs_prefix, eqs_fresh)
@@ -256,11 +259,13 @@ class MethodParsingAndCacheReuseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             generate_cc_equations(
                 "ccsd",
+                engine="wick",
                 targets=["singles"],
                 cache_dir=tmpdir,
             )
             generate_cc_equations(
                 "ccsd",
+                engine="wick",
                 targets=["energy"],
                 cache_dir=tmpdir,
             )
@@ -397,8 +402,8 @@ class ParallelGenerationTests(unittest.TestCase):
 
     def test_serial_generation_is_deterministic(self) -> None:
         # Serial is the default and only equivalence-guaranteed path.
-        first = generate_cc_equations("ccsd", parallel_workers=1)
-        second = generate_cc_equations("ccsd", parallel_workers=1)
+        first = generate_cc_equations("ccsd", engine="wick", parallel_workers=1)
+        second = generate_cc_equations("ccsd", engine="wick", parallel_workers=1)
         self.assertEqual(first, second)
 
     @unittest.expectedFailure
@@ -420,19 +425,21 @@ class ParallelGenerationTests(unittest.TestCase):
         # Parallel generation is an opt-in speed feature; the default path is
         # serial. Until (1) is made spawn-safe and (2) global, parallel output
         # must be treated as best-effort, not equivalent. See vault Open Work.
-        serial = generate_cc_equations("ccsd", parallel_workers=1)
-        parallel = generate_cc_equations("ccsd", parallel_workers=2)
+        serial = generate_cc_equations("ccsd", engine="wick", parallel_workers=1)
+        parallel = generate_cc_equations("ccsd", engine="wick", parallel_workers=2)
         self.assertEqual(serial, parallel)
 
     def test_cache_dir_reuses_manifold_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             first = generate_cc_equations(
                 "ccsd",
+                engine="wick",
                 targets=["energy", "singles"],
                 cache_dir=tmpdir,
             )
             second = generate_cc_equations(
                 "ccsd",
+                engine="wick",
                 targets=["energy", "singles"],
                 cache_dir=tmpdir,
             )
@@ -443,13 +450,13 @@ class ParallelGenerationTests(unittest.TestCase):
             self.assertTrue((method_dir / "singles.pkl").exists())
 
     def test_unique_names(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=2)
         names = [spec.name for spec in intms]
         self.assertEqual(len(names), len(set(names)), "Intermediate names must be unique")
 
     def test_intermediate_index_order_matches_space_signature(self) -> None:
-        eqs = generate_cc_equations("ccsdt")
+        eqs = generate_cc_equations("ccsdt", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)
         for spec in intms:
             sig = "".join(
@@ -510,7 +517,7 @@ class IntermediateRewriteTests(unittest.TestCase):
     """Tests for equation rewriting with intermediates."""
 
     def test_rewrite_preserves_term_count(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)[:5]
         rewritten = rewrite_equations(eqs, intms)
         for manifold in eqs:
@@ -521,7 +528,7 @@ class IntermediateRewriteTests(unittest.TestCase):
             )
 
     def test_rewrite_introduces_intermediate_references(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)[:3]
         rewritten = rewrite_equations(eqs, intms)
         # At least some terms should reference intermediates
@@ -534,13 +541,13 @@ class IntermediateRewriteTests(unittest.TestCase):
         self.assertTrue(has_intermediate, "Rewriting should introduce intermediate refs")
 
     def test_empty_intermediates_returns_original(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         rewritten = rewrite_equations(eqs, [])
         for manifold in eqs:
             self.assertEqual(len(eqs[manifold]), len(rewritten[manifold]))
 
     def test_build_intermediate_equations(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)[:5]
         intm_eqs = build_intermediate_equations(intms)
         self.assertEqual(len(intm_eqs), len(intms))
@@ -639,7 +646,7 @@ class InstrumentationTests(unittest.TestCase):
     def test_debug_populates_stats(self) -> None:
         from ccgen import generate as gen_module
 
-        generate_cc_equations("ccd", debug=False)
+        generate_cc_equations("ccd", engine="wick", debug=False)
         stats = gen_module.last_stats
         self.assertIsNotNone(stats)
         self.assertIsInstance(stats, PipelineStats)
@@ -649,7 +656,7 @@ class InstrumentationTests(unittest.TestCase):
     def test_stats_have_manifold_data(self) -> None:
         from ccgen import generate as gen_module
 
-        generate_cc_equations("ccsd", debug=False)
+        generate_cc_equations("ccsd", engine="wick", debug=False)
         stats = gen_module.last_stats
         self.assertIn("energy", stats.manifolds)
         self.assertIn("singles", stats.manifolds)
@@ -661,7 +668,7 @@ class InstrumentationTests(unittest.TestCase):
             self.assertGreater(mstats["after_merge"], 0)
 
     def test_stats_summary_is_string(self) -> None:
-        generate_cc_equations("ccd", debug=False)
+        generate_cc_equations("ccd", engine="wick", debug=False)
         from ccgen import generate as gen_module
 
         self.assertIsInstance(gen_module.last_stats.summary(), str)
@@ -672,7 +679,7 @@ class EmissionTests(unittest.TestCase):
     """Tests for intermediate code emission."""
 
     def test_cpp_intermediate_emission(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)[:3]
         code = emit_intermediate_builds(intms)
         self.assertIn("Intermediate", code)
@@ -681,7 +688,7 @@ class EmissionTests(unittest.TestCase):
             self.assertIn(spec.name, code)
 
     def test_cpp_full_emission_with_intermediates(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)[:3]
         code = emit_translation_unit_with_intermediates(eqs, intms)
         self.assertIn("Auto-generated by ccgen", code)
@@ -689,7 +696,7 @@ class EmissionTests(unittest.TestCase):
         self.assertIn("void compute_cc_residuals", code)
 
     def test_einsum_intermediate_emission(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)[:3]
         code = format_intermediates_einsum(intms)
         self.assertIn("Intermediate", code)
@@ -698,7 +705,7 @@ class EmissionTests(unittest.TestCase):
             self.assertIn(spec.name, code)
 
     def test_einsum_full_emission_with_intermediates(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)[:3]
         code = format_equations_with_intermediates_einsum(eqs, intms)
         self.assertIn("Intermediate", code)
@@ -715,7 +722,7 @@ class EmissionTests(unittest.TestCase):
     def test_planck_translation_unit_structure(self) -> None:
         code = emit_planck_translation_unit(
             "ccsd",
-            generate_cc_equations("ccsd"),
+            generate_cc_equations("ccsd", engine="wick"),
         )
         self.assertIn('#include "post_hf/cc/tensor_backend.h"', code)
         self.assertIn("namespace HartreeFock::Correlation::CC", code)
@@ -730,7 +737,7 @@ class EmissionTests(unittest.TestCase):
         self.assertNotIn("V(", code)
 
     def test_planck_translation_unit_with_intermediates(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intermediates = [
             spec for spec in detect_intermediates(eqs, threshold=10)
             if spec.rank in (2, 4, 6)
@@ -977,7 +984,7 @@ class EmissionTests(unittest.TestCase):
         )
         code = emit_planck_translation_unit(
             "ccsd",
-            {"energy": generate_cc_equations("ccsd", targets=["energy"])["energy"]},
+            {"energy": generate_cc_equations("ccsd", engine="wick", targets=["energy"])["energy"]},
             intermediates=[spec],
         )
         self.assertIn("Tensor4D result(no, no, nv, nv, 0.0);", code)
@@ -1079,13 +1086,13 @@ class FactoredCanonicalizationTests(unittest.TestCase):
         expected-failure was retracted -- it was an off-shell comparison
         artifact, and the full ccgen residual matches PySCF to ~1e-16 (see
         CCGEN_GENERATION_AND_VALIDATION). So these counts are final."""
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         self.assertEqual(len(eqs["energy"]), 3)
         self.assertEqual(len(eqs["singles"]), 16)
         self.assertEqual(len(eqs["doubles"]), 70)
 
     def test_ccd_term_counts_stable(self) -> None:
-        eqs = generate_cc_equations("ccd")
+        eqs = generate_cc_equations("ccd", engine="wick")
         self.assertEqual(len(eqs["energy"]), 1)
 
     @unittest.skipIf(np is None, "numpy required")
@@ -1097,7 +1104,7 @@ class FactoredCanonicalizationTests(unittest.TestCase):
         )
 
         tensors, fock, oovv = build_test_tensors()
-        eqs = generate_cc_equations("ccsd", targets=["energy"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["energy"])
         energy_terms = eqs["energy"]
 
         generated = sum(
@@ -1130,19 +1137,19 @@ class OrbitalEnergyCollectionTests(unittest.TestCase):
     # exercised on synthetic input that genuinely has diagonal Fock factors.
 
     def test_singles_is_noop_on_correct_residual(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         before = len(eqs["singles"])
         after = len(collect_fock_diagonals(eqs["singles"]))
         self.assertEqual(after, before)
 
     def test_doubles_is_noop_on_correct_residual(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         before = len(eqs["doubles"])
         after = len(collect_fock_diagonals(eqs["doubles"]))
         self.assertEqual(after, before)
 
     def test_energy_unchanged(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         before = len(eqs["energy"])
         after = len(collect_fock_diagonals(eqs["energy"]))
         self.assertEqual(before, after, "Energy should not have diagonal Fock terms to collect")
@@ -1150,7 +1157,7 @@ class OrbitalEnergyCollectionTests(unittest.TestCase):
     def test_no_diagonal_fock_in_generated_equations(self) -> None:
         # The positive statement behind the no-ops above: a correct residual has
         # no f(x,x) factor anywhere.
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         for manifold in ("energy", "singles", "doubles"):
             for t in eqs[manifold]:
                 for fac in t.factors:
@@ -1182,7 +1189,7 @@ class OrbitalEnergyCollectionTests(unittest.TestCase):
         self.assertGreater(len(d_terms), 0, "Should have at least one D tensor term")
 
     def test_denominator_indices_correct(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         collected = collect_fock_diagonals(eqs["doubles"])
         for t in collected:
             for f in t.factors:
@@ -1199,8 +1206,8 @@ class OrbitalEnergyCollectionTests(unittest.TestCase):
         the class note), so the flag is a no-op on term count.  What must hold
         is that it never CHANGES the equations.
         """
-        eqs_normal = generate_cc_equations("ccsd")
-        eqs_denom = generate_cc_equations("ccsd", collect_denominators=True)
+        eqs_normal = generate_cc_equations("ccsd", engine="wick")
+        eqs_denom = generate_cc_equations("ccsd", engine="wick", collect_denominators=True)
         self.assertEqual(
             len(eqs_denom["doubles"]),
             len(eqs_normal["doubles"]),
@@ -1208,7 +1215,7 @@ class OrbitalEnergyCollectionTests(unittest.TestCase):
 
     def test_stats_include_denom_collection(self) -> None:
         from ccgen import generate as gen_module
-        generate_cc_equations("ccsd", collect_denominators=True)
+        generate_cc_equations("ccsd", engine="wick", collect_denominators=True)
         stats = gen_module.last_stats
         self.assertIn("after_denom_collection", stats.manifolds["doubles"])
 
@@ -1220,7 +1227,7 @@ class OrbitalEnergyCollectionTests(unittest.TestCase):
         tensors, fock, oovv = build_test_tensors()
         nocc, nvir = 2, 3
 
-        eqs = generate_cc_equations("ccsd", targets=["singles"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["singles"])
         original = eqs["singles"]
         collected = collect_fock_diagonals(original)
 
@@ -1273,14 +1280,14 @@ class CSETests(unittest.TestCase):
 
     def test_cse_no_false_positives(self) -> None:
         """CSE should not merge terms with different contractions."""
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         rewritten, specs = factor_common_subexpressions(eqs["doubles"])
         # After merge_like_terms, no duplicate contractions should exist
         self.assertEqual(len(specs), 0)
         self.assertEqual(len(rewritten), len(eqs["doubles"]))
 
     def test_apply_cse_preserves_structure(self) -> None:
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         new_eqs, all_specs = apply_cse(eqs)
         for manifold in eqs:
             self.assertIn(manifold, new_eqs)
@@ -1329,7 +1336,7 @@ class WickEarlyTerminationTests(unittest.TestCase):
         error" that kept this NOT-yet-final was retracted -- an off-shell
         comparison artifact; the full ccgen residual matches PySCF to ~1e-16
         (see CCGEN_GENERATION_AND_VALIDATION). These counts are now final."""
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         self.assertEqual(len(eqs["energy"]), 3)  # energy is correct + unchanged
         self.assertEqual(len(eqs["singles"]), 16)
         self.assertEqual(len(eqs["doubles"]), 70)
@@ -1338,7 +1345,7 @@ class WickEarlyTerminationTests(unittest.TestCase):
         # CCD is FULLY fixed by T1.2b/c and PySCF-validated (see
         # test_reference_vs_pyscf). The old pin (35) was the buggy under-count;
         # 18 is the correct value.
-        eqs = generate_cc_equations("ccd")
+        eqs = generate_cc_equations("ccd", engine="wick")
         self.assertEqual(len(eqs["energy"]), 1)
         self.assertEqual(len(eqs["doubles"]), 18)
 
@@ -1351,7 +1358,7 @@ class WickEarlyTerminationTests(unittest.TestCase):
         )
 
         tensors, fock, oovv = build_test_tensors()
-        eqs = generate_cc_equations("ccsd", targets=["energy"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["energy"])
 
         generated = sum(
             evaluate_scalar_term(term, tensors, nocc=2)
@@ -1370,7 +1377,7 @@ class WickEarlyTerminationTests(unittest.TestCase):
         """Results must be identical across multiple runs."""
         counts = []
         for _ in range(3):
-            eqs = generate_cc_equations("ccsd")
+            eqs = generate_cc_equations("ccsd", engine="wick")
             counts.append({k: len(v) for k, v in eqs.items()})
         self.assertEqual(counts[0], counts[1])
         self.assertEqual(counts[1], counts[2])
@@ -1380,7 +1387,7 @@ class TiledLoopEmissionTests(unittest.TestCase):
     """Tests for the tiled + OpenMP C++ emitter."""
 
     def test_tiled_output_has_tile_loops(self) -> None:
-        eqs = generate_cc_equations("ccsd", targets=["doubles"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["doubles"])
         code = emit_optimized_translation_unit(eqs)
         # Should contain tile block variables
         self.assertIn("ib", code)
@@ -1389,26 +1396,26 @@ class TiledLoopEmissionTests(unittest.TestCase):
         self.assertIn("bb", code)
 
     def test_tiled_output_has_openmp(self) -> None:
-        eqs = generate_cc_equations("ccsd", targets=["doubles"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["doubles"])
         code = emit_optimized_translation_unit(eqs, use_openmp=True)
         self.assertIn("#pragma omp parallel for", code)
         self.assertIn("collapse(", code)
         self.assertIn("#include <omp.h>", code)
 
     def test_tiled_output_no_openmp(self) -> None:
-        eqs = generate_cc_equations("ccsd", targets=["doubles"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["doubles"])
         code = emit_optimized_translation_unit(eqs, use_openmp=False)
         self.assertNotIn("#pragma omp", code)
         self.assertNotIn("#include <omp.h>", code)
 
     def test_tiled_output_has_std_min(self) -> None:
-        eqs = generate_cc_equations("ccsd", targets=["doubles"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["doubles"])
         code = emit_optimized_translation_unit(eqs)
         self.assertIn("std::min(", code)
         self.assertIn("#include <algorithm>", code)
 
     def test_custom_tile_sizes(self) -> None:
-        eqs = generate_cc_equations("ccsd", targets=["doubles"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["doubles"])
         code = emit_optimized_translation_unit(eqs, tile_occ=8, tile_vir=32)
         self.assertIn("occ=8", code)
         self.assertIn("vir=32", code)
@@ -1417,19 +1424,19 @@ class TiledLoopEmissionTests(unittest.TestCase):
 
     def test_singles_not_tiled(self) -> None:
         """Singles have only 2 free indices; should still produce valid code."""
-        eqs = generate_cc_equations("ccsd", targets=["singles"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["singles"])
         code = emit_optimized_translation_unit(eqs)
         self.assertIn("R1", code)
 
     def test_energy_falls_back_to_naive(self) -> None:
         """Energy (0 free indices) should fall back to untiled emission."""
-        eqs = generate_cc_equations("ccsd", targets=["energy"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["energy"])
         code = emit_optimized_translation_unit(eqs)
         self.assertIn("E_CC", code)
 
     def test_tiled_output_is_valid_structure(self) -> None:
         """Output should have matching braces."""
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         code = emit_optimized_translation_unit(eqs)
         self.assertEqual(code.count("{"), code.count("}"),
                          "Braces must be balanced")
@@ -1522,7 +1529,7 @@ class PermutationGroupingTests(unittest.TestCase):
 
     def test_ccsd_grouping_reduces_terms(self) -> None:
         """Permutation grouping should reduce doubles term count."""
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         from ccgen.optimization.permutation import apply_permutation_grouping
         before = len(eqs["doubles"])
         after = len(apply_permutation_grouping(eqs["doubles"]))
@@ -1530,7 +1537,7 @@ class PermutationGroupingTests(unittest.TestCase):
 
     def test_ccsd_energy_unchanged(self) -> None:
         """Energy has no free indices; grouping should not change it."""
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         from ccgen.optimization.permutation import apply_permutation_grouping
         before = len(eqs["energy"])
         after = len(apply_permutation_grouping(eqs["energy"]))
@@ -1538,7 +1545,7 @@ class PermutationGroupingTests(unittest.TestCase):
 
     def test_grouping_detects_groups(self) -> None:
         """detect_permutation_groups returns valid structure."""
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         from ccgen.optimization.permutation import detect_permutation_groups
         groups, ungrouped = detect_permutation_groups(eqs["doubles"])
         # After canonicalization, most permutation equivalences are already
@@ -1554,7 +1561,7 @@ class PermutationGroupingTests(unittest.TestCase):
             detect_permutation_groups,
             PermutationGroup,
         )
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         groups, _ = detect_permutation_groups(eqs["doubles"])
         for group in groups:
             self.assertIsInstance(group, PermutationGroup)
@@ -1569,7 +1576,7 @@ class PermutationGroupingTests(unittest.TestCase):
         from ccgen.optimization.permutation import (
             apply_permutation_grouping_equations,
         )
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         result = apply_permutation_grouping_equations(eqs)
         self.assertIn("energy", result)
         self.assertIn("singles", result)
@@ -1577,7 +1584,7 @@ class PermutationGroupingTests(unittest.TestCase):
 
     def test_stats_api(self) -> None:
         from ccgen.optimization.permutation import permutation_grouping_stats
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         stats = permutation_grouping_stats(eqs)
         for manifold in eqs:
             self.assertIn(manifold, stats)
@@ -1591,8 +1598,8 @@ class PermutationGroupingTests(unittest.TestCase):
 
     def test_generate_with_permutation_flag(self) -> None:
         """generate_cc_equations with permutation_grouping=True works."""
-        eqs_normal = generate_cc_equations("ccsd")
-        eqs_perm = generate_cc_equations("ccsd", permutation_grouping=True)
+        eqs_normal = generate_cc_equations("ccsd", engine="wick")
+        eqs_perm = generate_cc_equations("ccsd", engine="wick", permutation_grouping=True)
         self.assertLessEqual(
             len(eqs_perm["doubles"]),
             len(eqs_normal["doubles"]),
@@ -1607,7 +1614,7 @@ class PermutationGroupingTests(unittest.TestCase):
         tensors, fock, oovv = build_test_tensors()
         nocc, nvir = 2, 3
 
-        eqs = generate_cc_equations("ccsd", targets=["singles"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["singles"])
         original = eqs["singles"]
         grouped = apply_permutation_grouping(original)
 
@@ -1627,7 +1634,7 @@ class BackendIRExtTests(unittest.TestCase):
 
     def test_lower_equations_ex_produces_hints(self) -> None:
         from ccgen.tensor_ir import lower_equations_ex, BackendTermEx
-        eqs = generate_cc_equations("ccsd", targets=["doubles"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["doubles"])
         ex = lower_equations_ex(eqs)
         self.assertIn("doubles", ex)
         for tex in ex["doubles"]:
@@ -1640,7 +1647,7 @@ class BackendIRExtTests(unittest.TestCase):
 
     def test_blas_detection_runs(self) -> None:
         from ccgen.tensor_ir import lower_equations_ex
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         ex = lower_equations_ex(eqs, detect_blas=True)
         # Should find at least some GEMM patterns in doubles
         blas_count = sum(
@@ -1652,7 +1659,7 @@ class BackendIRExtTests(unittest.TestCase):
 
     def test_blas_hint_fields(self) -> None:
         from ccgen.tensor_ir import lower_equations_ex, BLASHint
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         ex = lower_equations_ex(eqs, detect_blas=True)
         for terms in ex.values():
             for tex in terms:
@@ -1675,7 +1682,7 @@ class BackendIRExtTests(unittest.TestCase):
 
     def test_flop_estimate_reasonable(self) -> None:
         from ccgen.tensor_ir import lower_equations_ex
-        eqs = generate_cc_equations("ccsd", targets=["energy"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["energy"])
         ex = lower_equations_ex(eqs)
         for tex in ex["energy"]:
             # Energy terms have summed indices, should have non-trivial flops
@@ -1691,7 +1698,7 @@ class MemoryLayoutTests(unittest.TestCase):
             annotate_layout_hints,
             total_estimated_bytes,
         )
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=5)
         annotated = annotate_layout_hints(intms)
         self.assertEqual(len(annotated), len(intms))
@@ -1711,7 +1718,7 @@ class MemoryLayoutTests(unittest.TestCase):
             detect_intermediates,
             annotate_layout_hints,
         )
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)
         annotated = annotate_layout_hints(intms)
         for spec in annotated:
@@ -1721,7 +1728,7 @@ class MemoryLayoutTests(unittest.TestCase):
 
     def test_estimated_elements(self) -> None:
         from ccgen.optimization.intermediates import detect_intermediates
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)
         for spec in intms:
             self.assertGreater(spec.estimated_elements, 0)
@@ -1729,7 +1736,7 @@ class MemoryLayoutTests(unittest.TestCase):
 
     def test_with_layout_hints_returns_new(self) -> None:
         from ccgen.optimization.intermediates import detect_intermediates
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)
         if intms:
             original = intms[0]
@@ -1746,7 +1753,7 @@ class MemoryLayoutTests(unittest.TestCase):
             detect_intermediates,
             total_estimated_bytes,
         )
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         unrestricted = detect_intermediates(eqs, threshold=5)
         self.assertTrue(unrestricted)
         selected = detect_intermediates(
@@ -1867,7 +1874,7 @@ class BLASEmissionTests(unittest.TestCase):
 
     def test_blas_translation_unit_structure(self) -> None:
         from ccgen.emit.cpp_loops import emit_blas_translation_unit
-        eqs = generate_cc_equations("ccsd", targets=["doubles"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["doubles"])
         code = emit_blas_translation_unit(eqs, use_blas=True)
         self.assertIn("Auto-generated by ccgen (BLAS-optimized)", code)
         self.assertIn("#include <cblas.h>", code)
@@ -1876,7 +1883,7 @@ class BLASEmissionTests(unittest.TestCase):
 
     def test_blas_without_blas_flag(self) -> None:
         from ccgen.emit.cpp_loops import emit_blas_translation_unit
-        eqs = generate_cc_equations("ccsd", targets=["doubles"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["doubles"])
         code = emit_blas_translation_unit(eqs, use_blas=False)
         self.assertNotIn("#include <cblas.h>", code)
         self.assertNotIn("BLAS/GEMM lowering enabled", code)
@@ -1884,7 +1891,7 @@ class BLASEmissionTests(unittest.TestCase):
     def test_blas_with_intermediates(self) -> None:
         from ccgen.emit.cpp_loops import emit_blas_translation_unit
         from ccgen.optimization.intermediates import detect_intermediates
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)[:3]
         code = emit_blas_translation_unit(eqs, intermediates=intms)
         self.assertIn("Intermediate tensor builds", code)
@@ -1896,7 +1903,7 @@ class BLASEmissionTests(unittest.TestCase):
 
     def test_blas_code_has_balanced_braces(self) -> None:
         from ccgen.emit.cpp_loops import emit_blas_translation_unit
-        eqs = generate_cc_equations("ccsd", targets=["energy", "singles"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["energy", "singles"])
         code = emit_blas_translation_unit(eqs, use_blas=True)
         self.assertEqual(
             code.count("{"), code.count("}"),
@@ -1909,7 +1916,7 @@ class PrettyPrintingPhase3Tests(unittest.TestCase):
 
     def test_format_with_legend(self) -> None:
         from ccgen.emit.pretty import format_equations_with_intermediates
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         output = format_equations_with_intermediates(
             eqs, include_legend=True,
         )
@@ -1921,7 +1928,7 @@ class PrettyPrintingPhase3Tests(unittest.TestCase):
     def test_format_with_intermediates(self) -> None:
         from ccgen.emit.pretty import format_equations_with_intermediates
         from ccgen.optimization.intermediates import detect_intermediates
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)[:3]
         output = format_equations_with_intermediates(
             eqs, intermediates=intms,
@@ -1932,7 +1939,7 @@ class PrettyPrintingPhase3Tests(unittest.TestCase):
 
     def test_format_with_stats(self) -> None:
         from ccgen.emit.pretty import format_equations_with_intermediates
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         output = format_equations_with_intermediates(
             eqs, include_stats=True,
         )
@@ -1941,7 +1948,7 @@ class PrettyPrintingPhase3Tests(unittest.TestCase):
 
     def test_format_section_headers(self) -> None:
         from ccgen.emit.pretty import format_equations_with_intermediates
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         output = format_equations_with_intermediates(eqs)
         self.assertIn("Correlation energy", output)
         self.assertIn("Singles (T1) residual", output)
@@ -1953,7 +1960,7 @@ class PrettyPrintingPhase3Tests(unittest.TestCase):
             detect_intermediates,
             annotate_layout_hints,
         )
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         intms = detect_intermediates(eqs, threshold=10)
         annotated = annotate_layout_hints(intms)
         for spec in annotated:
@@ -1975,7 +1982,7 @@ class EinsumEmissionTests(unittest.TestCase):
 
     @unittest.skipIf(np is None, "numpy required")
     def test_generated_einsum_code_executes(self) -> None:
-        code = format_equations_einsum(generate_cc_equations("ccsd"))
+        code = format_equations_einsum(generate_cc_equations("ccsd", engine="wick"))
         ns = {
             "np": np,
             "no": 2,
@@ -1995,14 +2002,14 @@ class ImplicitSymmetryTests(unittest.TestCase):
 
     def test_symmetry_does_not_increase_terms(self) -> None:
         from ccgen.optimization.symmetry import exploit_antisymmetry
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         before = len(eqs["doubles"])
         after = len(exploit_antisymmetry(eqs["doubles"]))
         self.assertLessEqual(after, before)
 
     def test_symmetry_equations_api(self) -> None:
         from ccgen.optimization.symmetry import exploit_antisymmetry_equations
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         result = exploit_antisymmetry_equations(eqs)
         self.assertIn("energy", result)
         self.assertIn("doubles", result)
@@ -2011,7 +2018,7 @@ class ImplicitSymmetryTests(unittest.TestCase):
 
     def test_symmetry_stats(self) -> None:
         from ccgen.optimization.symmetry import symmetry_reduction_stats
-        eqs = generate_cc_equations("ccsd")
+        eqs = generate_cc_equations("ccsd", engine="wick")
         stats = symmetry_reduction_stats(eqs)
         for manifold in eqs:
             self.assertIn("before", stats[manifold])
@@ -2023,8 +2030,8 @@ class ImplicitSymmetryTests(unittest.TestCase):
 
     def test_generate_with_symmetry_flag(self) -> None:
         """generate_cc_equations with exploit_symmetry=True works."""
-        eqs_normal = generate_cc_equations("ccsd")
-        eqs_sym = generate_cc_equations("ccsd", exploit_symmetry=True)
+        eqs_normal = generate_cc_equations("ccsd", engine="wick")
+        eqs_sym = generate_cc_equations("ccsd", engine="wick", exploit_symmetry=True)
         self.assertLessEqual(
             len(eqs_sym["doubles"]),
             len(eqs_normal["doubles"]),
@@ -2039,7 +2046,7 @@ class ImplicitSymmetryTests(unittest.TestCase):
         tensors, fock, oovv = build_test_tensors()
         nocc, nvir = 2, 3
 
-        eqs = generate_cc_equations("ccsd", targets=["singles"])
+        eqs = generate_cc_equations("ccsd", engine="wick", targets=["singles"])
         original = eqs["singles"]
         reduced = exploit_antisymmetry(original)
 
@@ -2059,19 +2066,19 @@ class PipelineStatsPhase3Tests(unittest.TestCase):
 
     def test_stats_with_perm_grouping(self) -> None:
         from ccgen import generate as gen_module
-        generate_cc_equations("ccsd", permutation_grouping=True)
+        generate_cc_equations("ccsd", engine="wick", permutation_grouping=True)
         stats = gen_module.last_stats
         self.assertIn("after_perm_grouping", stats.manifolds.get("doubles", {}))
 
     def test_stats_with_symmetry(self) -> None:
         from ccgen import generate as gen_module
-        generate_cc_equations("ccsd", exploit_symmetry=True)
+        generate_cc_equations("ccsd", engine="wick", exploit_symmetry=True)
         stats = gen_module.last_stats
         self.assertIn("after_symmetry", stats.manifolds.get("doubles", {}))
 
     def test_stats_summary_includes_phase3(self) -> None:
         from ccgen import generate as gen_module
-        generate_cc_equations("ccsd", permutation_grouping=True)
+        generate_cc_equations("ccsd", engine="wick", permutation_grouping=True)
         summary = gen_module.last_stats.summary()
         self.assertIn("perm grouping", summary)
 

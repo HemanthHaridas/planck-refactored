@@ -324,6 +324,14 @@ namespace HartreeFock::Correlation::CC
             calculator._correlation_energy += *e_t;
         }
 
+        if (calculator._scf._cc_lambda)
+        {
+            auto lam = solve_lambda_after_t(calculator, solve_res->state,
+                                            make_generated_lambda_kernels(rank, /*ucc=*/false), tag);
+            if (!lam)
+                return std::unexpected("run_rccgen: " + lam.error());
+        }
+
         // Persist the converged amplitudes to a .ccamp sidecar so a later run can
         // warm-start from them (X3). Gated on the same _save_checkpoint flag as the
         // SCF checkpoint; a write failure is a warning, never a run failure — the

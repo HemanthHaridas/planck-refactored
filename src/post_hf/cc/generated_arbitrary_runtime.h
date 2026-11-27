@@ -93,6 +93,38 @@ namespace HartreeFock::Correlation::CC
         AllResidualsKernel all_residuals;
     };
 
+    // Λ (left-hand) residual kernels (docs/CC_LAMBDA_SCOPE.md, 3b): read the
+    // converged t and the multipliers λ, return every Λ residual in λ's layout
+    // (occ..., vir...): the per-rank reference residuals by rank (rank r at
+    // [r-1]; none for UCC), then one per `sector_tags` entry, in that order.
+    // λ uses the amplitude container with t's ranks and sectors.
+    struct GeneratedLambdaKernels
+    {
+        using ResidualsKernel = std::function<std::vector<TensorND>(
+            const CanonicalRHFCCReference &,
+            const TensorCCBlockCache &,
+            const ArbitraryOrderDenominatorCache &,
+            const ArbitraryOrderRCCAmplitudes &amplitudes,
+            const ArbitraryOrderRCCAmplitudes &lambdas)>;
+
+        int max_excitation_rank = 0;
+        std::vector<std::pair<int, std::string>> sector_tags;
+        ResidualsKernel residuals;
+
+        // One per output, same order: the Λ residual's diagonal is
+        // -c·D (D the T denominator), so the Jacobi step divides by c·D.
+        // Derived at generation time (ccgen lagrangian.lambda_diagonal_scale).
+        std::vector<double> diagonal_scale;
+    };
+
+    struct GeneratedLambdaSolveResult
+    {
+        ArbitraryOrderRCCAmplitudes lambdas; // t's ranks and sectors
+        unsigned int iterations = 0;
+        bool converged = false;
+        ArbitraryOrderIterationMetrics metrics;
+    };
+
     struct GeneratedArbitraryOrderSolveResult
     {
         ArbitraryOrderTensorCCState state;
@@ -184,6 +216,34 @@ namespace HartreeFock::Correlation::CC
     evaluate_generated_arbitrary_order_residuals(
         const ArbitraryOrderTensorCCState &state,
         const GeneratedArbitraryOrderKernels &kernels);
+
+    // Λ with T frozen (docs/CC_LAMBDA_SCOPE.md, 3c): the Λ equations are
+    // linear in λ, solved by the T solver's Jacobi/DIIS update against
+    // denominators scaled by `diagonal_scale`. λ starts at zero, so the first
+    // step is the perturbative λ. Converged when the residual rms is below
+    // `tol_residual`. `state` holds the converged t.
+    std::expected<GeneratedLambdaSolveResult, std::string>
+    run_generated_lambda_iterations(
+        const ArbitraryOrderTensorCCState &state,
+        const GeneratedLambdaKernels &kernels,
+        unsigned int max_iterations,
+        double tol_residual,
+        double damping,
+        bool use_diis,
+        int diis_dim,
+        const std::string &log_tag);
+
+    // The `cc_lambda` step after a converged generated T solve, with the T
+    // solver's settings, and the rms of each λ block logged. Fails if Λ does
+    // not converge. The caller passes the kernels
+    // (make_generated_lambda_kernels), as it does the T kernels, so this TU
+    // needs no registry.
+    std::expected<GeneratedLambdaSolveResult, std::string>
+    solve_lambda_after_t(
+        HartreeFock::Calculator &calculator,
+        const ArbitraryOrderTensorCCState &state,
+        const std::expected<GeneratedLambdaKernels, std::string> &kernels,
+        const std::string &tag);
 
     std::expected<GeneratedArbitraryOrderSolveResult, std::string>
     run_generated_arbitrary_order_iterations(

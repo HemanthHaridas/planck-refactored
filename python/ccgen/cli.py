@@ -49,6 +49,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional subset of manifolds to generate, e.g. energy singles doubles.",
     )
     parser.add_argument(
+        "--engine",
+        choices=("diagram", "wick"),
+        default="diagram",
+        help="Equation-generation engine (default diagram; the parallel, "
+             "cache and debug options need wick).",
+    )
+    parser.add_argument(
         "--parallel-workers",
         type=int,
         default=None,
@@ -128,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
 
     common_kwargs = {
         "targets": args.targets,
+        "engine": args.engine,
         "debug": args.debug,
         "parallel_workers": args.parallel_workers,
         "cache_dir": args.cache_dir,

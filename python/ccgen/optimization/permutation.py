@@ -382,7 +382,11 @@ def fold_external_symmetry(
     their own inverses: whether the rename below is g or g^-1 does not matter,
     since both are in the group with the same sign). Orbits are matched on the
     term's text with dummies left as named, which finds fewer orbits than full
-    canonicalization would but never a wrong one.
+    canonicalization would but never a wrong one. Canonical-form keys were
+    tried (2026-11-26): T triples 331 -> 306 terms, UCC CCSDT 802 -> 790, Λ
+    residuals no change, at a canonicalizer cost that ran to minutes per
+    large Λ-CCSDTQ term. Reverted; a cheaper complete canonical form would be
+    the route.
     """
     names = {i.name for t in terms for i in t.free_indices}
     for mapping, _ in group:
@@ -405,7 +409,8 @@ def fold_external_symmetry(
             for k in order if kappa[k] != 0]
 
 
-def spin_class_group(term: AlgebraTerm) -> tuple[tuple[dict[str, str], int], ...]:
+def spin_class_group(term: AlgebraTerm,
+                     spins: dict[str, str] | None = None) -> tuple[tuple[dict[str, str], int], ...]:
     """The external symmetry group of a UCC residual block, from its spins.
 
     Free indices of the same space AND spin are identical particles, so the
@@ -417,10 +422,15 @@ def spin_class_group(term: AlgebraTerm) -> tuple[tuple[dict[str, str], int], ...
     indices of different spin: `abab` -> `baba` is a different block.
 
     Identity first, so a trivial group is ``(({}, 1),)``.
+
+    ``spins`` gives the free indices' spins directly, for terms whose factors
+    carry no spin tags (RCC, :func:`block_symmetry_group`); by default they are
+    read from the UCC factor tags.
     """
     from ..spin import ucc_term_index_spins
 
-    spins = ucc_term_index_spins(term)
+    if spins is None:
+        spins = ucc_term_index_spins(term)
     classes: dict[tuple[str, str], list[str]] = {}
     for idx in term.free_indices:
         if idx.name not in spins:
@@ -446,3 +456,41 @@ def spin_class_group(term: AlgebraTerm) -> tuple[tuple[dict[str, str], int], ...
                   for p in permutations(range(len(names)))]
         group = [({**m1, **m2}, s1 * s2) for m1, s1 in group for m2, s2 in factor]
     return tuple(group)
+
+
+def block_symmetry_group(term: AlgebraTerm, ucc: bool,
+                         k_alpha: int | None = None) -> tuple[tuple[dict[str, str], int], ...]:
+    """The symmetry group of one stored amplitude block, from its spins.
+
+    UCC: :func:`spin_class_group` on the block's tags. RCC: the spatial block
+    of sector ``k_alpha`` (α on the first ``k_alpha`` occupied/virtual pairs,
+    β on the rest; ``spin.independent_spin_blocks``), whose free indices carry
+    no tags. Its group is the same class product, plus, for a balanced sector
+    (2 k_alpha = n), the closed-shell spin flip: the α pairs swapped with the
+    β pairs, sign +. That gives the t2 pair symmetry x(i,j,a,b) = x(j,i,b,a)
+    at rank 2 (abab) and AAB_TRIPLES_GROUP at rank 3 (aab), and the groups of
+    every higher sector by the same rule.
+
+    The Λ residual of a block is G symmetrized over it (docs/CC_LAMBDA_SCOPE.md).
+    """
+    if ucc:
+        return spin_class_group(term)
+    occ = [i.name for i in term.free_indices if i.space == "occ"]
+    vir = [i.name for i in term.free_indices if i.space == "vir"]
+    n = len(occ)
+    if k_alpha is None:
+        k_alpha = (n + 1) // 2
+    spins = {nm: ("a" if j < k_alpha else "b") for names in (occ, vir)
+             for j, nm in enumerate(names)}
+    group = spin_class_group(term, spins)
+    if 2 * k_alpha != n:
+        return group
+    flip = {}
+    for names in (occ, vir):
+        for j in range(k_alpha):
+            flip[names[j]], flip[names[k_alpha + j]] = names[k_alpha + j], names[j]
+    flipped = []
+    for mapping, sign in group:
+        h = {x: flip[mapping.get(x, x)] for x in occ + vir}
+        flipped.append(({x: y for x, y in h.items() if x != y}, sign))
+    return group + tuple(flipped)

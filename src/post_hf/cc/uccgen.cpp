@@ -242,6 +242,14 @@ namespace HartreeFock::Correlation::CC
             calculator._correlation_energy += *e_t;
         }
 
+        if (calculator._scf._cc_lambda)
+        {
+            auto lam = solve_lambda_after_t(calculator, solve_res->state,
+                                            make_generated_lambda_kernels(rank, /*ucc=*/true), "UCC :");
+            if (!lam)
+                return std::unexpected("run_uccgen: " + lam.error());
+        }
+
         // U2: persist the converged sector amplitudes, mirroring run_rccgen's
         // write site exactly (same gate, same path derivation, same
         // warn-not-fail policy). by_rank stays empty for UCC -- the sector

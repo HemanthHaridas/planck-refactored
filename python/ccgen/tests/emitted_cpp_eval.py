@@ -52,22 +52,23 @@ def gemm_reads(src: str):
 def parse_blocks(src: str, symbol: str):
     """Split one emitted function body into its `// Term N` / `// Definition
     term N` chunks, returning (target_indices, summed_expr) per chunk."""
-    m = re.search(r'Tensor\dD %s\(.*?\n\}' % re.escape(symbol), src, re.S)
+    m = re.search(r'(?:Tensor\dD|TensorND) %s\(.*?\n\}' % re.escape(symbol), src, re.S)
     if m is None:
         raise KeyError(f"no emitted function named {symbol}")
     body = m.group(0)
     chunks = re.split(r'// (?:Definition term|Term) \d+', body)[1:]
     out = []
     for c in chunks:
-        g = GEMM_CALL.search(c)
-        if g is not None:
-            _, tgt, expr = gemm_write(g)
-            out.append((tgt, expr))
+        # Every call: a UCC same-spin difference (v(..cd) - v(..dc)) lowers to
+        # one call per read under one `// Term`.
+        calls = [gemm_write(g)[1:] for g in GEMM_CALL.finditer(c)]
+        if calls:
+            out.extend(calls)
             continue
-        res = re.search(r'result\(([^)]*)\)\s*\+=', c)
+        res = re.search(r'result\(\{?([^)}]*)\}?\)\s*\+=', c)
         if res is None:
             continue
-        tgt = [x.strip() for x in res.group(1).split(',')]
+        tgt = [x.strip() for x in res.group(1).split(',')]   # rank >= 7: result({i, ...})
         if 'double acc = 0.0;' in c:
             expr = c.split('double acc = 0.0;')[1].split('acc +=')[1].split(';')[0]
         else:
@@ -93,11 +94,31 @@ def parse_factors(expr: str):
     return coeff, facs
 
 
+# A UCC same-spin ERI read is the antisymmetrized difference of one stored
+# array, `(v_aaaa_oovv(i, l, c, d) - v_aaaa_oovv(i, l, d, c))`.
+_DIFF = re.compile(r'\((\w+(?:\.\w+)?\([^()]*\)) - (\w+(?:\.\w+)?\([^()]*\))\)')
+
+
+def _expand_differences(expr: str):
+    """`... * (A - B)` -> [(1, `... * A`), (-1, `... * B`)], recursively."""
+    m = _DIFF.search(expr)
+    if m is None:
+        return [(1, expr)]
+    out = []
+    for sign, read in ((1, m.group(1)), (-1, m.group(2))):
+        for s2, e in _expand_differences(expr[:m.start()] + read + expr[m.end():]):
+            out.append((sign * s2, e))
+    return out
+
+
 def eval_chunks(chunks, shape, lookup):
     """Sum the einsums for one function's chunks into an array of `shape`."""
     total = np.zeros(shape)
-    for tgt, expr in chunks:
+    chunks = [(tgt, sign, expr) for tgt, whole in chunks
+              for sign, expr in _expand_differences(whole)]
+    for tgt, sign, expr in chunks:
         coeff, facs = parse_factors(expr)
+        coeff *= sign
         subs, arrs = [], []
         for name, idx in facs:
             arr = lookup(name)
@@ -110,10 +131,12 @@ def eval_chunks(chunks, shape, lookup):
     return total
 
 
-def _dims(text: str, no: int, nv: int) -> tuple[int, ...]:
-    """`no, no, nv, 0.0` or `std::vector<int>{no, nv}, 0.0` -> a shape."""
-    names = re.findall(r'\b(no|nv)\b', text)
-    return tuple(no if d == 'no' else nv for d in names)
+def _dims(text: str, no, nv: int = 0) -> tuple[int, ...]:
+    """`no, no, nv, 0.0` or `std::vector<int>{no, nv}, 0.0` -> a shape. *no*
+    may instead be a dict of extents by name (UCC: noa, nob, nva, nvb)."""
+    sizes = no if isinstance(no, dict) else {"no": no, "nv": nv}
+    names = re.findall(r'\b(%s)\b' % "|".join(sizes), text)
+    return tuple(sizes[d] for d in names)
 
 
 def eval_body(body: str, no: int, nv: int, resolve):

@@ -834,6 +834,14 @@ namespace HartreeFock::IO
                      scf._cc_warm_start = *parsed;
                      return std::expected<void, std::string>{};
                  }},
+                {"cc_lambda", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = toBool(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     scf._cc_lambda = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
                 {"rccsdt_backend", [&scf](const std::string &value) -> std::expected<void, std::string>
                  {
                      if (value != "auto" && value != "determinant" && value != "tensor" && value != "optimized")

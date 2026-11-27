@@ -450,14 +450,42 @@ def _contraction_shape(node_term: AlgebraTerm) -> tuple:
     # the contraction alone. The summed count is tiny (<= 4 here), so the
     # permutation sweep is cheap.
     import itertools
+    import math
 
     summed = [x for x in node_term.summed_indices if x not in pos]
+    if len(summed) <= 6:
+        best = None
+        for perm in itertools.permutations(range(len(summed))):
+            cand = entries({idx: f"S{perm[k]}" for k, idx in enumerate(summed)})
+            if best is None or cand < best:
+                best = cand
+        return best if best is not None else entries({})
+
+    # More than six summed indices (Λ terms at rank >= 4: λ4·t4 sums up to
+    # eight): n! numberings is 40320 key builds per node. Number them class by
+    # class instead, a class being the indices with the same (space, slots
+    # they occupy) signature, and sweep permutations only within classes.
+    # Still a function of the contraction alone; it can differ from the
+    # full-sweep minimum, which only renames operators no T term reaches.
+    def signature(idx):
+        return (idx.space, tuple(sorted((f.name, k) for f in node_term.factors
+                                        for k, x in enumerate(f.indices) if x == idx)))
+
+    classes: dict = {}
+    for idx in summed:
+        classes.setdefault(signature(idx), []).append(idx)
+    groups = [classes[k] for k in sorted(classes)]
+    if math.prod(math.factorial(len(g)) for g in groups) > 5040:
+        # ponytail: classes this degenerate fall back to input order; that
+        # can only miss a dedup (two names for one operator), never merge two.
+        return entries({idx: f"S{k}" for k, idx in enumerate(i for g in groups for i in g)})
     best = None
-    for perm in itertools.permutations(range(len(summed))):
-        cand = entries({idx: f"S{perm[k]}" for k, idx in enumerate(summed)})
+    for perms in itertools.product(*(itertools.permutations(g) for g in groups)):
+        order = [i for p in perms for i in p]
+        cand = entries({idx: f"S{k}" for k, idx in enumerate(order)})
         if best is None or cand < best:
             best = cand
-    return best if best is not None else entries({})
+    return best
 
 
 def _derived_name(node_term: AlgebraTerm) -> str:
@@ -491,8 +519,12 @@ def _shape_tag(node_term: AlgebraTerm) -> str:
     """
     import hashlib
 
+    # 8 bytes, not 2: a 16-bit tag collided at rank 4 (one T-CCSDTQ name,
+    # four Λ-CCSDTQ names each covering two contractions), so one builder
+    # served two operators and λ1–λ3 came out wrong by up to 1.4e-4.
+    # `_manifold_operators_impl` refuses any collision that remains.
     raw = repr(_contraction_shape(node_term)).encode()
-    return hashlib.blake2s(raw, digest_size=2).hexdigest()
+    return hashlib.blake2s(raw, digest_size=8).hexdigest()
 
 
 def identify_node(node_or_term, fingerprints=None, usage_count: int = 1):
@@ -742,6 +774,11 @@ def _manifold_operators_impl(terms, fingerprints, include_reuse,
     for name, specs in derived.items():
         rep = specs[0]  # any instance defines the operator (all same shape)
         rep_def = rep.definition_terms[0]
+        rep_shape = _contraction_shape(rep_def)
+        if any(_contraction_shape(s.definition_terms[0]) != rep_shape for s in specs[1:]):
+            raise RuntimeError(
+                f"operator name {name} covers two contractions (a _shape_tag collision); "
+                "one builder would serve both")
         out.append(IntermediateSpec(
             name=name,
             indices=rep.indices,

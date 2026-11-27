@@ -58,7 +58,9 @@ class UccSwitchTests(unittest.TestCase):
 
         for method in ("ccsd", "ccsdt"):
             with self.subTest(method=method):
-                plain = print_cpp_planck(method)
+                # engine="wick": pinned before the default became "diagram"
+                # (2026-11-27); the engine choice is not what this guards.
+                plain = print_cpp_planck(method, engine="wick")
                 self.assertNotIn("sector_tensor(1, \"aa\")", plain,
                                  "the default emit must carry no UCC blocks")
                 # Pin the exact bytes; these are the hashes from before the switch
@@ -80,8 +82,8 @@ class UccSwitchTests(unittest.TestCase):
         kernels got `noa`/`nvb` loop bounds over a `no`/`nv` preamble and the TU
         stopped compiling, while the pin above stayed green throughout.
 
-        Both engines, because they are not the same text: `engine="diagram"` and
-        the default differ by 2038 lines at rank 2 (identical byte length, which
+        Both engines, because they are not the same text: `engine="diagram"` (the
+        default since 2026-11-27) and `engine="wick"` differ by 2038 lines at rank 2 (identical byte length, which
         is a coincidence and exactly why the length check alone is not enough).
         The generator and every UCC gate use `diagram`; the flag matrix in
         `test_emit_flag_matrix.py` pins the default. Neither covered the other.
@@ -102,13 +104,13 @@ class UccSwitchTests(unittest.TestCase):
             # docs/CCSD_T_SIZE_SCOPE.md); with it a no-op every entry
             # reproduces its previous pin: 44705c8ad85f951c, 4d1ab40e5a75fb19,
             # f70c70701d00a505, 00b7d05821c655e9, df90d610924ff302.
-            ("ccsd", None): "1c757579a44bc05a",
+            ("ccsd", "wick"): "1c757579a44bc05a",
             ("ccsd", "diagram"): "e90d94edc0f171ec",
             # Restated 2026-11-21 for the symmetrize-once fold of the spin-adapted
             # triples (fold_external_symmetry). With the fold disabled these emit
             # the previous pins exactly: ccsdt 7d5dc96aeebb2141 / 792a73c904403849,
             # ccsdtq d6e0f38aba1e6961.
-            ("ccsdt", None): "68f287abed994022",
+            ("ccsdt", "wick"): "68f287abed994022",
             ("ccsdt", "diagram"): "1e16c26d57bd2d67",
             # The discriminating point: rank 4 is where the sector amplitudes live.
             # Restated 2026-11-21 for fixed-rank amplitude reads
@@ -156,6 +158,18 @@ class UccSwitchTests(unittest.TestCase):
                     sorted(rcc & ucc), [],
                     f"the {method} RCC and UCC translation units define the same "
                     f"symbol(s); they would not link into one binary")
+
+    def test_builder_symbols_are_distinct_by_construction(self):
+        """The TU check above cannot see the dressed rank-4 case: an RCC sector
+        tag (`aaabaaab`) equals a UCC spin tag, and a builder with no `v` factor
+        carries nothing else spin-specific, so RCC and UCC Λ-CCSDTQ both defined
+        build_W_l4_aaabaaabt4_aaabaaabv_oovv_<tag>_lambda_ccsdtq. The builder
+        symbol therefore marks UCC itself, whatever the operator name."""
+        from ccgen.emit.planck_tensor_cpp import _builder_symbol
+        name = "W_l4_aaabaaabt4_aaabaaabv_oovv_8f4ccd19d3120d14"
+        for lam in (False, True):
+            self.assertNotEqual(_builder_symbol("ccsdtq", name, lam, ucc=False),
+                                _builder_symbol("ccsdtq", name, lam, ucc=True))
 
     def test_ucc_bundle_factory_is_distinctly_named(self):
         """The factory the registry will call must be reachable without ambiguity."""

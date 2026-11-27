@@ -120,7 +120,8 @@ def _pyscf_rccsd(atom, basis):
     from pyscf import ao2mo, cc, gto, scf
 
     mol = gto.M(atom=atom, basis=basis, verbose=0)
-    mf = scf.RHF(mol).run(conv_tol=1e-12)
+    # Converge the orbitals too: with the energy alone, λ1 drifts at 1e-9.
+    mf = scf.RHF(mol).run(conv_tol=1e-12, conv_tol_grad=1e-10)
     mycc = cc.CCSD(mf)
     mycc.conv_tol = 1e-12
     mycc.conv_tol_normt = 1e-10

@@ -460,6 +460,7 @@ namespace HartreeFock
         int _cc_generated_rank = 4;        // Excitation rank for the generated RCCGEN/UCCGEN routes, set by the correlation keyword (io.cpp)
         bool _cc_triples = false;          // Add (T) after the generated rank-2 CCSD (correlation ccsd(t) / uccsd(t))
         bool _cc_warm_start = true;        // Warm-start the generated arbitrary-order RCC path from a rank-(n-1) solve (cc_warm_start .false. = cold)
+        bool _cc_lambda = false;           // Solve the Λ equations after a generated RCC/UCC T solve (docs/CC_LAMBDA_SCOPE.md, 3c)
         std::string _rccsdt_backend = "auto"; // RCCSDT backend: auto (size-based), determinant, tensor, optimized (generated kernels)
 
         // SOSCF (docs/SOSCF.md, S2/S3): fixed-iteration switch,
