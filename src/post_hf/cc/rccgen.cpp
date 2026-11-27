@@ -1,14 +1,17 @@
 #include "post_hf/cc/rccgen.h"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <cstdlib>
 #include <format>
 
 #include "io/logging.h"
 #include "post_hf/cc/cc_amplitude_checkpoint.h"
+#include "post_hf/cc/ccsd_t.h"
 #include "post_hf/cc/generated_arbitrary_runtime.h"
 #include "post_hf/cc/generated_kernel_registry.h"
+#include "post_hf/integrals.h"
 
 #ifndef PLANCK_CC_ARBITRARY_LOWER_RANKS
 #define PLANCK_CC_ARBITRARY_LOWER_RANKS 0
@@ -188,6 +191,11 @@ namespace HartreeFock::Correlation::CC
             if (damping < 0.0 || damping > 1.0)
                 return std::unexpected("cc_damping must be between 0 and 1.");
 
+            // The iterations and (T) read only the CC blocks. Every rank's
+            // prepare, the warm-start recursion's included, has run before any
+            // rank iterates, so the AO tensor has no reader left.
+            HartreeFock::Correlation::release_eri(calculator, tag);
+
             return run_generated_arbitrary_order_iterations(
                 std::move(*state_res),
                 *kernels_res,
@@ -225,6 +233,18 @@ namespace HartreeFock::Correlation::CC
                 "run_rccgen: the generated RCC path is currently available only for "
                 "single-point calculations.");
 
+        // The generated RCC kernels (ccsd(t), cc2..cc6, ccsdt_gen) are correct
+        // only as the spatial spin-adapted emit; OFF emits the historical
+        // spin-orbital defect, which converges to a wrong energy.
+#ifndef PLANCK_CC_SPIN_ADAPT
+#define PLANCK_CC_SPIN_ADAPT 1 // CMake always defines it; ON is its default.
+#endif
+        if (!PLANCK_CC_SPIN_ADAPT)
+            return std::unexpected(
+                "run_rccgen: this build emitted the generated RCC kernels without spin "
+                "adaptation (-DPLANCK_CC_SPIN_ADAPT=OFF), which gives wrong energies. "
+                "Reconfigure with -DPLANCK_CC_SPIN_ADAPT=ON.");
+
         calculator._have_ccsd_reference_energy = false;
         calculator._ccsd_reference_correlation_energy = 0.0;
 
@@ -234,12 +254,13 @@ namespace HartreeFock::Correlation::CC
         // registry are both rank-generic, so a single call site serves every rank
         // the build generated. Rank 3 through this path (Route B) is what lets a
         // ccsdt_gen run write a SPATIAL .ccamp that a later cc4 run seeds from.
-        constexpr int generated_floor = PLANCK_CC_ARBITRARY_LOWER_RANKS ? 3 : 4;
+        // Rank 2 is generated in every build; the registry refuses ranks this
+        // build did not generate (rank 3 without the companion, rank > MAXORDER).
         const int rank = calculator._scf._cc_generated_rank;
-        if (rank < generated_floor)
+        if (rank < 2)
             return std::unexpected(std::format(
-                "run_rccgen: generated arbitrary-order RCC path requires rank >= {}, got {}.",
-                generated_floor, rank));
+                "run_rccgen: generated arbitrary-order RCC path requires rank >= 2, got {}.",
+                rank));
 
         const std::string method = rcc_method_label(rank);
         const std::string tag = method + " :";
@@ -283,6 +304,33 @@ namespace HartreeFock::Correlation::CC
         }
 
         calculator._correlation_energy = solve_res->correlation_energy;
+
+        // (T) on the converged spatial t1/t2 (correlation ccsd(t), docs/CCSD_T_SCOPE.md).
+        if (calculator._scf._cc_triples)
+        {
+            if (rank != 2)
+                return std::unexpected(std::format(
+                    "RCCSD(T): (T) follows CCSD only (rank 2), got rank {}.", rank));
+            const auto t_start = std::chrono::steady_clock::now();
+            auto e_t = compute_rccsd_t_energy(calculator, solve_res->state);
+            if (!e_t)
+                return std::unexpected("RCCSD(T): " + e_t.error());
+            const double t_sec = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t_start).count();
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "RCCSD(T) :",
+                std::format("E_corr(CCSD) = {:.10f}  E(T) = {:.10f}  t={:.3f}s",
+                            solve_res->correlation_energy, *e_t, t_sec));
+            calculator._correlation_energy += *e_t;
+        }
+
+        if (calculator._scf._cc_lambda)
+        {
+            auto lam = solve_lambda_after_t(calculator, solve_res->state,
+                                            make_generated_lambda_kernels(rank, /*ucc=*/false), tag);
+            if (!lam)
+                return std::unexpected("run_rccgen: " + lam.error());
+        }
 
         // Persist the converged amplitudes to a .ccamp sidecar so a later run can
         // warm-start from them (X3). Gated on the same _save_checkpoint flag as the

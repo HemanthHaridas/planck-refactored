@@ -1270,6 +1270,17 @@ class SpinAdaptedEmitTests(unittest.TestCase):
                 capture_output=True, text=True, timeout=600)
             self.assertEqual(proc.returncode, 0,
                              f"spin-adapted codegen failed:\n{proc.stderr[-1500:]}")
+            # The registry always includes the rank-2 companion behind
+            # `ccsd(t)`, which CMake emits by its own call (CMakeLists.txt,
+            # _ccgen_rank2_kernel_args); without it the include is missing.
+            proc = subprocess.run(
+                [sys.executable, str(script), "--output-dir", str(gcc_dir),
+                 "--methods", "ccsd", "--engine", "diagram",
+                 "--arbitrary-lower-ranks", "--dressing", "derived",
+                 "--spin-adapt"],
+                capture_output=True, text=True, timeout=600)
+            self.assertEqual(proc.returncode, 0,
+                             f"rank-2 codegen failed:\n{proc.stderr[-1500:]}")
             proc = subprocess.run(
                 [cxx, "-std=c++23", "-fsyntax-only", "-w",
                  "-DPLANCK_CC_MAXORDER=4",

@@ -111,7 +111,24 @@ def ucc_random_tensors(noa: int, nva: int, nob: int, nvb: int, seed: int = 0):
         f = rng.random((n, n))
         return f + f.T
 
-    return {
+    def _t3(nv1, nv2, nv3, no1, no2, no3, same_vir, same_occ):
+        # antisymmetric only among slots of the same spin, as for t2
+        a = rng.random((nv1, nv2, nv3, no1, no2, no3))
+        for axes in (same_vir, same_occ):
+            if axes:
+                a = _antisymmetrize_block(a, axes)
+        return a
+
+    # Drawn after the original blocks so the existing ones keep their values
+    # for a given seed. Tags as the bridge emits them (first half = virtual spins).
+    t3 = {
+        "t3_aaaaaa": (nva, nva, nva, noa, noa, noa, (0, 1, 2), (3, 4, 5)),
+        "t3_aabaab": (nva, nva, nvb, noa, noa, nob, (0, 1), (3, 4)),
+        "t3_abbabb": (nva, nvb, nvb, noa, nob, nob, (1, 2), (4, 5)),
+        "t3_bbbbbb": (nvb, nvb, nvb, nob, nob, nob, (0, 1, 2), (3, 4, 5)),
+    }
+
+    bundle = {
         "t1_aa": rng.random((nva, noa)),
         "t1_bb": rng.random((nvb, nob)),
         "t2_aaaa": _same_spin_t2(nva, noa),
@@ -123,6 +140,9 @@ def ucc_random_tensors(noa: int, nva: int, nob: int, nvb: int, seed: int = 0):
         "f_aa": _sym_fock(na),
         "f_bb": _sym_fock(nb),
     }
+    for name, (*shape, same_vir, same_occ) in t3.items():
+        bundle[name] = _t3(*shape, same_vir, same_occ)
+    return bundle
 
 
 def ucc_closed_shell_tensors(no: int, nv: int, seed: int = 0):
@@ -220,8 +240,9 @@ def ucc_resolve_factor(factor, tensors, dims):
             f"ucc_resolve_factor: block tag {tag!r} has {len(tag)} spins but "
             f"{name!r} has {len(factor.indices)} slots.")
 
-    if root.startswith("t"):
-        # amplitudes are stored per block, already in (vir..., occ...) layout
+    if root.startswith(("t", "l")):
+        # amplitudes (and Λ multipliers, `l2_abab`) are stored per block, no
+        # combined space to slice
         return array
 
     # v / f are stored over the combined per-spin orbital space, so each axis is

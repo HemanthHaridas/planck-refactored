@@ -2,9 +2,11 @@
 
 #include <format>
 
-// Each generated translation unit defines make_generated_<method>_kernels().
-// Included per rank, guarded so a build only compiles the ranks it generated
-// (PLANCK_CC_MAXORDER). The rank -> method-name map matches CMakeLists.txt's
+// Each generated TU defines make_generated_<method>_kernels(). The TUs are
+// compiled in shards into the planck_cc_generated library (CMakeLists.txt,
+// ccgen/emit/shard.py); this file includes only their headers (declarations),
+// so no compile holds every kernel at once. Included per rank, guarded so a
+// build only references the ranks it generated (PLANCK_CC_MAXORDER). The rank -> method-name map matches CMakeLists.txt's
 // _planck_cc_method_by_rank: 4=ccsdtq, 5=cc5, 6=cc6.
 //
 // The rank-3 arbitrary-order companion (ccsdt_arbitrary_planck_generated.cpp,
@@ -23,17 +25,27 @@
 #ifndef PLANCK_CC_ARBITRARY_LOWER_RANKS
 #define PLANCK_CC_ARBITRARY_LOWER_RANKS 0
 #endif
+// Rank 2: spatial RCCSD behind ccsd(t) / cc2, generated in every build
+// (docs/CCSD_T_SIZE_SCOPE.md route A).
+#include "generated/cc/ccsd_arbitrary_planck_generated.h"
+// Λ residual kernels (docs/CC_LAMBDA_SCOPE.md): generated for the same
+// ranks as the T kernels beside them.
+#include "generated/cc/ccsd_lambda_planck_generated.h"
 #if PLANCK_CC_ARBITRARY_LOWER_RANKS
-#include "generated/cc/ccsdt_arbitrary_planck_generated.cpp"
+#include "generated/cc/ccsdt_arbitrary_planck_generated.h"
+#include "generated/cc/ccsdt_lambda_planck_generated.h"
 #endif
 #if PLANCK_CC_MAXORDER >= 4
-#include "generated/cc/ccsdtq_planck_generated.cpp"
+#include "generated/cc/ccsdtq_planck_generated.h"
+#include "generated/cc/ccsdtq_lambda_planck_generated.h"
 #endif
 #if PLANCK_CC_MAXORDER >= 5
-#include "generated/cc/cc5_planck_generated.cpp"
+#include "generated/cc/cc5_planck_generated.h"
+#include "generated/cc/cc5_lambda_planck_generated.h"
 #endif
 #if PLANCK_CC_MAXORDER >= 6
-#include "generated/cc/cc6_planck_generated.cpp"
+#include "generated/cc/cc6_planck_generated.h"
+#include "generated/cc/cc6_lambda_planck_generated.h"
 #endif
 
 // U5.3: the UCC translation units, emitted only under -DPLANCK_CC_UCC=ON. They
@@ -43,18 +55,23 @@
 #define PLANCK_CC_UCC 0
 #endif
 #if PLANCK_CC_UCC
-#include "generated/cc/ccsd_ucc_planck_generated.cpp"
+#include "generated/cc/ccsd_ucc_planck_generated.h"
+#include "generated/cc/ccsd_ucc_lambda_planck_generated.h"
 #if PLANCK_CC_MAXORDER >= 3
-#include "generated/cc/ccsdt_ucc_planck_generated.cpp"
+#include "generated/cc/ccsdt_ucc_planck_generated.h"
+#include "generated/cc/ccsdt_ucc_lambda_planck_generated.h"
 #endif
 #if PLANCK_CC_MAXORDER >= 4
-#include "generated/cc/ccsdtq_ucc_planck_generated.cpp"
+#include "generated/cc/ccsdtq_ucc_planck_generated.h"
+#include "generated/cc/ccsdtq_ucc_lambda_planck_generated.h"
 #endif
 #if PLANCK_CC_MAXORDER >= 5
-#include "generated/cc/cc5_ucc_planck_generated.cpp"
+#include "generated/cc/cc5_ucc_planck_generated.h"
+#include "generated/cc/cc5_ucc_lambda_planck_generated.h"
 #endif
 #if PLANCK_CC_MAXORDER >= 6
-#include "generated/cc/cc6_ucc_planck_generated.cpp"
+#include "generated/cc/cc6_ucc_planck_generated.h"
+#include "generated/cc/cc6_ucc_lambda_planck_generated.h"
 #endif
 #endif
 
@@ -117,19 +134,24 @@ namespace HartreeFock::Correlation::CC
     std::expected<GeneratedArbitraryOrderKernels, std::string>
     make_generated_rcc_kernels(int rank)
     {
-        // The generated tensor path normally begins at CCSDTQ (rank 4); ranks 2/3
-        // use the hand-written backends. When the rank-3 arbitrary companion is
-        // built (-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON) rank 3 also routes here as
-        // a spatial seed source for the cc4 warm-start.
-        constexpr int generated_floor = PLANCK_CC_ARBITRARY_LOWER_RANKS ? 3 : 4;
-        if (rank < generated_floor)
+        // Rank 2 (the CCSD behind ccsd(t)) is generated in every build. Rank 3
+        // needs the arbitrary companion (-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON);
+        // without it CCSDT uses the hand-written backends. Ranks >= 4 follow
+        // PLANCK_CC_MAXORDER.
+        if (rank < 2)
             return std::unexpected(std::format(
                 "make_generated_rcc_kernels: rank {} has no generated tensor "
-                "kernel path (below the generated floor {}).",
-                rank, generated_floor));
+                "kernel path (the generated floor is 2).",
+                rank));
+        if (rank == 3 && !PLANCK_CC_ARBITRARY_LOWER_RANKS)
+            return std::unexpected(
+                "Generated rank-3 CC kernels are not available in this build. "
+                "Reconfigure with -DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON and rebuild.");
 
         switch (rank)
         {
+        case 2:
+            return make_generated_ccsd_kernels();
 #if PLANCK_CC_ARBITRARY_LOWER_RANKS
         case 3:
             return make_generated_ccsdt_kernels();
@@ -157,6 +179,60 @@ namespace HartreeFock::Correlation::CC
             "(PLANCK_CC_MAXORDER={}). Reconfigure with "
             "-DPLANCK_CC_MAXORDER={} (or higher, up to 6) and rebuild.",
             rank, PLANCK_CC_MAXORDER, rank));
+    }
+
+    std::expected<GeneratedLambdaKernels, std::string>
+    make_generated_lambda_kernels(int rank, bool ucc)
+    {
+        // Built for exactly the ranks the T kernels are (make_generated_rcc_kernels,
+        // make_generated_ucc_kernels); those name the reconfigure when a rank is missing.
+        if (ucc)
+        {
+#if PLANCK_CC_UCC
+            switch (rank)
+            {
+            case 2: return make_generated_ucc_lambda_ccsd_kernels();
+#if PLANCK_CC_MAXORDER >= 3
+            case 3: return make_generated_ucc_lambda_ccsdt_kernels();
+#endif
+#if PLANCK_CC_MAXORDER >= 4
+            case 4: return make_generated_ucc_lambda_ccsdtq_kernels();
+#endif
+#if PLANCK_CC_MAXORDER >= 5
+            case 5: return make_generated_ucc_lambda_cc5_kernels();
+#endif
+#if PLANCK_CC_MAXORDER >= 6
+            case 6: return make_generated_ucc_lambda_cc6_kernels();
+#endif
+            default: break;
+            }
+#endif
+        }
+        else
+        {
+            switch (rank)
+            {
+            case 2: return make_generated_lambda_ccsd_kernels();
+#if PLANCK_CC_ARBITRARY_LOWER_RANKS
+            case 3: return make_generated_lambda_ccsdt_kernels();
+#endif
+#if PLANCK_CC_MAXORDER >= 4
+            case 4: return make_generated_lambda_ccsdtq_kernels();
+#endif
+#if PLANCK_CC_MAXORDER >= 5
+            case 5: return make_generated_lambda_cc5_kernels();
+#endif
+#if PLANCK_CC_MAXORDER >= 6
+            case 6: return make_generated_lambda_cc6_kernels();
+#endif
+            default: break;
+            }
+        }
+        if (auto t = ucc ? make_generated_ucc_kernels(rank) : make_generated_rcc_kernels(rank); !t)
+            return std::unexpected(t.error());
+        return std::unexpected(std::format(
+            "Generated {}Λ kernels are not available for rank {} in this build.",
+            ucc ? "UCC " : "", rank));
     }
 
     std::expected<GeneratedArbitraryOrderKernels, std::string>

@@ -37,6 +37,12 @@ namespace HartreeFock::Correlation::CC
     // "not built" from "built but this rank is out of range".
     [[nodiscard]] bool generated_ucc_kernels_available() noexcept;
 
+    // Λ residual kernels for a rank, restricted or UCC (docs/CC_LAMBDA_SCOPE.md,
+    // 3b). Available for exactly the ranks the T kernels are; the error names
+    // the reconfigure when a rank is not built.
+    std::expected<GeneratedLambdaKernels, std::string>
+    make_generated_lambda_kernels(int rank, bool ucc = false);
+
     // Rank-4 alias retained for the existing run_rccgen call site.
     std::expected<GeneratedArbitraryOrderKernels, std::string>
     make_generated_rccsdtq_kernels();

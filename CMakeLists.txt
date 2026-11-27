@@ -64,6 +64,13 @@ option(PLANCK_CC_INCLUDE_INTERMEDIATES
 # Set -DPLANCK_CC_SPIN_ADAPT=OFF only to reproduce that historical emit.
 option(PLANCK_CC_SPIN_ADAPT
     "Emit spatial (spin-adapted) RCC kernels instead of the raw spin-orbital defect" ON)
+# Global, so every binary that runs the generated RCC kernels (run_rccgen) can
+# refuse the defective emit by name instead of returning a wrong energy.
+if(PLANCK_CC_SPIN_ADAPT)
+    add_compile_definitions(PLANCK_CC_SPIN_ADAPT=1)
+else()
+    add_compile_definitions(PLANCK_CC_SPIN_ADAPT=0)
+endif()
 # U5.3: also emit UNRESTRICTED (spin-block resolved) CC kernels alongside the
 # restricted ones, as <method>_ucc_planck_generated.cpp. They define distinct
 # symbols (U5.0) so both link into one binary, and are reached through
@@ -126,6 +133,15 @@ set(PLANCK_CC_INTERMEDIATE_THRESHOLD "5" CACHE STRING
 # build finishes in seconds instead of minutes.
 set(PLANCK_CC_ENGINE "diagram" CACHE STRING
     "ccgen generation engine: diagram (default, fast) or wick (textbook)")
+# OpenMP collapse depth for the generated CC residual nests, passed to ccgen as
+# CCGEN_OMP_COLLAPSE. 3 is the measured value (docs/CCGEN_GENERATED_CC_COST.md: 3.22x at
+# 4 threads, energies bitwise identical at 1/2/4/8 threads); 0 emits no pragma.
+set(PLANCK_CC_OMP_COLLAPSE "3" CACHE STRING
+    "OpenMP collapse depth for generated CC kernels (0 = unthreaded)")
+if(NOT PLANCK_CC_OMP_COLLAPSE MATCHES "^[0-9]$")
+    message(FATAL_ERROR
+        "PLANCK_CC_OMP_COLLAPSE must be a single digit, got '${PLANCK_CC_OMP_COLLAPSE}'")
+endif()
 
 if(NOT PLANCK_CC_MAXORDER MATCHES "^[2-6]$")
     message(FATAL_ERROR
@@ -333,16 +349,14 @@ externalproject_add(
 )
 
 # libecpint (MIT): ECP integrals and derivatives (docs/DEF2_ECP.md).
-# Pinned to upstream master 436d9c48 (2026-11-12): PR #81 (seven type-2 and
-# quadrature fixes, including the 6-digit kernel constants Planck used to
-# patch) squashed on top of #78 (efficiency, shell-pair screening). Older
-# releases miss finite differences by 4.6e-5 on HI/def2-QZVP
-# (planck-ecp-gradient-fd). Pin a commit on a branch of the cloned URL: the
-# earlier pin was the head of the fork's PR branch, which upstream deleted on
-# merge, and a fresh clone could not fetch it.
+# Pinned to upstream v1.1.0 (d7966f19, 2026-11-18, branch `main`): carries
+# PR #81 (type-2 and quadrature fixes; older releases miss finite differences
+# by 4.6e-5 on HI/def2-QZVP, planck-ecp-gradient-fd), fixed Gauss-Legendre
+# radial rules, L <= 8, per-thread caches (thread safe again, #82), and no
+# Faddeeva/pugixml dependencies.
 # Built with Planck's own C++ compiler because its API passes std::vector across
 # the boundary (libc++ vs libstdc++ would not link).
-set(LIBECPINT_GIT_TAG 436d9c4877aecbbe27e730b5aeec2b0ce4dc53dd)
+set(LIBECPINT_GIT_TAG d7966f196a5276ac0203c8ff0cca547d840ef51d)
 set(LIBECPINT_INSTALL_DIR ${SRC_DIR}/external/libecpint/install)
 externalproject_add(
     libecpint_ep
@@ -356,10 +370,9 @@ externalproject_add(
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
         -DBUILD_SHARED_LIBS:BOOL=OFF
-        -DLIBECPINT_USE_PUGIXML:BOOL=OFF
         -DLIBECPINT_BUILD_TESTS:BOOL=OFF
         -DLIBECPINT_BUILD_DOCS:BOOL=OFF
-    BUILD_BYPRODUCTS ${LIBECPINT_INSTALL_DIR}/lib/libecpint.a ${LIBECPINT_INSTALL_DIR}/lib/libFaddeeva.a
+    BUILD_BYPRODUCTS ${LIBECPINT_INSTALL_DIR}/lib/libecpint.a
 )
 # H_core (src/integrals/ecp.cpp, in INT_SRC) needs it, and INT_SRC is compiled
 # into most targets, so link it everywhere rather than per target. Static, so
@@ -368,7 +381,6 @@ file(MAKE_DIRECTORY ${LIBECPINT_INSTALL_DIR}/include/libecpint)
 add_library(ecpint STATIC IMPORTED GLOBAL)
 set_target_properties(ecpint PROPERTIES
     IMPORTED_LOCATION ${LIBECPINT_INSTALL_DIR}/lib/libecpint.a
-    INTERFACE_LINK_LIBRARIES ${LIBECPINT_INSTALL_DIR}/lib/libFaddeeva.a
     INTERFACE_INCLUDE_DIRECTORIES "${LIBECPINT_INSTALL_DIR}/include;${LIBECPINT_INSTALL_DIR}/include/libecpint")
 add_dependencies(ecpint libecpint_ep)
 link_libraries(ecpint)
@@ -673,20 +685,6 @@ target_link_libraries(hartree-fock
 
 add_dependencies(hartree-fock libmsym)
 
-# The generated CC kernel registry (#includes the spin-adapted ccsdtq TU) is a
-# ~230k-line TU whose two quadruples residuals are single ~5000-statement
-# functions. At -O3 the optimizer is super-linear in function-body size and the
-# compile takes 40+ min (and can appear to hang); the contraction loops here are
-# simple and gain almost nothing from -O3, while the perf-critical work is in
-# Eigen elsewhere. Compile just this object at -O1 so the build finishes in
-# minutes. Applies to hartree-fock, planck-dft, and planck-mpi (all include it
-# via POSTHF_SRC). See docs/CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md.
-# (A proper fix is to chunk the giant residual kernels into sub-functions in the
-# ccgen emit so any optimization level stays cheap; tracked as follow-on.)
-set_source_files_properties(
-    ${SRC_DIR}/post_hf/cc/generated_kernel_registry.cpp
-    PROPERTIES COMPILE_OPTIONS "-O1")
-
 # OpenMP linkage
 if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_link_libraries(hartree-fock OpenMP::OpenMP_CXX)
@@ -699,8 +697,6 @@ if(PLANCK_CC_ARBITRARY_LOWER_RANKS)
 else()
     set(_planck_cc_arb_lower 0)
 endif()
-target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
-target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower})
 # Reaches choose_rccsdt_backend: a dressed build must select the TensorOptimized backend,
 # since that is the only one that runs the ccgen-generated triples kernel dressing rewrites.
 if(PLANCK_CC_DRESS_OPERATORS)
@@ -708,14 +704,20 @@ if(PLANCK_CC_DRESS_OPERATORS)
 else()
     set(_planck_cc_dressed 0)
 endif()
-target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
-
 if(PLANCK_CC_UCC)
     set(_planck_cc_ucc 1)
 else()
     set(_planck_cc_ucc 0)
 endif()
-target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_UCC=${_planck_cc_ucc})
+# The CC feature set of the post-HF driver. hartree-fock and planck-mpi run the
+# same driver, so both take this one list; planck-mpi once lacked the UCC and
+# dressing entries and so had no uccsd(t) (docs/CC_MPI_SCOPE.md).
+set(_planck_posthf_cc_defs
+    PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER}
+    PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower}
+    PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed}
+    PLANCK_CC_UCC=${_planck_cc_ucc})
+target_compile_definitions(hartree-fock PRIVATE ${_planck_posthf_cc_defs})
 
 add_executable(planck-dft
     ${BASE_SRC}
@@ -735,18 +737,63 @@ add_executable(planck-dft
     ${FREQ_SRC}
 )
 
+# Generated CC TUs are compiled in shards into planck_cc_generated (below):
+# <stem>.h plus <stem>_s0.cpp ... _s<N-1>.cpp (python/ccgen/emit/shard.py).
+# One compile holding every kernel needed > 8 GiB at rank 4 with UCC (76 MB of
+# source). N per (rank, kind) keeps a shard near 1.4 MB, measured at rank 4:
+# T 3.7 MB, UCC T 2.1 MB, Λ 21.9 MB, UCC Λ 42.5 MB. Peak compile memory at -O1
+# is 1.31 GB for a 1.4 MB shard and 1.74 GB for 2.8 MB (headers alone 0.35 GB;
+# GCC's ggc params do not lower it), so -j4 stays near 5 GB. The generator
+# warns when a shard passes 4 MB.
+# ponytail: ranks 5-6 are unmeasured guesses; raise them when the warning fires.
+function(_planck_cc_shards method kind out)
+    list(FIND _planck_cc_method_by_rank ${method} _idx)
+    math(EXPR _rank "${_idx} + 2")
+    set(_n 1)
+    if(_rank EQUAL 3)
+        set(_counts T 1 T_UCC 1 L 1 L_UCC 2)   # UCC Λ-CCSDT is 3.3 MB
+    elseif(_rank EQUAL 4)
+        set(_counts T 3 T_UCC 2 L 16 L_UCC 32)
+    elseif(_rank GREATER 4)
+        set(_counts T 12 T_UCC 8 L 64 L_UCC 128)
+    endif()
+    if(_rank GREATER_EQUAL 3)
+        list(FIND _counts ${kind} _k)
+        math(EXPR _k "${_k} + 1")
+        list(GET _counts ${_k} _n)
+    endif()
+    set(${out} ${_n} PARENT_SCOPE)
+endfunction()
+
+# Append <stem>.h and its shard sources to OUT_FILES and the .cpp to the
+# library sources, and `METHOD=N` to OUT_ARGS (the generator's --shards).
+function(_planck_cc_tu stem method kind out_files out_args)
+    _planck_cc_shards(${method} ${kind} _n)
+    set(_files ${${out_files}} ${CMAKE_BINARY_DIR}/generated/cc/${stem}.h)
+    math(EXPR _last "${_n} - 1")
+    foreach(_k RANGE 0 ${_last})
+        list(APPEND _files ${CMAKE_BINARY_DIR}/generated/cc/${stem}_s${_k}.cpp)
+        list(APPEND _planck_cc_generated_sources
+            ${CMAKE_BINARY_DIR}/generated/cc/${stem}_s${_k}.cpp)
+    endforeach()
+    set(${out_files} ${_files} PARENT_SCOPE)
+    set(${out_args} ${${out_args}} ${method}=${_n} PARENT_SCOPE)
+    set(_planck_cc_generated_sources ${_planck_cc_generated_sources} PARENT_SCOPE)
+endfunction()
+
+set(_planck_cc_generated_sources "")
 if(Python3_Interpreter_FOUND)
     # RCC methods to emit. The plain <method>_planck_generated.cpp TU is consumed
-    # only at rank >= 4 (generated_kernel_registry.cpp); rank 2/3 run through
-    # their arbitrary-order companions, so they are passed only when those are
-    # requested.
-    # ponytail: with ARBITRARY_LOWER_RANKS the script still writes the unused
-    # plain ccsd/ccsdt TUs as a side effect; add a generator flag if that
-    # generation time ever matters.
+    # only at rank >= 4 (generated_kernel_registry.cpp); rank 3 runs through its
+    # arbitrary-order companion, emitted only with PLANCK_CC_ARBITRARY_LOWER_RANKS.
+    # Rank 2 (ccsd) has its own invocation below, in every build.
+    # ponytail: the script still writes the unused plain ccsdt TU as a side
+    # effect; add a generator flag if that generation time ever matters.
     set(_ccgen_rcc_methods "")
     foreach(_planck_cc_method ${PLANCK_CC_METHODS})
         list(FIND _planck_cc_method_by_rank ${_planck_cc_method} _planck_cc_method_rank_idx)
-        if(_planck_cc_method_rank_idx GREATER_EQUAL 2 OR PLANCK_CC_ARBITRARY_LOWER_RANKS)
+        if(_planck_cc_method_rank_idx GREATER_EQUAL 2 OR
+           (_planck_cc_method_rank_idx EQUAL 1 AND PLANCK_CC_ARBITRARY_LOWER_RANKS))
             list(APPEND _ccgen_rcc_methods ${_planck_cc_method})
         endif()
     endforeach()
@@ -763,8 +810,21 @@ if(Python3_Interpreter_FOUND)
     if(PLANCK_CC_ARBITRARY_LOWER_RANKS)
         list(APPEND _ccgen_planck_kernel_args --arbitrary-lower-ranks)
     endif()
+
+    # Rank 2: the spatial RCCSD behind `ccsd(t)` (docs/CCSD_T_SIZE_SCOPE.md).
+    # Emitted in every build and always dressed (derived), whatever
+    # PLANCK_CC_DRESS_OPERATORS says: undressed it is ~85x slower (C1 H2O2/6-31G
+    # 45.5 s against 0.54 s) and slower than the hand-written RCCSD it replaced.
+    set(_ccgen_rank2_kernel_args
+        --output-dir ${CMAKE_BINARY_DIR}/generated/cc
+        --methods ccsd
+        --engine ${PLANCK_CC_ENGINE}
+        --arbitrary-lower-ranks
+        --dressing derived
+    )
     if(PLANCK_CC_SPIN_ADAPT)
         list(APPEND _ccgen_planck_kernel_args --spin-adapt)
+        list(APPEND _ccgen_rank2_kernel_args --spin-adapt)
     endif()
     # W3.1: the emitter now takes one dressing axis with a value. The option name
     # stays PLANCK_CC_DRESS_OPERATORS (an existing, documented switch), but the
@@ -785,6 +845,11 @@ if(Python3_Interpreter_FOUND)
         --engine ${PLANCK_CC_ENGINE}
         --ucc
     )
+    # Same dressing axis as the RCC emit: the derived route factorizes whatever
+    # manifold reaches it, spin-resolved UCC terms included.
+    if(PLANCK_CC_DRESS_OPERATORS)
+        list(APPEND _ccgen_ucc_kernel_args --dressing ${PLANCK_CC_DRESSING})
+    endif()
 
     # Every ccgen python source the generator can reach, so an edit anywhere in
     # the package invalidates the generated TUs. CONFIGURE_DEPENDS matches the
@@ -792,6 +857,19 @@ if(Python3_Interpreter_FOUND)
     # is picked up on the next configure without hand-maintaining this list.
     file(GLOB_RECURSE _ccgen_package_sources CONFIGURE_DEPENDS
         ${CMAKE_SOURCE_DIR}/python/ccgen/*.py)
+
+    # Custom commands do not see cache variables, so the collapse depth reaches
+    # their DEPENDS through a stamp rewritten only when its value changes.
+    set(_ccgen_omp_stamp ${CMAKE_BINARY_DIR}/generated/cc/omp_collapse.stamp)
+    set(_ccgen_omp_value "${PLANCK_CC_OMP_COLLAPSE}\n")
+    set(_ccgen_omp_old "")
+    if(EXISTS ${_ccgen_omp_stamp})
+        file(READ ${_ccgen_omp_stamp} _ccgen_omp_old)
+    endif()
+    if(NOT _ccgen_omp_old STREQUAL _ccgen_omp_value)
+        file(WRITE ${_ccgen_omp_stamp} "${_ccgen_omp_value}")
+    endif()
+    set(_ccgen_env ${CMAKE_COMMAND} -E env CCGEN_OMP_COLLAPSE=${PLANCK_CC_OMP_COLLAPSE})
 
     # Compute the exact output file list ccgen writes, mirroring
     # generate_planck_cc_kernels.py's naming rule, so OUTPUT can be declared and
@@ -801,19 +879,23 @@ if(Python3_Interpreter_FOUND)
     # 20+ MB of it) unconditionally, even though the emitted content is
     # deterministic and was almost always unchanged.
     set(_ccgen_planck_outputs "")
+    set(_ccgen_planck_shards "")
     set(_ccgen_ucc_outputs "")
+    set(_ccgen_ucc_shards "")
     foreach(_planck_cc_method ${PLANCK_CC_METHODS})
-        list(APPEND _ccgen_ucc_outputs
-            ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_ucc_planck_generated.cpp)
+        if(PLANCK_CC_UCC)
+            _planck_cc_tu(${_planck_cc_method}_ucc_planck_generated ${_planck_cc_method}
+                          T_UCC _ccgen_ucc_outputs _ccgen_ucc_shards)
+        endif()
         list(FIND _planck_cc_method_by_rank ${_planck_cc_method} _planck_cc_method_rank_idx)
         if(_planck_cc_method_rank_idx GREATER_EQUAL 2)
-            list(APPEND _ccgen_planck_outputs
-                ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_planck_generated.cpp)
-        elseif(PLANCK_CC_ARBITRARY_LOWER_RANKS)
-            # Lower-rank arbitrary-order companions, RCC side only -- the UCC
+            _planck_cc_tu(${_planck_cc_method}_planck_generated ${_planck_cc_method}
+                          T _ccgen_planck_outputs _ccgen_planck_shards)
+        elseif(_planck_cc_method_rank_idx EQUAL 1 AND PLANCK_CC_ARBITRARY_LOWER_RANKS)
+            # Rank-3 arbitrary-order companion, RCC side only -- the UCC
             # invocation never passes --arbitrary-lower-ranks, so it emits none.
-            list(APPEND _ccgen_planck_outputs
-                ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_arbitrary_planck_generated.cpp)
+            _planck_cc_tu(${_planck_cc_method}_arbitrary_planck_generated ${_planck_cc_method}
+                          T _ccgen_planck_outputs _ccgen_planck_shards)
         endif()
     endforeach()
 
@@ -821,18 +903,82 @@ if(Python3_Interpreter_FOUND)
     add_custom_command(
         OUTPUT ${_ccgen_planck_outputs}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
-        COMMAND ${Python3_EXECUTABLE}
+        COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
-                ${_ccgen_planck_kernel_args}
+                ${_ccgen_planck_kernel_args} --shards ${_ccgen_planck_shards}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
         DEPENDS
             ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
             ${_ccgen_package_sources}
+            ${_ccgen_omp_stamp}
         COMMENT "Generating Planck-compatible CC kernels with ccgen (up to rank ${PLANCK_CC_MAXORDER}: ${_ccgen_rcc_methods})"
     )
     endif()
 
-    add_custom_target(ccgen-planck-kernels DEPENDS ${_ccgen_planck_outputs})
+    # CCSD(T) W/V builders (docs/CCSD_T_SCOPE.md). Generated in every build,
+    # whatever PLANCK_CC_MAXORDER is: (T) reads only t1/t2. Included by
+    # src/post_hf/cc/ccsd_t.cpp, which reports (T) unavailable without it.
+    set(_ccgen_ccsd_t_output ${CMAKE_BINARY_DIR}/generated/cc/ccsd_t_planck_generated.cpp)
+    add_custom_command(
+        OUTPUT ${_ccgen_ccsd_t_output}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
+        COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                --output-dir ${CMAKE_BINARY_DIR}/generated/cc --ccsd-t
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+        DEPENDS
+            ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+            ${_ccgen_package_sources}
+            ${_ccgen_omp_stamp}
+        COMMENT "Generating CCSD(T) kernels with ccgen")
+
+    set(_ccgen_rank2_output "")
+    set(_ccgen_rank2_shards "")
+    _planck_cc_tu(ccsd_arbitrary_planck_generated ccsd T _ccgen_rank2_output _ccgen_rank2_shards)
+    add_custom_command(
+        OUTPUT ${_ccgen_rank2_output}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
+        COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                ${_ccgen_rank2_kernel_args} --shards ${_ccgen_rank2_shards}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+        DEPENDS
+            ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+            ${_ccgen_package_sources}
+            ${_ccgen_omp_stamp}
+        COMMENT "Generating the dressed rank-2 RCCSD kernel with ccgen")
+
+    # Λ residual kernels (docs/CC_LAMBDA_SCOPE.md, 3b), for the RCC ranks
+    # this build runs generated (rank 2 always, rank 3 with
+    # PLANCK_CC_ARBITRARY_LOWER_RANKS, ranks >= 4 by PLANCK_CC_MAXORDER).
+    # Always spin-adapted and dressed (derived), like the rank-2 T kernels:
+    # the emitter has no spin-orbital or `recognized` Λ route.
+    set(_ccgen_lambda_methods ccsd ${_ccgen_rcc_methods})
+    set(_ccgen_lambda_outputs "")
+    set(_ccgen_lambda_shards "")
+    foreach(_m ${_ccgen_lambda_methods})
+        _planck_cc_tu(${_m}_lambda_planck_generated ${_m} L _ccgen_lambda_outputs _ccgen_lambda_shards)
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_ccgen_lambda_outputs}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
+        COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                --output-dir ${CMAKE_BINARY_DIR}/generated/cc
+                --methods ${_ccgen_lambda_methods}
+                --engine ${PLANCK_CC_ENGINE}
+                --spin-adapt --dressing derived --lambda
+                --shards ${_ccgen_lambda_shards}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+        DEPENDS
+            ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+            ${_ccgen_package_sources}
+            ${_ccgen_omp_stamp}
+        COMMENT "Generating the Λ residual kernels with ccgen (${_ccgen_lambda_methods})")
+
+    add_custom_target(ccgen-planck-kernels
+        DEPENDS ${_ccgen_planck_outputs} ${_ccgen_ccsd_t_output} ${_ccgen_rank2_output}
+                ${_ccgen_lambda_outputs})
 
     # The UCC emit is a separate add_custom_command with its own OUTPUT, not a
     # POST_BUILD step on the target above: POST_BUILD commands are tied to
@@ -843,16 +989,41 @@ if(Python3_Interpreter_FOUND)
     if(PLANCK_CC_UCC)
         add_custom_command(
             OUTPUT ${_ccgen_ucc_outputs}
-            COMMAND ${Python3_EXECUTABLE}
+            COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
                     ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
-                    ${_ccgen_ucc_kernel_args}
+                    ${_ccgen_ucc_kernel_args} --shards ${_ccgen_ucc_shards}
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
             DEPENDS
                 ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
                 ${_ccgen_package_sources}
+                ${_ccgen_omp_stamp}
             COMMENT "Generating unrestricted (UCC) CC kernels with ccgen")
 
-        add_custom_target(ccgen-planck-ucc-kernels DEPENDS ${_ccgen_ucc_outputs})
+        # The UCC Λ kernels, one per UCC method (docs/CC_LAMBDA_SCOPE.md, 3b).
+        set(_ccgen_ucc_lambda_outputs "")
+        set(_ccgen_ucc_lambda_shards "")
+        foreach(_m ${PLANCK_CC_METHODS})
+            _planck_cc_tu(${_m}_ucc_lambda_planck_generated ${_m} L_UCC
+                          _ccgen_ucc_lambda_outputs _ccgen_ucc_lambda_shards)
+        endforeach()
+        add_custom_command(
+            OUTPUT ${_ccgen_ucc_lambda_outputs}
+            COMMAND ${_ccgen_env} ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                    --output-dir ${CMAKE_BINARY_DIR}/generated/cc
+                    --methods ${PLANCK_CC_METHODS}
+                    --engine ${PLANCK_CC_ENGINE}
+                    --ucc --dressing derived --lambda
+                    --shards ${_ccgen_ucc_lambda_shards}
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+            DEPENDS
+                ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                ${_ccgen_package_sources}
+                ${_ccgen_omp_stamp}
+            COMMENT "Generating the UCC Λ residual kernels with ccgen")
+
+        add_custom_target(ccgen-planck-ucc-kernels
+            DEPENDS ${_ccgen_ucc_outputs} ${_ccgen_ucc_lambda_outputs})
         add_dependencies(ccgen-planck-kernels ccgen-planck-ucc-kernels)
     endif()
 
@@ -861,6 +1032,20 @@ endif()
 
 if(Python3_Interpreter_FOUND)
     add_dependencies(hartree-fock ccgen-planck-kernels)
+
+    # The generated CC kernels, compiled once for every binary that runs them,
+    # one shard per TU. -O1: the residual kernels are long straight-line
+    # functions on which -O3 is super-linear in compile time and gains little
+    # (docs/CCGEN_GENERATED_CC_COST.md).
+    add_library(planck_cc_generated STATIC ${_planck_cc_generated_sources})
+    add_dependencies(planck_cc_generated ccgen-planck-kernels)
+    target_compile_options(planck_cc_generated PRIVATE -O1)
+    target_include_directories(planck_cc_generated PRIVATE
+        ${SRC_DIR} ${CMAKE_BINARY_DIR} ${eigen_SOURCE_DIR})
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck_cc_generated PUBLIC OpenMP::OpenMP_CXX)
+    endif()
+    target_link_libraries(hartree-fock planck_cc_generated)
 endif()
 
 target_include_directories(planck-dft PUBLIC
@@ -936,9 +1121,10 @@ if(BUILD_MPI)
     add_dependencies(planck-mpi libmsym libxc)
     if(Python3_Interpreter_FOUND)
         add_dependencies(planck-mpi ccgen-planck-kernels)
+        target_link_libraries(planck-mpi planck_cc_generated)
     endif()
     # USING_Libxc enables the libxc-backed XC path (same as planck-dft).
-    target_compile_definitions(planck-mpi PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER} PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower})
+    target_compile_definitions(planck-mpi PRIVATE USING_Libxc ${_planck_posthf_cc_defs})
 
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-mpi OpenMP::OpenMP_CXX)
@@ -1807,6 +1993,12 @@ if(BUILD_TESTING)
         ${SRC_DIR}/post_hf/cc/common.cpp
     )
 
+    # cc_gemm_contract staircase (R3b) against a reference loop.
+    add_executable(planck-cc-gemm-contract
+        ${CMAKE_SOURCE_DIR}/tests/cc_gemm_contract.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+    )
+
     add_executable(planck-cc-ucc-denominator
         ${CMAKE_SOURCE_DIR}/tests/cc_ucc_denominator.cpp
         ${SRC_DIR}/post_hf/cc/common.cpp
@@ -2428,6 +2620,10 @@ if(BUILD_TESTING)
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
+    target_include_directories(planck-cc-gemm-contract PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
 
     target_include_directories(planck-cc-ucc-denominator PRIVATE
         ${SRC_DIR}
@@ -2757,6 +2953,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-cc-tensor-index PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-gemm-contract PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -3274,6 +3476,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-cc-tensor-index
         COMMAND planck-cc-tensor-index
+    )
+
+    add_test(
+        NAME planck-cc-gemm-contract
+        COMMAND planck-cc-gemm-contract
     )
 
     add_test(

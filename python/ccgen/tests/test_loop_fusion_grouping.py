@@ -1,7 +1,7 @@
 """F2: the loop-signature grouping that fusion will key on.
 
 Emits nothing and changes nothing. It pins two properties the fusion work
-(F3-F5, docs/CCGEN_WHY_GENERATED_IS_SLOW.md) depends on:
+(F3-F5, docs/CCGEN_GENERATED_CC_COST.md) depends on:
 
   1. the grouping reproduces the census measured on the emitted C++
      (414 nests -> 13 signatures, largest 81), and
@@ -59,7 +59,7 @@ class GroupingReproducesTheCensus(unittest.TestCase):
         """UNDRESSED manifold: 399 terms -> 8 signatures, largest 153.
 
         NOTE the fixture. The 414-nests/13-signatures/81-largest census in
-        docs/CCGEN_WHY_GENERATED_IS_SLOW.md was measured on the FACTORIZED
+        docs/CCGEN_GENERATED_CC_COST.md was measured on the FACTORIZED
         (`--dressing derived`) TU, whose terms differ -- factorization splits
         contractions and introduces `W_*` operands, changing both the term count
         and the summed-index sets. This fixture is the undressed manifold, and it

@@ -1,0 +1,35 @@
+# Boundary marker: the RKS double-hybrid gradient is all-active conventional PT2.
+# With mp2_use_ri it used to run and print a gradient that missed its own energy FD
+# (frozen 6.2e-5, RI 4.8e-7 Ha/Bohr on this input); planck-dft must refuse it by name.
+%begin_control
+    basis       sto-3g
+    calculation gradient
+    basis_type  cartesian
+%end_control
+%begin_scf
+    scf_type    rhf
+    guess       hcore
+    max_cycles  100
+    tol_energy  1.0e-11
+    tol_density 1.0e-11
+    save_checkpoint .false.
+    mp2_use_ri .true.
+    mp2_ri_basis cc-pvdz-rifit
+%end_scf
+%begin_dft
+    grid        ultrafine
+    exchange    b2plyp
+    correlation pbe
+%end_dft
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+%begin_coords
+3
+0   1
+O     0.000000    0.000000     0.117176
+H     0.000000    0.756950    -0.468703
+H     0.000000   -0.756950    -0.468703
+%end_coords

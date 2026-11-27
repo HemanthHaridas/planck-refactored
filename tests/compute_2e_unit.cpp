@@ -54,7 +54,9 @@ namespace
         g_ok = false;
     }
 
-    HartreeFock::Calculator make_water_sto3g()
+    HartreeFock::Calculator make_water(
+        const char *basis_name = "sto-3g",
+        HartreeFock::BasisType type = HartreeFock::BasisType::Cartesian)
     {
         HartreeFock::Calculator calc;
         HartreeFock::Molecule &mol = calc._molecule;
@@ -71,12 +73,12 @@ namespace
             0.000000, 0.757200, -0.468704,
             0.000000, -0.757200, -0.468704;
 
-        calc._basis._basis = HartreeFock::BasisType::Cartesian;
+        calc._basis._basis = type;
         calc.prepare_coordinates();
         mol.set_standard_from_bohr(mol._coordinates);
 
         const std::filesystem::path gbs =
-            std::filesystem::path(get_basis_path()) / "sto-3g";
+            std::filesystem::path(get_basis_path()) / basis_name;
         auto basis_res = HartreeFock::BasisFunctions::read_gbs_basis(
             gbs.string(), mol, calc._basis._basis);
         if (!basis_res)
@@ -160,13 +162,57 @@ namespace
         if (!near(emix, GOLDEN_MIX))
             fail("(0123) " + std::to_string(emix) + " != golden " + std::to_string(GOLDEN_MIX));
     }
+
+    // _compute_2e_spherical transforms each shell quartet as it is computed;
+    // it must equal build-then-transform (the four-quarter transform of the
+    // full Cartesian tensor) to roundoff, and be exactly 8-fold symmetric.
+    void check_spherical(const char *basis_name, HartreeFock::IntegralMethod method,
+                         const char *engine_name)
+    {
+        HartreeFock::Calculator calc = make_water(basis_name, HartreeFock::BasisType::Spherical);
+        if (!g_ok)
+            return;
+        const auto shell_pairs = build_shellpairs(calc._shells);
+        const std::size_t nc = calc._shells.nbasis();
+        const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
+        const std::size_t ns = static_cast<std::size_t>(C.rows());
+
+        auto direct = _compute_2e_spherical(shell_pairs, nc, C, method);
+        auto reference = HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+            _compute_2e(shell_pairs, nc, method), C, nc, std::numeric_limits<std::size_t>::max());
+        const std::string label = std::string(basis_name) + " " + engine_name;
+        if (!direct || !reference)
+        {
+            fail(label + " spherical build failed: " +
+                 (direct ? reference.error() : direct.error()));
+            return;
+        }
+        if (direct->size() != ns * ns * ns * ns)
+        {
+            fail(label + " spherical tensor has the wrong size");
+            return;
+        }
+        double max_diff = 0.0, max_abs = 0.0;
+        for (std::size_t idx = 0; idx < direct->size(); ++idx)
+        {
+            max_diff = std::max(max_diff, std::abs((*direct)[idx] - (*reference)[idx]));
+            max_abs = std::max(max_abs, std::abs((*reference)[idx]));
+        }
+        std::cout << "[INFO] spherical " << label << " (nc " << nc << ", ns " << ns
+                  << "): direct vs transform max|Δ| = " << std::setprecision(4) << max_diff
+                  << " (max|eri| " << max_abs << ")\n";
+        if (max_diff > 1e-12)
+            fail(label + " direct spherical tensor differs from the transform by " +
+                 std::to_string(max_diff));
+        check_permutational_symmetry(*direct, ns);
+    }
 } // namespace
 
 int main()
 {
     if (!require_boys_library())
         return 1;
-    HartreeFock::Calculator calc = make_water_sto3g();
+    HartreeFock::Calculator calc = make_water();
     if (!g_ok)
     {
         std::cout << "compute_2e_unit: FAIL\n";
@@ -214,6 +260,14 @@ int main()
     };
     compare_engine(HartreeFock::IntegralMethod::RysQuadrature, "Rys");
     compare_engine(HartreeFock::IntegralMethod::Auto, "Rys-Auto");
+
+    // Spherical tensor without the Cartesian one: d shells in every engine,
+    // f shells through the default (Auto) engine.
+    check_spherical("cc-pvdz", HartreeFock::IntegralMethod::ObaraSaika, "OS");
+    check_spherical("cc-pvdz", HartreeFock::IntegralMethod::HeadGordonPople, "HGP");
+    check_spherical("cc-pvdz", HartreeFock::IntegralMethod::RysQuadrature, "Rys");
+    check_spherical("cc-pvdz", HartreeFock::IntegralMethod::Auto, "Auto");
+    check_spherical("cc-pvtz", HartreeFock::IntegralMethod::Auto, "Auto");
 
     if (g_ok)
     {

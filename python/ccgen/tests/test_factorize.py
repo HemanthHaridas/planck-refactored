@@ -920,7 +920,8 @@ class CostModelTests(unittest.TestCase):
         even read the TU. This checks the three things that must be true of the
         generated source, and would not be caught by them:
 
-        1. merging removes builders (27 -> 19 on ccsd);
+        1. merging removes builders (41 -> 30 on ccsd; 27 -> 19 before the
+           seeded-operator fix of 2026-11-21);
         2. every merged-away operator is GONE from the source -- a leftover
            name means a call site references a `build_W` that no longer exists;
         3. each surviving representative is defined exactly once.
@@ -946,7 +947,8 @@ class CostModelTests(unittest.TestCase):
         b_plain, b_merged = builders(plain), builders(merged)
         self.assertLess(len(b_merged), len(b_plain),
                         "merging did not reduce the emitted builder count")
-        self.assertEqual((len(b_plain), len(b_merged)), (27, 19))
+        # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_GENERATED_CC_COST.md); those sub-contractions are now derived operators.
+        self.assertEqual((len(b_plain), len(b_merged)), (41, 30))
 
         # a merged-away operator must not survive anywhere in the source
         leftover = sorted(n for n in merged_away if n in merged)

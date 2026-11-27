@@ -451,6 +451,122 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **`ccsd(t)` runs the generated spatial RCCSD (2026-11-22,
+  `docs/CCSD_T_SIZE_SCOPE.md`).** Re-timed at HEAD, 4 threads, the
+  generated rank-2 RCCSD was 48–59× faster end to end than the hand-written
+  spin-orbital one, with 2.5–4× less memory: C1 H2O2/6-31G 0.54 s against
+  32.0 s, spherical water/cc-pVDZ 0.30 s against 14.5 s. E(T) is identical to
+  every printed digit. So:
+  - the rank-2 companion is emitted, dressed (`derived`), and linked in
+    every build, by its own generator call (rank 3 still needs
+    `PLANCK_CC_ARBITRARY_LOWER_RANKS`). Undressed it took 45.5 s on H2O2 in
+    a default build; dressing only rank 2 in that build gives 0.54 s, the
+    same as a fully dressed build. The hand-written `ccsd` control is 32.2 s
+    in both builds;
+  - `ccsd(t)` maps to generated rank 2; `ccsd(t)_gen` is gone, and `cc2` /
+    `ccsd_gen` give the generated CCSD alone;
+  - the hand-written (T) branch in `run_rccsd` is deleted; plain `ccsd`
+    still runs the hand-written solver;
+  - the driver prints `Total RCCSD(T) Energy` on the generated route, which
+    had printed `Total RCCSD Energy` for a total including (T).
+
+  The four `*_rccsd_t_*` gates are unchanged.
+
+- **Derived CC operators on the generated UCC kernels (2026-11-22,
+  `docs/CCGEN_UNRESTRICTED_CC.md`, "the derived operators reach UCC").**
+  A dressed build (`-DPLANCK_CC_DRESS_OPERATORS=ON`) dressed only the RCC
+  emit; the UCC emit command passed no `--dressing`. It now does, and the
+  builders are spin-resolved:
+  - **Spin-resolved builders.** Four-count preamble, per-spin extents, no
+    closed-shell lowering.
+  - **Untagged factors.** One `factor_spins` slot table gives spins to
+    derived operators and scratch arrays.
+  - **Cost model.** Modelled CCSDT residual cost falls 224× (o = 5, v = 20),
+    the same as RCC.
+  - **O6 invariant.** It holds on all 333 operators (one name, one
+    spin-tagged contraction). Merging cannot cross spin blocks, because
+    tagged names have no symmetry entries.
+  - **Gates.** New `UCCRewritePreservesValueTests` (CCSD and CCSDT, every
+    rewritten term exact to 1e-10, mutation-checked). All eight UCC regression
+    cases pass, including `ucc4 == FCI` and `uccsd(t)` against PySCF.
+  - **Open.** A timing of dressed against undressed UCC from the same
+    commit.
+
+- **UCC residuals folded by their external symmetry (2026-11-22,
+  `docs/CCGEN_UCC_ORBIT_FOLD.md`).**
+  - **What it does.** Every UCC block with two free indices of the same
+    space and spin is emitted as one term per orbit, then one symmetrize pass.
+    That covers same-spin doubles, all triples and all quadruples. The group
+    comes from the indices' spins (`spin_class_group`), not from a table.
+  - **Size.** CCSDT 2,484 → 802 terms; rank 4 18,131 → 2,230.
+  - **Speed** (against an unfolded build of the same commit, 4 threads):
+    `b_ucc4_sto3g` 5.04 → 1.13 s (4.5×), `b_ucc3_sto3g` 1.9×, `uccsd(t)`
+    cases about 1.25×. Energies are identical except `ucc3`, which moves by
+    1e-10.
+  - **Found on the way.** The symmetrize pass wrote rank ≥ 7 element access
+    in the fixed-rank form, so the first rank-4 fold failed to compile. One
+    `_accessor` rule now serves the pass and term emission.
+  - **Gates.** `UCCOrbitFoldTests` (exact to 1e-10, mutation-checked) and
+    all eight UCC regression cases.
+
+- **CCSD(T), restricted and unrestricted (2026-11-20,
+  `docs/CCSD_T_SCOPE.md`).** `correlation ccsd(t)` ran the
+  hand-written RCCSD (the generated one since 2026-11-22, entry above). At
+  convergence it adds (T) from the ccgen-generated W
+  and V builders (`ccsd_t_planck_generated.cpp`, generated in every build),
+  evaluated on the aab|aab block.
+  - **Energy formula.** E(T) = S_aaa/18 + S_aab/2. The aaa block is half
+    the virtual antisymmetrizer of the aab block, which is exact.
+  - **Gates.** Water STO-3G and 6-31G and C1 H2O2 6-31G equal PySCF 2.15.0
+    to every printed digit, with references built from Planck's GBS files.
+    Gated by `*_rccsd_t_*`; the Python check is
+    `ccgen/tests/test_ccsd_t_vs_pyscf.py`.
+  - **ccgen fix.** The projector ignored `connected_only` (Wick was always
+    asked for connected contractions). It is honoured now, and the CCSD and
+    CCSDT equations are byte-identical.
+  - **Batched kernel (same day).** W and V are generated per virtual triple
+    (o³ blocks) and threaded over a ≥ b ≥ c. Each triple writes its own slot,
+    so E(T) is bitwise identical at 1/2/4/8 threads. At verbose output the
+    full-tensor kernel is kept as a reference check; it agrees to ≤ 1.4e-16,
+    gated at 1e-14 on `water_rccsd_t_631g`. A wrong S_aaa factor fails that
+    gate by 7.6e-6. (T) on C1 H2O2 6-31G takes 0.27 s; the run's 31 s is
+    the spin-orbital CCSD.
+  - **UCCSD(T) (same day).** `correlation uccsd(t)` runs the generated
+    `ucc2` (`-DPLANCK_CC_UCC=ON`) and adds (T) over the four t3 blocks:
+    E(T) = (S_aaa + S_bbb)/36 + (S_aab + S_abb)/4, with per-spin
+    denominators from the UCC Fock-block diagonals. OH and water⁺ 6-31G
+    equal PySCF UCCSD(T) to the last printed digit, with the same ⟨S²⟩. The
+    full-tensor reference check agrees to 1.2e-18, bitwise identical at
+    1/2/4/8 threads. Gated by `*_uccsd_t_631g` (extended; skipped without
+    UCC). The hand-written UCCSD is determinant-space and cannot feed (T).
+  - **Spherical gates (same day).** Water `ccsd(t)` and water⁺ `uccsd(t)`
+    in cc-pVDZ, `basis_type spherical`, equal PySCF `cart=False` exactly
+    (`*_rccsd_t_spherical_ccpvdz`, `*_uccsd_t_spherical_ccpvdz`; extended).
+  - **Open.** ROHF-(T), and a faster CCSD for larger systems
+    (`docs/CCSD_T_SIZE_SCOPE.md`).
+
+- **Generated CC kernels threaded by default (2026-11-20,
+  `docs/CCGEN_GENERATED_CC_COST.md`).** The emitter's docstring named a CMake
+  option `PLANCK_CC_OMP_COLLAPSE` that did not exist, so every build's
+  generated CC kernels had no `#pragma omp` and ran on one core. The option
+  now exists (default 3) and is passed to the RCC, UCC and CCSD(T)
+  generator runs. A stamp file in their dependencies regenerates the kernels
+  when the value changes. Against the old single-core binary, every
+  iteration's numbers are bitwise identical at 1/2/4/8 threads on
+  `b_ucc2_sto3g`, `oh_uccsd_t_631g`, `be_rccsdtq_sto3g` (rank 4, never
+  threaded before) and `water_rccsd_t_631g`. `oh_uccsd_t_631g` went from
+  12.25 to 3.59 s at 4 threads. The tiny Be rank-4 case is slower threaded
+  (1.50 → 2.70 s at 8 threads).
+
+- **RKS double-hybrid gradients refuse frozen-core and RI PT2 (2026-11-20).**
+  The UKS gate already did; the RKS gate checked only solvent. With
+  `mp2_frozen 1` the gradient ran and missed its own energy FD by 6.2e-5
+  Ha/Bohr (all-electron control 5.6e-8), and with `mp2_use_ri` by 4.8e-7
+  (water/STO-3G B2PLYP, O z, central difference). The RKS and UKS DH
+  gradient gates now call one `validate_dh_gradient_pt2_options`
+  (`src/dft/driver.cpp`), which names the offending option. Gated by
+  `water_rks_b2plyp_{frozen,ri}_gradient_rejected_sto3g`.
+
 - **DFT AO arrays screened per point block (S7 stage 1, 2026-11-19,
   `docs/DFT_DEFAULT_GRID_SCOPE.md`).** The SCF kept four npts × nb AO
   arrays (91 % of a naphthalene gradient's peak). `ScreenedAOGrid` keeps,
@@ -1926,10 +2042,11 @@ historical design context, but they are no longer the source of truth for
   BRACED runtime-rank accessor** (`result({i, j, ...})`, which numpy rejects as
   non-letter subscripts) and **rank >= 7 builders return `TensorND`**, invisible
   to `build_emitted_operators`'s fixed-rank regex, so a `ccsdtq` residual could
-  not be evaluated at all until a local pass materialized them. What remains
-  untried at rank 4 is only an end-to-end RUN — building the 6.6 MB dressed TU
-  against the `-O1`-pinned registry and timing a solve. Full record:
-  `docs/CCGEN_MERGE_TRANSPOSES.md`.
+  not be evaluated at all until a local pass materialized them. The merged
+  6.5 MB rank-4 dressed TU builds and runs: `be_rccsdtq_sto3g` gives
+  -14.4036550465 in 6 iterations (checked 2026-11-18). A rank-4 merged-vs-
+  unmerged timing is still not done. Full record:
+  `docs/CCGEN_GENERATED_CC_COST.md`.
 
 - CC tensor element accessors inlined (`src/post_hf/cc/common.h`), the dominant
   cost in every CC kernel. `Tensor{2,4,6}D::operator()` and the runtime-rank
@@ -1961,7 +2078,7 @@ historical design context, but they are no longer the source of truth for
   transposed index), covers the permuted-dims `swap_mid_axes` pattern used by
   `rebind_physicist`, and cross-checks the braced-index overload against the
   still-out-of-line `vector<int>` one. Also drops the now-unused `to_vector` and
-  `checked_fixed_rank_index`. See `docs/CCGEN_TENSOR_ACCESSOR.md`.
+  `checked_fixed_rank_index`. See `docs/CCGEN_GENERATED_CC_COST.md`.
 - Generated rank-3 CCSDT fixed, and the kernel was never the defect. The ccgen
   rank-3 triples residual reproduces PySCF `rccsdt` to +1.49e-08 and is
   **bitwise identical** across both harnesses at identical inputs; what was wrong
@@ -2000,7 +2117,7 @@ historical design context, but they are no longer the source of truth for
   handoff, so the hand-written tensor solver had no regression gate for its entire
   life. Verified falsifiable before being trusted. Cost is not addressed: the
   correct path is ~500× slower (0.19 s vs ~100 s on CH4), per-iteration rather
-  than convergence; see `docs/CCGEN_ARBITRARY_HARNESS_COST.md`. Full answer,
+  than convergence; see `docs/CCGEN_GENERATED_CC_COST.md`. Full answer,
   with the eight ruled-out hypotheses:
   `docs/CCGEN_RANK3_KERNEL_AND_SOLVER.md`.
 - The generated-vs-hand-written CC kernel gap is characterized: it is a
@@ -2023,8 +2140,7 @@ historical design context, but they are no longer the source of truth for
   `water_rccsdt_sto3g` silently yields no timing at all and any ladder point
   needs `nso > 16 || ndet > 10000`; and the whole reachable ladder stays under
   0.85 MiB `t3`, inside L2, so the memory-bound hypothesis is untested rather
-  than refuted. See `docs/CCGEN_KERNEL_SCALING_SCOPE.md` and
-  `docs/CCGEN_KERNEL_PERFORMANCE.md`.
+  than refuted. See `docs/CCGEN_GENERATED_CC_COST.md`.
 - SAD isolated-atom false-convergence fixed in the SCF convergence gate
   (`is_converged`, `src/scf/scf.cpp`). For small lone closed-shell atoms
   (He/cc-pVDZ) the SAD guess drove DIIS to extrapolate a Fock whose

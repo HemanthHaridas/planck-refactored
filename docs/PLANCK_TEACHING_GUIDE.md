@@ -20,8 +20,9 @@ self-consistent field theory. It implements:
 - RCCSD for canonical closed-shell RHF references
 - Small-system determinant-space teaching prototypes for RCCSDT, UCCSD, and UCCSDT
 - Coupled-cluster kernels **generated at build time** by `ccgen`, to arbitrary
-  excitation rank: restricted (`cc3`-`cc6`) and, opt-in, unrestricted
-  (`ucc2`-`ucc6`). Optionally dressed and OpenMP-threaded
+  excitation rank: restricted (ranks 2-6, `ccsd_gen` … `ccsdtqph_gen`, or
+  `cc2`-`cc6`) and, opt-in, unrestricted (`uccsd_gen` … `uccsdtqph_gen`, or
+  `ucc2`-`ucc6`). Optionally dressed and OpenMP-threaded
 - Analytic RHF, UHF, ROHF, RKS, UKS, RMP2, and UMP2 nuclear gradients
 - Analytic RMP2 nuclear gradients include Z-vector / CPHF relaxation
 - Analytic restricted global-double-hybrid gradients include KS Z-vector
@@ -5453,6 +5454,17 @@ broken. All three builders now share one check, `has_frozen_orbitals`. It
 compares the active count with the SCF's MO count, which is correct in either
 basis.
 
+The double-hybrid gradient (later in this section) inherits the same limit.
+Its PT2 part is an MP2 Lagrangian, so it also has no frozen–active blocks. Its
+gradient is also built on conventional integrals only, so it does not
+differentiate a density-fitted energy either. The UKS branch refused both from
+the start. The RKS branch checked only for solvent, so `mp2_frozen 1` ran and
+printed a gradient 6.2e-5 Ha/Bohr off its own energy finite difference. The
+all-electron control was off by 5.6e-8. `mp2_use_ri` was off by 4.8e-7. Both
+branches now call one `validate_dh_gradient_pt2_options`, which names the
+option it refuses. The lesson is the one above: when two code paths compute
+the same physics, give them one guard. Two copies drift apart.
+
 ### Checking an Analytic Gradient Against the Right Reference
 
 The spherical MP2 gates first compared with PySCF's analytic
@@ -6084,7 +6096,9 @@ typing a quadruples residual.
 ### The hand-written paths
 
 - **RCCSD** — a conventional iterative amplitude solver in the spin-orbital
-  basis for canonical closed-shell RHF references
+  basis for canonical closed-shell RHF references. `correlation ccsd(t)` runs
+  it and then adds the perturbative triples from generated kernels (see
+  "Perturbative Triples: CCSD(T)" below)
 - **RCCSDT** — dual-backend: a determinant-space teaching prototype for small
   systems and a staged tensor solver for larger systems; the default routing is
   chosen automatically by `choose_rccsdt_backend`, and a `TensorOptimized` entry
@@ -6096,27 +6110,45 @@ typing a quadruples residual.
 
 ### The generated paths, and how to ask for them
 
-Every generated method maps to one enum value; the **excitation rank rides
-separately** on `OptionsSCF._cc_generated_rank`, so a new rank needs no new enum
-member and no new driver branch. The ceiling is `PLANCK_CC_MAXORDER` alone.
+There are two generated routes, `PostHF::RCCGEN` and `PostHF::UCCGEN`; the
+**excitation rank rides separately** on `OptionsSCF._cc_generated_rank`, so a new
+rank needs no new enum member and no new driver branch. The ceiling is
+`PLANCK_CC_MAXORDER` alone. One table in `src/io/io.cpp`
+(`generated_cc_keyword`) gives every keyword its route, rank and whether (T)
+follows, so the three cannot drift apart.
 
-| `correlation` keyword | rank | route |
+The spellings follow one rule on both sides: every rank 2–6 has an `X_gen` name
+and a numeric `ccN` / `uccN` name, and the plain method name means the generated
+route only where no hand-written solver claims it (ranks 4–6).
+
+| rank | restricted (`RCCGEN`) | unrestricted (`UCCGEN`, needs `-DPLANCK_CC_UCC=ON`) |
 |---|---|---|
-| `cc3` / `ccsdt_gen` | 3 | generated **R**CC — needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` |
-| `ccsdtq` / `cc4` | 4 | generated RCC (the usual entry) |
-| `ccsdtqp` / `cc5`, `cc6` | 5, 6 | generated RCC |
-| `ucc2` / `uccsd_gen` | 2 | generated **U**CC — needs `-DPLANCK_CC_UCC=ON` |
-| `ucc3` / `uccsdt_gen`, `ucc4` … `ucc6` | 3-6 | generated UCC |
+| 2 | `ccsd_gen`, `cc2` (every build) | `uccsd_gen`, `ucc2` |
+| 2 + (T) | `ccsd(t)` | `uccsd(t)` |
+| 3 | `ccsdt_gen`, `cc3` (needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`) | `uccsdt_gen`, `ucc3` |
+| 4 | `ccsdtq_gen`, `ccsdtq`, `cc4` | `uccsdtq_gen`, `uccsdtq`, `ucc4` |
+| 5 | `ccsdtqp_gen`, `ccsdtqp`, `cc5` | `uccsdtqp_gen`, `uccsdtqp`, `ucc5` |
+| 6 | `ccsdtqph_gen`, `ccsdtqph`, `cc6` | `uccsdtqph_gen`, `uccsdtqph`, `ucc6` |
+
+The numeric names mean rank N, **not** the CC2/CC3/CCn models of the literature:
+`cc3` is full CCSDT, not CC3. `docs/CC_APPROXIMATE_MODELS_SCOPE.md` scopes the real
+models and what to do about the names.
 
 Two asymmetries that look like oversights and are not:
 
-- **There is no generated rank-2 RCC keyword**, because the hand-written RCCSD
-  already covers it — a generated `cc2` would have no consumer. `ucc2` *does*
-  exist, because it is the comparison against hand-written UCCSD that validated
-  the UCC route (it matches exactly).
-- **`cc3` is not the same as `ccsdt`.** `ccsdt` runs the hand-written solver;
-  `cc3` runs the generated one, which produces *spatial* amplitudes and can
-  therefore write a `.ccamp` seed that a later `cc4` run warm-starts from.
+- **Both `ccsd` and `cc2` exist.** `ccsd` runs the hand-written
+  spin-orbital RCCSD; `cc2` runs the generated spatial one, built in every
+  build. For a long time there was no generated rank 2, because the
+  hand-written RCCSD covered it and a generated `cc2` had no consumer. (T)
+  became that consumer: the generated route hands spatial t1/t2 straight to
+  the triples kernel, and it is 48–59× faster, so `ccsd(t)` runs it. `ucc2`
+  exists in every UCC build, because it is the comparison against
+  hand-written UCCSD that validated the UCC route (it matches exactly), and
+  it feeds `uccsd(t)`.
+- **`ccsdt_gen` is not the same as `ccsdt`.** `ccsdt` runs the hand-written
+  solver; `ccsdt_gen` (`cc3`) runs the generated one, which produces *spatial*
+  amplitudes and can therefore write a `.ccamp` seed that a later rank-4 run
+  warm-starts from.
 
 **Validation.** `ucc4` reproduces the in-tree FCI energy to all ten digits on an
 open-shell system (B/STO-3G) — the strongest single result on the generated path,
@@ -7133,6 +7165,224 @@ smaller systems cannot:
    enough that the \(O(o^3 v^4)\) and \(O(o^4 v^3)\) contractions in R3 are
    non-trivial, making it a useful check that the contraction order and
    intermediate reuse in `tensor_backend.cpp` are correct.
+
+### Perturbative Triples: CCSD(T)
+
+Full CCSDT costs \(O(o^3v^5)\) per iteration and stores the \(o^3v^3\) triples
+amplitudes. CCSD(T) estimates the triples' effect once, after CCSD has
+converged, by perturbation theory. Its non-iterative \(O(o^3v^4)\) step is
+what makes it the usual benchmark method.
+
+**The formula.** With a canonical reference (\(f_{ov}=0\)) there are two
+triples quantities, both projections onto the triply excited determinants:
+
+\[
+W_{ijk}^{abc} = \langle\Phi_{ijk}^{abc}|(V_N T_2)_C|0\rangle, \qquad
+V_{ijk}^{abc} = \langle\Phi_{ijk}^{abc}|V_N T_1|0\rangle .
+\]
+
+\(W\) is connected. It comes from two contractions, one through a virtual
+\(\langle bc\|dk\rangle t_{ij}^{ad}\) and one through an occupied
+\(\langle lc\|jk\rangle t_{il}^{ab}\). Each is antisymmetrized by
+\(P(i/jk)P(a/bc)\), giving 18 terms. \(V\) is **disconnected**: it is
+\(P(i/jk)P(a/bc)\, t_i^a \langle jk\|bc\rangle\), 9 terms, a singles
+amplitude next to an untouched double-excitation integral. In spin orbitals,
+
+\[
+E_{(T)} = \frac{1}{36}\sum_{ijkabc} \frac{(W_{ijk}^{abc} + V_{ijk}^{abc})\,W_{ijk}^{abc}}{D_{ijk}^{abc}},
+\qquad D_{ijk}^{abc} = \varepsilon_i+\varepsilon_j+\varepsilon_k-\varepsilon_a-\varepsilon_b-\varepsilon_c .
+\]
+
+The \(W^2/D\) part is the fourth-order triples energy. The \(VW/D\) part is
+the fifth-order singles–triples coupling that defines "(T)".
+
+**How ccgen derives it.** A CC residual is \(\langle\Phi|\bar H|0\rangle\), with
+\(\bar H\) from the BCH expansion. (T) needs no \(\bar H\), only two bare
+operator products, \(V_N T_2\) and \(V_N T_1\), projected onto triples. So
+`python/ccgen/methods/ccsd_t.py` multiplies the operators, projects each
+product with the same Wick machinery the residuals use, and keeps \(W\)'s
+connected terms. Two things in the generator assumed every product is
+connected, which is true for BCH commutators:
+
+- The projector always asked Wick for connected contractions, so
+  `connected_only=False` did nothing and \(V\) came out empty. The flag now
+  reaches the projector. The default is unchanged, and the CCSD and CCSDT
+  equations are byte-identical.
+- The manifold pre-filter drops disconnected products before projection. The
+  (T) builder skips it; two small products need no pre-pruning.
+
+The first test was numeric. Evaluated at PySCF's converged GCCSD amplitudes,
+the generated \(W\) and \(V\) reproduce PySCF's spin-orbital (T) to
+\(\le 4.8\times10^{-12}\) on water, C1 H\(_2\)O\(_2\) and the OH doublet.
+Dropping \(V\) misses by \(9.9\times10^{-5}\). Flipping one \(W\) term
+misses by \(1.3\times10^{-3}\).
+
+**The restricted form needs one spin block.** A closed shell has four kinds
+of triples block: aaa, bbb, aab and abb. By spin symmetry aaa = bbb and
+aab = abb. The lone β index can sit in any of three occupied and three
+virtual places, giving nine aab arrangements and nine abb. The spin-orbital
+sum is therefore
+
+\[
+E_{(T)} = \frac{2\,S_{aaa} + 18\,S_{aab}}{36} = \frac{S_{aaa}}{18} + \frac{S_{aab}}{2},
+\qquad S_{\rm blk} = \sum_{\rm blk}\frac{(W+V)W}{D} .
+\]
+
+`spin_adapt_equations` lowers \(W\) and \(V\) onto the aab block: 24 and 6
+terms, in spatial \(t_1\), \(t_2\) and the plain \(\langle pq|rs\rangle\). The
+all-α block is not a second integration. It is half the full antisymmetrizer
+over the three virtuals applied to the aab block, for \(W\) and \(V\) alike:
+
+\[
+X_{aaa}(abc,ijk) = \tfrac12 \sum_{P\in S_3} \operatorname{sign}(P)\,
+X_{aab}(P(abc),ijk).
+\]
+
+This was found numerically. A least-squares fit of the aaa block onto the six
+virtual permutations of the aab block gave coefficients \(\pm\tfrac12\), with
+a relative residual of \(4\times10^{-14}\). Through this identity the
+restricted (T) matches PySCF's RHF `ccsd_t` to
+\(\le 5.6\times10^{-12}\). A factor of 1 instead of ½ misses by
+\(2.3\times10^{-4}\).
+
+**One detail that cost 2e-11.** PySCF builds \(D\) from the diagonal of the
+Fock matrix, not from the SCF's orbital energies. At a finite SCF tolerance
+the two differ by the SCF residual. Using `mf.mo_energy` on C1 H\(_2\)O\(_2\)
+6-31G put the restricted (T) \(1.9\times10^{-11}\) off, and only that case.
+Compare like with like: the denominator must come from the same orbital
+energies the CCSD amplitudes were solved with.
+
+**Running it.** `correlation ccsd(t)` runs the generated spatial RCCSD
+(`cc2`). At convergence `run_rccgen` passes its t1/t2 to
+`compute_rccsd_t_energy` (`src/post_hf/cc/ccsd_t.cpp`), which evaluates the
+generated \(W\) and \(V\) kernels from `ccsd_t_planck_generated.cpp`. Until
+2026-11-22 it ran the hand-written spin-orbital RCCSD and projected its
+amplitudes to the spatial layout. Both routes give the same E(T) to every
+printed digit, but the spin-orbital solver was 48–59× slower.
+
+It matches PySCF's CCSD(T) to every printed digit on water (STO-3G and 6-31G)
+and C1 H\(_2\)O\(_2\) 6-31G (`*_rccsd_t_*`). One trap appeared while setting
+up those references. PySCF's built-in STO-3G and 6-31G are not quite Planck's
+GBS files: on water the Hartree-Fock energies differed by \(2.4\times10^{-8}\).
+That looks like a Planck defect, but loading Planck's own files into PySCF
+(`parse_gaussian.load`) closes it to every digit. When two codes disagree at
+\(10^{-8}\), check that they are solving the same basis before looking for a
+bug.
+
+**Batching.** ccgen emits each kernel in two shapes from the same terms:
+the full \(o^3v^3\) tensor, and one \((a,b,c)\) block of \(o^3\) values. The
+production path loops over virtual triples \(a \ge b \ge c\). For each it
+builds \(W\) and \(V\) for the six orderings, adds every distinct ordering
+to \(S_{aab}\), and adds \(6\times\) the antisymmetrized block to
+\(S_{aaa}\) when all three differ. No \(o^3v^3\) tensor is formed.
+
+The triples are threaded with OpenMP. Each triple's energy goes into its
+own slot, and the slots are summed in a fixed order afterwards. That makes
+\(E_{(T)}\) bitwise identical at any thread count. A reduction summed in
+thread-completion order would not be; that is the DFT-grid jitter lesson.
+At `verbosity verbose` the full-tensor kernels still run on small systems
+and the difference is logged (\(\le 1.4\times10^{-16}\)). The regression
+suite gates it, so the reference version cannot silently go stale.
+
+A small fixture can hide a whole code path. Water in STO-3G has only two
+virtual orbitals, so no triple has \(a > b > c\) and \(S_{aaa}\) is zero
+there. A deliberately wrong \(S_{aaa}\) factor passes that case and fails
+water 6-31G by \(7.6\times10^{-6}\). Before trusting a gate, check that its
+fixture reaches the code being tested.
+
+**Open shells: UCCSD(T).** `correlation uccsd(t)` runs the generated
+`ucc2` and adds the unrestricted (T). The same two operator products are
+lowered onto all four triples blocks. There is no closed-shell shortcut,
+because α and β orbitals differ:
+
+\[
+E_{(T)} = \frac{S_{aaa} + S_{bbb}}{36} + \frac{S_{aab} + S_{abb}}{4}.
+\]
+
+A pure block occurs once in the spin-orbital sum and a mixed block nine
+times. With α = β this reduces to the restricted formula above. Each block
+uses its own α or β orbital energies in \(D\), taken from the diagonal of
+that spin's Fock block.
+
+OH and water\(^+\) in 6-31G match PySCF's UCCSD(T) to the last printed
+digit, with the same \(\langle S^2\rangle\) in both codes. One more
+reference trap showed up here: with PySCF's UHF converged only on the
+energy (1e-12), water\(^+\) missed by \(2\times10^{-11}\). Converging the
+orbital gradient as well (1e-10) closed it to \(10^{-15}\). For open-shell
+references, converge the orbitals, not just the energy.
+
+UCCSD(T) needs the generated UCC kernels (`-DPLANCK_CC_UCC=ON`). The
+hand-written UCCSD is a determinant-space solver and has no amplitude
+blocks to hand over.
+
+### The Λ Equations
+
+The CC energy is not variational: it is a projection, \(E = \langle 0|\bar H|0\rangle\)
+with \(\bar H = e^{-T} H e^{T}\), and it is not stationary in \(T\). So
+the energy alone gives no density and no cheap derivative. The fix is a
+Lagrangian that *is* stationary:
+
+\[
+\mathcal{L}(T, \Lambda) = E(T) + \sum_\mu \lambda_\mu R_\mu(T),
+\]
+
+where \(R_\mu = \langle\mu|\bar H|0\rangle\) are the T residuals. Making
+\(\mathcal{L}\) stationary in \(\lambda\) gives back \(R_\mu = 0\), the T
+equations. Making it stationary in \(t_\nu\) gives the **Λ equations**,
+
+\[
+\frac{\partial E}{\partial t_\nu} + \sum_\mu \lambda_\mu \frac{\partial R_\mu}{\partial t_\nu} = 0,
+\]
+
+one linear set per excitation rank. With both converged, \(\mathcal{L} = E\)
+and every first-order property is \(\partial\mathcal{L}\) with respect to
+the operator's integrals: the densities.
+
+**How Planck gets them.** Hand-written Λ-CCSD exists in most codes;
+Λ-CCSDT and beyond almost nowhere. Planck does not derive Λ separately. ccgen
+already has the T equations as symbolic terms, so it builds \(\mathcal{L}\)
+from them and differentiates: each Λ term is an \(\mathcal{L}\) term with one
+\(t\) factor removed and its indices freed (`python/ccgen/lagrangian.py`).
+That works at any rank, restricted or unrestricted, and the result goes
+through the same factorizer and GEMM lowering as the T kernels.
+
+Two details decide whether the kernels are right:
+
+- **Symmetry.** \(\partial\mathcal{L}/\partial t\) treats every stored
+  amplitude element as independent, but the elements are not: a spatial
+  \(t_2\) has \(t_{ij}^{ab} = t_{ji}^{ba}\), and a UCC same-spin block is
+  antisymmetric. The residual for an independent element is the derivative
+  summed over the block's symmetry group,
+  \(R = \sum_g s_g\, g(G)\). The group comes from the block's spins: signed
+  permutations within each (space, spin) class, plus the closed-shell spin
+  flip for a balanced restricted block. At rank 2 that is the pair symmetry,
+  at rank 3 the aab group the T kernels already use.
+- **The Jacobi diagonal.** The solver is the T solver's Jacobi + DIIS with
+  T frozen. Its step divides by the diagonal of the Λ equations,
+  \(c_n D\), where \(D = \sum \varepsilon_{\text{occ}} - \sum \varepsilon_{\text{vir}}\)
+  as for T and \(c_n\) is the λ weight times the group order: 1, 1/2, 1/9
+  for restricted ranks 1–3, and 1 for every UCC block. ccgen computes it
+  when it emits the kernels.
+
+The converged λ does not depend on \(c_n\); it only sets how fast the
+iteration gets there. So a wrong \(c_n\) shows up as slow or failed
+convergence, never as a wrong λ. The gates therefore test the kernels
+directly: the emitted C++ text, evaluated with numpy, against the Python
+Λ residual, for every block (restricted and UCC, ranks 2–3); and the
+converged λ of water/6-31G against the spatial Λ equations solved at
+PySCF's RCCSD amplitudes (`water_rccsd_lambda_631g`). For water Λ converges
+in 16 iterations, as many as T.
+
+The restricted λ is the multiplier of Planck's spatial parametrization,
+not PySCF's RCCSD λ, so it cannot be compared with PySCF directly; what
+can be compared is what does not depend on that choice (the energy
+derivative, and later the densities). The unrestricted λ is PySCF's
+UCCSD λ unscaled, because the UCC weights make the Lagrangian the
+spin-orbital one restricted to stored blocks.
+
+Run it with `cc_lambda .true.` after any generated method. Densities,
+dipoles and natural orbitals built from λ are the next steps
+(`docs/CC_LAMBDA_SCOPE.md`).
 
 ---
 
@@ -10667,8 +10917,8 @@ driver.cpp
 | Tensor CC block cache | `src/post_hf/cc/tensor_backend_state.cpp` | `build_canonical_rhf_cc_reference`, `format_tensor_memory_summary` |
 | UCCSDT prototype | `src/post_hf/cc/ccsdt.cpp` | `prepare_uccsdt`, `run_uccsdt` |
 | RCCSDTQ generated tensor path | `src/post_hf/cc/rccgen.cpp`, `src/post_hf/cc/generated_arbitrary_runtime.cpp` | `run_rccgen`, `run_generated_arbitrary_order_iterations` |
-| Generated RCC driver (`cc3`-`cc6`) | `src/post_hf/cc/rccgen.cpp` | `run_rccgen` |
-| Generated UCC driver (`ucc2`-`ucc6`) | `src/post_hf/cc/uccgen.cpp` | `run_uccgen` |
+| Generated RCC driver (`PostHF::RCCGEN`, ranks 2-6) | `src/post_hf/cc/rccgen.cpp` | `run_rccgen` |
+| Generated UCC driver (`PostHF::UCCGEN`, ranks 2-6) | `src/post_hf/cc/uccgen.cpp` | `run_uccgen` |
 | Generated-kernel registry (what the emitted TUs plug into) | `src/post_hf/cc/generated_kernel_registry.cpp` | `make_generated_*_kernels` |
 | Arbitrary-order runtime (amplitudes, denominators, residual dispatch) | `src/post_hf/cc/generated_arbitrary_runtime.cpp`, `generated_arbitrary_prepare.cpp` | `run_generated_arbitrary_order_iterations` |
 | The CC equation generator itself | `python/ccgen/` | see `docs/CCGEN_TEACHING_GUIDE.md` |
@@ -10776,7 +11026,7 @@ driver.cpp
 | RCCSDT single-point energy | Determinant prototype for tiny systems plus tensor production/optimized entry points for larger restricted references; size-based default selected by `choose_rccsdt_backend`, optional override via `PLANCK_RCCSDT_BACKEND` |
 | UCCSDT single-point energy | Teaching-oriented small-system determinant-space prototype |
 | RCCSDTQ single-point energy | Generated restricted tensor kernels when built with CCSDTQ support |
-| Generated arbitrary-order RCC (`cc3`-`cc6`) | Complete. One enum value carrying the rank separately, so the ceiling is `PLANCK_CC_MAXORDER` alone. `cc3` needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`; gated by `lih_rccsdt_generated_sto3g`, `ch4_rccsdt_generated_sto3g`, `be_rccsdtq_sto3g` |
+| Generated arbitrary-order RCC (ranks 2-6) | Complete. One enum value (`RCCGEN`) carrying the rank separately, so the ceiling is `PLANCK_CC_MAXORDER` alone. `cc3` needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`; gated by `lih_rccsdt_generated_sto3g`, `ch4_rccsdt_generated_sto3g`, `be_rccsdtq_sto3g` |
 | Generated arbitrary-order UCC (`ucc2`-`ucc6`) | Complete behind `-DPLANCK_CC_UCC=ON` (default off: the UCC translation units roughly triple generated-kernel compile time). `ucc2` == hand-written UCCSD exactly; `ucc4` == in-tree FCI to all ten digits on open-shell B/STO-3G. Gated by `b_ucc{2,3,4}_sto3g`, which skip cleanly in a default build |
 | ccgen dressed-operator kernels | Complete for the `derived` route (`-DPLANCK_CC_DRESS_OPERATORS=ON`), measured ~3.5× faster solves. The `recognized` route is retired and produces wrong kernels |
 | OpenMP-threaded CC kernels | Complete behind `CCGEN_OMP_COLLAPSE=3` (default off). 3.22× at 4 threads with energies bitwise identical across thread counts. CC was the last hot path in Planck with no threading |

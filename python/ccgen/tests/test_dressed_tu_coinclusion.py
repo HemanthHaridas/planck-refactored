@@ -147,7 +147,9 @@ class ArbitraryOrderCoInclusionTests(_CoInclude):
             with self.subTest(method=method):
                 self.assertTrue(by_method[method], "no builders emitted")
                 for name in by_method[method]:
-                    self.assertTrue(name.endswith(f"_{method}"),
+                    # build_<method>_residual_ops (U3a) carries the method too.
+                    self.assertTrue(name.endswith(f"_{method}")
+                                    or name == f"build_{method}_residual_ops",
                                     f"{name} is not method-suffixed")
         self.assertEqual(by_method["ccsd"] & by_method["ccsdt"], set(),
                          "builder names must not overlap between methods")

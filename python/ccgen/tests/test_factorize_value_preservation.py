@@ -499,10 +499,10 @@ class MergedOperatorsTests(unittest.TestCase):
         from ccgen.spin import spin_adapt_equations
         for label, terms, sp, expect in (
             ("GCC", generate_cc_equations("ccsd", canonical_fock=True)["doubles"],
-             False, (27, 19)),
+             False, (38, 28)),  # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_GENERATED_CC_COST.md); those sub-contractions are now derived operators.
             ("spatial", spin_adapt_equations(
                 generate_cc_equations("ccsd", canonical_fock=True))["doubles"],
-             True, (59, 31)),
+             True, (81, 45)),
         ):
             with self.subTest(label):
                 self.assertEqual(self._check(label, terms, sp), expect)
@@ -512,7 +512,8 @@ class MergedOperatorsTests(unittest.TestCase):
         un-merged set, because it will not be permuting its call sites."""
         from ccgen.optimization.factorize import manifold_operators
         terms = generate_cc_equations("ccsd", canonical_fock=True)["doubles"]
-        self.assertEqual(len(manifold_operators(terms, include_reuse=False)), 27)
+        # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_GENERATED_CC_COST.md); those sub-contractions are now derived operators.
+        self.assertEqual(len(manifold_operators(terms, include_reuse=False)), 38)
 
 
 class HigherRankMergeTests(unittest.TestCase):
@@ -525,7 +526,8 @@ class HigherRankMergeTests(unittest.TestCase):
     different code path.
 
     Rank 4 is the strongest evidence the merge is sound: 2536 rewritten
-    quadruples terms, 254 -> 69 operators, zero disagreements.
+    quadruples terms, 268 -> 79 operators (254 -> 69 before the 2026-11-21
+    seeded-operator fix), zero disagreements.
     """
 
     def _check(self, method, manifold, expect_ops):
@@ -567,14 +569,14 @@ class HigherRankMergeTests(unittest.TestCase):
         return checked
 
     def test_rank3_triples_merge_preserves_value(self):
-        # (80, 39) at canonical_fock=True, which is what the emitter uses;
-        # the default (canonical_fock=False) set gives (83, 42).
-        self.assertGreater(self._check("ccsdt", "triples", (80, 39)), 300)
+        # canonical_fock=True, which is what the emitter uses. Was (80, 39).
+        # 2026-11-21: counts rose when the emit path stopped matching the retired route's seeded operators (EMIT_FINGERPRINTS, docs/CCGEN_GENERATED_CC_COST.md); those sub-contractions are now derived operators.
+        self.assertGreater(self._check("ccsdt", "triples", (94, 49)), 300)
 
     def test_rank4_quadruples_merge_preserves_value(self):
         """Slow (~1 min) and deliberately kept: rank 4 is the case rank 3 has
         repeatedly failed to predict in this codebase."""
-        self.assertGreater(self._check("ccsdtq", "quadruples", (254, 69)), 2000)
+        self.assertGreater(self._check("ccsdtq", "quadruples", (268, 79)), 2000)
 
 
 class SharedRepresentativeIsTheDefectTests(unittest.TestCase):
@@ -706,3 +708,272 @@ class SharedRepresentativeIsTheDefectTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- UCC -------------------------------------------------------------------
+#
+# O6 named this gate as the precondition for trusting the derived route on
+# spin-blocked input. Every orbital count differs (noa != nva != nob != nvb),
+# so a slot read with the wrong spin or space raises or mismatches instead of
+# silently staying in bounds -- the same reason the GCC fixture is 3x4.
+UCC_DIMS = {"noa": 3, "nva": 5, "nob": 4, "nvb": 6}
+
+
+def _ucc_eval(term, tensors, operators):
+    """`ucc_residual_einsum` with derived operators resolved by name.
+
+    Operators are stored in their declared slot order and read directly;
+    everything else goes through `ucc_resolve_factor`, which slices `v`/`f`
+    by each slot's (space, spin)."""
+    import string
+
+    from ccgen.tests.residual_eval import ucc_resolve_factor
+
+    pool = iter(string.ascii_letters)
+    letters = {}
+    for idx in list(term.free_indices) + list(term.summed_indices):
+        letters[idx] = next(pool)
+    subs, ops = [], []
+    for f in term.factors:
+        subs.append("".join(letters[i] for i in f.indices))
+        ops.append(operators[f.name] if f.name in operators
+                   else ucc_resolve_factor(f, tensors, UCC_DIMS))
+    ext = ([i for i in term.free_indices if i.space == "vir"]
+           + [i for i in term.free_indices if i.space == "occ"])
+    out = np.einsum(",".join(subs) + "->" + "".join(letters[i] for i in ext),
+                    *ops, optimize=True)
+    return out * float(term.coeff)
+
+
+def _ucc_build_operators(specs, tensors):
+    built = {}
+    for spec in specs:          # dependency-ordered, like the emitter's builders
+        arr = None
+        for dt in spec.definition_terms:
+            part = _ucc_eval(dt, tensors, built)
+            ext = ([i for i in dt.free_indices if i.space == "vir"]
+                   + [i for i in dt.free_indices if i.space == "occ"])
+            pos = {idx: k for k, idx in enumerate(ext)}
+            assert set(pos) == set(spec.indices), spec.name
+            part = np.transpose(part, [pos[i] for i in spec.indices])
+            arr = part if arr is None else arr + part
+        built[spec.name] = arr
+    return built
+
+
+def _ucc_disagreements(method, mutate=None):
+    """(bad, rewritten, total) for the production UCC composition:
+    `ucc_adapt_equations` -> `factorize_equations(spatial=False,
+    merge_transposes=True)`, exactly what `print_cpp_planck` runs."""
+    from ccgen.optimization.factorize import factorize_equations
+    from ccgen.spin import ucc_adapt_equations
+    from ccgen.tests.residual_eval import ucc_random_tensors
+
+    eqs = ucc_adapt_equations(
+        generate_cc_equations(method, engine="diagram", canonical_fock=True))
+    rewritten, specs = factorize_equations(
+        eqs, spatial=False, merge_transposes=True)
+    specs = list(specs or [])
+    if mutate is not None:
+        specs = mutate(specs)
+    tensors = ucc_random_tensors(UCC_DIMS["noa"], UCC_DIMS["nva"],
+                                 UCC_DIMS["nob"], UCC_DIMS["nvb"], seed=0)
+    built = _ucc_build_operators(specs, tensors)
+    bad, n_rewritten, total = [], 0, 0
+    for target, terms in eqs.items():
+        assert len(terms) == len(rewritten[target]), target
+        for t, r in zip(terms, rewritten[target]):
+            total += 1
+            if any(f.name in built for f in r.factors):
+                n_rewritten += 1
+            src, ksrc = _canon(t, _ucc_eval(t, tensors, {}))
+            got, kgot = _canon(r, _ucc_eval(r, tensors, built))
+            if ksrc != kgot or src.shape != got.shape:
+                bad.append((target, t, f"layout {kgot} != {ksrc}"))
+                continue
+            d = float(np.linalg.norm(src - got))
+            if d > 1e-10 * max(1.0, float(np.linalg.norm(src))):
+                bad.append((target, t, f"||diff|| = {d:.3e}"))
+    return bad, n_rewritten, total
+
+
+class UCCRewritePreservesValueTests(unittest.TestCase):
+    """The derived route on spin-blocked UCC terms, with transpose merging on.
+
+    UCC factor names carry their spin block (`v_abab`), which
+    `tensor_symmetries` does not list, so merging treats them as opaque: it
+    can miss a merge, never make one across blocks. This gate is what checks
+    that claim, and the rest of the rewrite, by value."""
+
+    def _assert_clean(self, method, min_rewritten):
+        bad, n_rewritten, total = _ucc_disagreements(method)
+        self.assertGreater(n_rewritten, min_rewritten,
+                           f"{method}: too few rewritten terms -- gate is vacuous")
+        self.assertEqual(
+            bad, [],
+            f"UCC {method}: {len(bad)}/{total} terms do not reproduce:\n"
+            + "\n".join(f"  {tg} {why}: {t!r}" for tg, t, why in bad[:5]))
+
+    def test_ccsd_rewrite_is_value_preserving(self):
+        self._assert_clean("ccsd", 200)
+
+    def test_ccsdt_rewrite_is_value_preserving(self):
+        self._assert_clean("ccsdt", 1500)
+
+    def test_gate_catches_a_transposed_operator(self):
+        """Mutation control: swap two same-spin, same-space slots of one
+        operator's declared order, so every shape stays legal and only the
+        values move. The gate must report it as a disagreement."""
+        from ccgen.spin import ucc_term_index_spins
+
+        def swap_one(specs):
+            for k, s in enumerate(specs):
+                idx = list(s.indices)
+                spin = ucc_term_index_spins(s.definition_terms[0])
+                for a in range(len(idx)):
+                    for b in range(a + 1, len(idx)):
+                        if (idx[a].space == idx[b].space
+                                and spin[idx[a].name] == spin[idx[b].name]):
+                            idx[a], idx[b] = idx[b], idx[a]
+                            import dataclasses
+                            specs = list(specs)
+                            specs[k] = dataclasses.replace(s, indices=tuple(idx))
+                            return specs
+            raise AssertionError("no operator with two same-space slots")
+        bad, _, _ = _ucc_disagreements("ccsd", mutate=swap_one)
+        self.assertGreater(len(bad), 0, "a transposed operator went unnoticed")
+
+
+def _ucc_block(terms, tensors, operators):
+    """Sum of `terms` in one layout, keyed by free-index name (sorted)."""
+    total, key = None, None
+    for t in terms:
+        arr, k = _canon(t, _ucc_eval(t, tensors, operators))
+        assert key in (None, k), (key, k)
+        key = k
+        total = arr if total is None else total + arr
+    return total, key
+
+
+def _apply_group_element(arr, names, mapping):
+    """g(R)[names] = R[mapping(names)], the C++ symmetrize pass's reading."""
+    src = [mapping.get(n, n) for n in names]
+    return np.transpose(arr, [names.index(s) for s in src])
+
+
+def _ucc_fold_disagreements(method, corrupt=None, merge=False, drop=None):
+    """(bad, folded_targets, terms_before, terms_after) for the production UCC
+    composition with the orbit fold: adapt -> fold -> factorize -> symmetrize,
+    compared per block against the unfolded residual.
+
+    ``merge`` (U3b) adds the operand merges `print_cpp_planck` runs after the
+    factorizer (`merge_operand_reads`), and then checks every block, folded
+    or not, since a merge touches all of them; ``drop`` names a block whose
+    first term is removed after merging (mutation control)."""
+    from ccgen.optimization.factorize import factorize_equations, merge_operand_reads
+    from ccgen.optimization.permutation import (
+        fold_external_symmetry, spin_class_group)
+    from ccgen.spin import ucc_adapt_equations
+    from ccgen.tests.residual_eval import ucc_random_tensors
+
+    eqs = ucc_adapt_equations(
+        generate_cc_equations(method, engine="diagram", canonical_fock=True))
+    folded, groups = dict(eqs), {}
+    for target, terms in eqs.items():
+        if terms and terms[0].free_indices:
+            g = spin_class_group(terms[0])
+            if len(g) > 1:
+                folded[target] = fold_external_symmetry(terms, g)
+                groups[target] = list(g)
+    if corrupt is not None:
+        groups = corrupt(groups)
+    rewritten, specs = factorize_equations(
+        folded, spatial=False, merge_transposes=True)
+    if merge:
+        rewritten, specs = merge_operand_reads(rewritten, specs, ucc=True)
+        groups = {t: groups.get(t, [({}, 1)]) for t in eqs
+                  if t != "energy" and eqs[t]}
+    if drop is not None:
+        rewritten = dict(rewritten)
+        rewritten[drop] = rewritten[drop][1:]
+    tensors = ucc_random_tensors(UCC_DIMS["noa"], UCC_DIMS["nva"],
+                                 UCC_DIMS["nob"], UCC_DIMS["nvb"], seed=0)
+    built = _ucc_build_operators(list(specs or []), tensors)
+    bad = []
+    for target, terms in eqs.items():
+        if target not in groups:
+            continue
+        ref, names = _ucc_block(terms, tensors, {})
+        x, xnames = _ucc_block(rewritten[target], tensors, built)
+        assert names == xnames, (target, names, xnames)
+        got = sum(s * _apply_group_element(x, list(names), m)
+                  for m, s in groups[target])
+        d = float(np.linalg.norm(got - ref))
+        if d > 1e-10 * max(1.0, float(np.linalg.norm(ref))):
+            bad.append((target, f"||diff|| = {d:.3e}"))
+    before = sum(len(eqs[t]) for t in groups)
+    after = sum(len(rewritten[t]) for t in groups)
+    return bad, sorted(groups), before, after
+
+
+class UCCMergeTests(unittest.TestCase):
+    """U3b: the operand merges (R2, R2b) on UCC, composed exactly as
+    `print_cpp_planck` runs them (adapt -> fold -> factorize -> merge), every
+    block against the plain residual (docs/CCSD_T_SIZE_SCOPE.md)."""
+
+    def test_ccsd_merge_is_value_preserving(self):
+        bad, targets, before, after = _ucc_fold_disagreements("ccsd", merge=True)
+        self.assertEqual(len(targets), 5)
+        self.assertEqual(bad, [])
+
+    def test_ccsdt_merge_is_value_preserving(self):
+        bad, targets, _, _ = _ucc_fold_disagreements("ccsdt", merge=True)
+        self.assertEqual(len(targets), 9)
+        self.assertEqual(bad, [])
+
+    def test_gate_catches_a_dropped_merged_term(self):
+        bad, _, _, _ = _ucc_fold_disagreements("ccsd", merge=True, drop="doubles_abab")
+        self.assertEqual([t for t, _ in bad], ["doubles_abab"])
+
+
+class UCCOrbitFoldTests(unittest.TestCase):
+    """The UCC external-symmetry fold (docs/CCGEN_UCC_ORBIT_FOLD.md),
+    composed with the derived operators exactly as `print_cpp_planck` runs it.
+    The fixture's amplitudes are antisymmetric within each same-spin class,
+    which is the property the fold's exactness rests on."""
+
+    def test_group_orders_follow_spin_classes(self):
+        from ccgen.optimization.permutation import spin_class_group
+        from ccgen.spin import ucc_adapt_equations
+        eqs = ucc_adapt_equations(generate_cc_equations(
+            "ccsdt", engine="diagram", canonical_fock=True))
+        orders = {t: len(spin_class_group(eqs[t][0]))
+                  for t in eqs if eqs[t] and eqs[t][0].free_indices}
+        self.assertEqual(orders, {
+            "singles_aa": 1, "singles_bb": 1,
+            "doubles_aaaa": 4, "doubles_abab": 1, "doubles_bbbb": 4,
+            "triples_aaaaaa": 36, "triples_aabaab": 4,
+            "triples_abbabb": 4, "triples_bbbbbb": 36})
+
+    def test_ccsd_fold_is_value_preserving(self):
+        bad, targets, before, after = _ucc_fold_disagreements("ccsd")
+        self.assertEqual(targets, ["doubles_aaaa", "doubles_bbbb"])
+        self.assertLess(after, before)
+        self.assertEqual(bad, [])
+
+    def test_ccsdt_fold_is_value_preserving(self):
+        bad, targets, before, after = _ucc_fold_disagreements("ccsdt")
+        self.assertEqual(len(targets), 6)
+        self.assertLess(after, before / 2)
+        self.assertEqual(bad, [])
+
+    def test_gate_catches_a_wrong_sign(self):
+        """Mutation control: flip the sign of one odd element of the
+        order-36 group. The block must go red."""
+        def flip(groups):
+            g = list(groups["triples_aaaaaa"])
+            k = next(i for i, (_m, s) in enumerate(g) if s < 0)
+            g[k] = (g[k][0], 1)
+            return {**groups, "triples_aaaaaa": g}
+        bad, _, _, _ = _ucc_fold_disagreements("ccsdt", corrupt=flip)
+        self.assertEqual([t for t, _ in bad], ["triples_aaaaaa"])

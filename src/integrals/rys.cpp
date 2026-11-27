@@ -1490,6 +1490,251 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
     return eri;
 }
 
+// ─── Public: spherical ERI tensor without the Cartesian one ───────────────────
+
+std::expected<std::vector<double>, std::string> HartreeFock::RysQuad::_compute_2e_spherical(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const std::size_t nbasis_cart,
+    const Eigen::MatrixXd &cart_to_sph,
+    const HartreeFock::IntegralMethod engine,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
+    const double tol_eri)
+{
+    const std::size_t nc = nbasis_cart;
+    const std::size_t ns = static_cast<std::size_t>(cart_to_sph.rows());
+    if (static_cast<std::size_t>(cart_to_sph.cols()) != nc)
+        return std::unexpected("_compute_2e_spherical: cart_to_sph.cols() does not match nbasis_cart");
+
+    std::vector<const HartreeFock::ContractedView *> ao_views;
+    const std::vector<RysShellGroup> groups = shell_groups_from_pairs(shell_pairs, nc, ao_views);
+    const std::size_t ngroups = groups.size();
+
+    // Each shell's block of C: its Cartesian columns map to a contiguous run of
+    // spherical rows, in shell order. Check that, and that C has no entry
+    // outside these blocks, rather than assume it.
+    struct SphShell
+    {
+        std::size_t first = 0;
+        std::size_t n = 0;
+        Eigen::MatrixXd T; // n × n_components
+    };
+    std::vector<SphShell> sph(ngroups);
+    std::size_t next_row = 0;
+    Eigen::Index nnz_blocks = 0;
+    for (std::size_t g = 0; g < ngroups; ++g)
+    {
+        const auto c0 = static_cast<Eigen::Index>(groups[g].first_ao);
+        const auto ncg = static_cast<Eigen::Index>(groups[g].n_components);
+        std::size_t n_rows = 0;
+        for (std::size_t r = next_row; r < ns; ++r)
+        {
+            if ((cart_to_sph.row(static_cast<Eigen::Index>(r)).segment(c0, ncg).array() != 0.0).any())
+                ++n_rows;
+            else
+                break;
+        }
+        if (n_rows == 0)
+            return std::unexpected("_compute_2e_spherical: a shell has no spherical rows at the expected position");
+        sph[g].first = next_row;
+        sph[g].n = n_rows;
+        sph[g].T = cart_to_sph.block(static_cast<Eigen::Index>(next_row), c0,
+                                     static_cast<Eigen::Index>(n_rows), ncg);
+        nnz_blocks += (sph[g].T.array() != 0.0).count();
+        next_row += n_rows;
+    }
+    if (next_row != ns || nnz_blocks != (cart_to_sph.array() != 0.0).count())
+        return std::unexpected("_compute_2e_spherical: cart_to_sph is not block-diagonal by shell");
+
+    // Same per-component Schwarz screen as the Cartesian builds, plus each
+    // shell pair's maximum so a fully screened quartet is skipped whole.
+    const std::vector<double> Q = HartreeFock::Screening::schwarz_table_hgp(shell_pairs, nc, nullptr);
+
+    struct GroupPair
+    {
+        std::size_t a;
+        std::size_t b;
+        double q_max;
+    };
+    std::vector<GroupPair> group_pairs;
+    group_pairs.reserve(ngroups * (ngroups + 1) / 2);
+    for (std::size_t sa = 0; sa < ngroups; ++sa)
+        for (std::size_t sb = sa; sb < ngroups; ++sb)
+        {
+            double q_max = 0.0;
+            for (std::size_t ca = 0; ca < groups[sa].n_components; ++ca)
+                for (std::size_t cb = 0; cb < groups[sb].n_components; ++cb)
+                    q_max = std::max(q_max, Q[(groups[sa].first_ao + ca) * nc + groups[sb].first_ao + cb]);
+            group_pairs.push_back({sa, sb, q_max});
+        }
+    const std::size_t ngp = group_pairs.size();
+
+    std::vector<double> eri(ns * ns * ns * ns, 0.0);
+    const std::size_t ns2 = ns * ns, ns3 = ns2 * ns;
+
+    // MPI: each rank takes every size-th bra shell pair; the allreduce(SUM)
+    // after the loop merges the disjoint canonical sets. Same scheme as the
+    // Cartesian builds.
+    const int mpi_rank = HartreeFock::Mpi::rank();
+    const int mpi_size = HartreeFock::Mpi::size();
+
+#pragma omp parallel
+    {
+        std::vector<double> cart, t1, t2;
+
+#pragma omp for schedule(dynamic, 8)
+        for (std::size_t bra = 0; bra < ngp; ++bra)
+        {
+            if (mpi_size > 1 &&
+                static_cast<int>(bra % static_cast<std::size_t>(mpi_size)) != mpi_rank)
+                continue;
+            const std::size_t sa = group_pairs[bra].a, sb = group_pairs[bra].b;
+            const RysShellGroup &gA = groups[sa];
+            const RysShellGroup &gB = groups[sb];
+            const std::size_t nA = gA.n_components, nB = gB.n_components;
+
+            // A canonical element (i <= j, k <= l, (i,j) <=_lex (k,l)) has
+            // shell(k) >= shell(i), but when shell(k) == shell(i) the ket shell
+            // pair can precede the bra pair (e.g. (P1 P2 | P1 P1) holds
+            // (3,6|4,4)). So start at the first pair (sa, sa) and let the
+            // element filter below pick the canonical ones: each element has
+            // exactly one owning quartet.
+            for (std::size_t ket = bra - (sb - sa); ket < ngp; ++ket)
+            {
+                if (group_pairs[bra].q_max * group_pairs[ket].q_max < tol_eri)
+                    continue;
+                const std::size_t sc = group_pairs[ket].a, sd = group_pairs[ket].b;
+                const RysShellGroup &gC = groups[sc];
+                const RysShellGroup &gD = groups[sd];
+                const std::size_t nC = gC.n_components, nD = gD.n_components;
+                const HartreeFock::ContractedView *const *vA = ao_views.data() + gA.first_ao;
+                const HartreeFock::ContractedView *const *vB = ao_views.data() + gB.first_ao;
+                const HartreeFock::ContractedView *const *vC = ao_views.data() + gC.first_ao;
+                const HartreeFock::ContractedView *const *vD = ao_views.data() + gD.first_ao;
+
+                // ── Cartesian block [a][b][c][d], the same kernels as _compute_2e ──
+                cart.assign(nA * nB * nC * nD, 0.0);
+                const auto total_L = [](const HartreeFock::ContractedView &v)
+                { return v._cartesian[0] + v._cartesian[1] + v._cartesian[2]; };
+                HartreeFock::IntegralMethod quartet_engine = engine;
+                if (engine == HartreeFock::IntegralMethod::Auto)
+                    quartet_engine = _auto_engine(total_L(*vA[0]) + total_L(*vB[0]),
+                                                  total_L(*vC[0]) + total_L(*vD[0]));
+                if (quartet_engine == HartreeFock::IntegralMethod::HeadGordonPople)
+                    HartreeFock::HeadGordonPople::_contracted_eri_block_hoisted_views(
+                        vA, nA, vB, nB, vC, nC, vD, nD, kernel, omega, cart.data());
+                else if (quartet_engine == HartreeFock::IntegralMethod::RysQuadrature)
+                    HartreeFock::RysQuad::_contracted_eri_block_hoisted_views(
+                        vA, nA, vB, nB, vC, nC, vD, nD, kernel, omega, cart.data());
+                else
+                {
+                    std::size_t idx = 0;
+                    for (std::size_t a = 0; a < nA; ++a)
+                        for (std::size_t b = 0; b < nB; ++b)
+                        {
+                            const HartreeFock::ShellPair spAB(*vA[a], *vB[b]);
+                            for (std::size_t c = 0; c < nC; ++c)
+                                for (std::size_t d = 0; d < nD; ++d, ++idx)
+                                {
+                                    const HartreeFock::ShellPair spCD(*vC[c], *vD[d]);
+                                    const int *lA = vA[a]->_cartesian.data(), *lB = vB[b]->_cartesian.data();
+                                    const int *lC = vC[c]->_cartesian.data(), *lD = vD[d]->_cartesian.data();
+                                    cart[idx] = HartreeFock::ObaraSaika::_contracted_eri_elem(
+                                        spAB, spCD, lA[0], lA[1], lA[2], lB[0], lB[1], lB[2],
+                                        lC[0], lC[1], lC[2], lD[0], lD[1], lD[2], kernel, omega);
+                                }
+                        }
+                }
+                // Per-component screen, as the Cartesian tensor applies it.
+                {
+                    std::size_t idx = 0;
+                    for (std::size_t a = 0; a < nA; ++a)
+                        for (std::size_t b = 0; b < nB; ++b)
+                        {
+                            const double qab = Q[(gA.first_ao + a) * nc + gB.first_ao + b];
+                            for (std::size_t c = 0; c < nC; ++c)
+                                for (std::size_t d = 0; d < nD; ++d, ++idx)
+                                    if (qab * Q[(gC.first_ao + c) * nc + gD.first_ao + d] < tol_eri)
+                                        cart[idx] = 0.0;
+                        }
+                }
+
+                // ── Four one-index transforms with the shells' C blocks ──
+                const SphShell &pA = sph[sa], &pB = sph[sb], &pC = sph[sc], &pD = sph[sd];
+                const std::size_t mA = pA.n, mB = pB.n, mC = pC.n, mD = pD.n;
+                // d -> s: t1[a][b][c][s]
+                t1.assign(nA * nB * nC * mD, 0.0);
+                for (std::size_t abc = 0; abc < nA * nB * nC; ++abc)
+                    for (std::size_t s = 0; s < mD; ++s)
+                    {
+                        double acc = 0.0;
+                        for (std::size_t d = 0; d < nD; ++d)
+                            acc += pD.T(s, d) * cart[abc * nD + d];
+                        t1[abc * mD + s] = acc;
+                    }
+                // c -> r: t2[a][b][r][s]
+                t2.assign(nA * nB * mC * mD, 0.0);
+                for (std::size_t ab = 0; ab < nA * nB; ++ab)
+                    for (std::size_t r = 0; r < mC; ++r)
+                        for (std::size_t c = 0; c < nC; ++c)
+                        {
+                            const double t = pC.T(r, c);
+                            if (t == 0.0)
+                                continue;
+                            for (std::size_t s = 0; s < mD; ++s)
+                                t2[(ab * mC + r) * mD + s] += t * t1[(ab * nC + c) * mD + s];
+                        }
+                // b -> q: t1[a][q][r][s] (reused)
+                const std::size_t mCD = mC * mD;
+                t1.assign(nA * mB * mCD, 0.0);
+                for (std::size_t a = 0; a < nA; ++a)
+                    for (std::size_t q = 0; q < mB; ++q)
+                        for (std::size_t b = 0; b < nB; ++b)
+                        {
+                            const double t = pB.T(q, b);
+                            if (t == 0.0)
+                                continue;
+                            for (std::size_t rs = 0; rs < mCD; ++rs)
+                                t1[(a * mB + q) * mCD + rs] += t * t2[(a * nB + b) * mCD + rs];
+                        }
+                // a -> p, scattered as it is formed: only canonical elements
+                // (q >= p, s >= r, (r,s) >=_lex (p,q)), each with its 8
+                // permutations, so the tensor is exactly symmetric. Distinct
+                // canonical shell quartets own disjoint elements, so plain
+                // stores do not race.
+                for (std::size_t p = 0; p < mA; ++p)
+                    for (std::size_t q = 0; q < mB; ++q)
+                    {
+                        const std::size_t i = pA.first + p, j = pB.first + q;
+                        if (j < i)
+                            continue;
+                        for (std::size_t r = 0; r < mC; ++r)
+                            for (std::size_t s = 0; s < mD; ++s)
+                            {
+                                const std::size_t k = pC.first + r, l = pD.first + s;
+                                if (l < k || k < i || (k == i && l < j))
+                                    continue;
+                                double val = 0.0;
+                                for (std::size_t a = 0; a < nA; ++a)
+                                    val += pA.T(p, a) * t1[(a * mB + q) * mCD + r * mD + s];
+                                eri[i * ns3 + j * ns2 + k * ns + l] = val;
+                                eri[j * ns3 + i * ns2 + k * ns + l] = val;
+                                eri[i * ns3 + j * ns2 + l * ns + k] = val;
+                                eri[j * ns3 + i * ns2 + l * ns + k] = val;
+                                eri[k * ns3 + l * ns2 + i * ns + j] = val;
+                                eri[l * ns3 + k * ns2 + i * ns + j] = val;
+                                eri[k * ns3 + l * ns2 + j * ns + i] = val;
+                                eri[l * ns3 + k * ns2 + j * ns + i] = val;
+                            }
+                    }
+            }
+        }
+    }
+
+    HartreeFock::Mpi::allreduce_inplace(eri.data(), eri.size());
+    return eri;
+}
+
 // ─── Public: RHF 2e Fock (direct SCF) ────────────────────────────────────────
 
 Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock(
@@ -1803,3 +2048,8 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_auto_direct(
     return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term, auto_block_kernel(), density_screen);
 }
 
+
+void HartreeFock::RysQuad::release_thread_scratch() noexcept
+{
+    g_rys_scratch = RysScratch{};
+}

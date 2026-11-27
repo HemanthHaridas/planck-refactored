@@ -9,9 +9,11 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-11-16 (rewrite: RI-JK answered and removed from the
-priority list; libecpint repinned to upstream, #82 filed; PySCF #3598 merged
-upstream).
+Last updated: 2026-11-20 (restricted and UHF CCSD(T); RKS DH
+gradient refuses frozen-core and RI PT2; CI is not blocked on the
+shared-objects change). Previous rewrite 2026-11-16:
+RI-JK answered and removed from the priority list; libecpint repinned to
+upstream, #82 filed; PySCF #3598 merged upstream.
 
 This is the canonical list of what remains. What is done lives in
 `vault/Status/Completion.md`. Each item names its scope or answer doc, which
@@ -36,8 +38,13 @@ teaching code) reorders it.
 
 **Necessary.** Without these the product is broken or misleading.
 
-1. **CCSD(T).** Not implemented: CCSD, CCSDT and higher exist, perturbative
-   triples do not. It is the benchmark method users ask for first. Scope: `docs/CCSD_T_SCOPE.md`.
+1. **CCSD(T).** It is the benchmark method users ask for first.
+   Restricted and UHF (T) landed 2026-11-20, batched and threaded, and equal
+   PySCF in Cartesian and spherical bases. Since 2026-11-22 `ccsd(t)` runs
+   the generated spatial RCCSD (48–59× faster than the spin-orbital one).
+   Remaining: the size ladder (where the generated RCCSD and UCCSD stop),
+   and ROHF-(T).
+   Scope: `docs/CCSD_T_SCOPE.md`.
 2. **SCF robustness on medium systems.** 32-water RKS hits `max_cycles`
    (§2, DFT). Scope: `docs/SCF_CONVERGENCE_MEDIUM_SYSTEMS_SCOPE.md`.
 3. **Meta-GGA**, at least SCF energies with a by-name refusal everywhere else,
@@ -60,7 +67,10 @@ teaching code) reorders it.
    Its noise does not grow from naphthalene to anthracene (STO-3G).
    Next: S4 (frequency noise), S5 (cost at size). Scope:
    `docs/DFT_DEFAULT_GRID_SCOPE.md`.
-5. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
+5. **CI running again** (§3). Next: measure the build's disk use (CI scope
+   step 1). Runner cleanup, cached external projects and `-g0` may be enough
+   on their own; the shared-objects change is the durable fix, not a
+   prerequisite. Scope: `docs/CI_SCOPE.md`.
 RI-JK for routine HF and DFT is no longer on this list: it is answered
 (`docs/RI_JK_ROUTINE.md`).
 
@@ -102,11 +112,6 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   kcal/mol; a C² blend over |s − 1| < 1e-2 moves them by ≤ 2e-3. Also:
   libxc 7.1.0 fixed a second wPBEh seam at small s (`EGscut`, issue #627),
   which Planck's 2023 pin lacks.
-
-- **libecpint thread safety upstream** (robashaw/libecpint#82, filed
-  2026-11-16). Since #78 a shared `ECPIntegral` races; Planck builds one per
-  thread, so nothing here depends on the outcome. Follow the issue; if
-  upstream restores re-entrant `const` methods, no change is needed.
 
 - **PySCF's DFT gradient is wrong on ECP atoms.** `grad/rks.py`
   `grids_response_becke` looks up Bragg radii by `atom_charges()` (Z − n_core).
@@ -163,6 +168,10 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   - Not covered: range-separated DH gradients, solvent, SCS/DOS spin scaling,
     meta-GGA, frozen-core or RI PT2 in the gradient, DH TDDFT, and spherical
     DH gradients (refused by `water_rks_b2plyp_gradient_spherical_rejected`).
+    Frozen-core and RI PT2 are refused by name for RKS and UKS since
+    2026-11-20 (`water_rks_b2plyp_{frozen,ri}_gradient_rejected_sto3g`).
+  - `mp2_level_shift` is parsed but nothing reads it: no MP2, UMP2 or DH
+    kernel applies it. Either wire it or delete the keyword.
 - **The default grid is not qualified for differentiated-grid properties.**
   `legacy` failed the UKS DH rotational-covariance check (2.2e-5 Ha/Bohr
   against a 2e-6 limit), where `g4-3-v4` passes (1.1e-7). Migrating the
@@ -188,8 +197,108 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
 
 ### HF and post-HF
 
-- **CCSD(T) is not implemented.** The CC stack has CCSD, CCSDT, CCSDTQ and
-  arbitrary order, but no perturbative triples correction.
+- **CCSD(T): restricted and UHF are done** (`docs/CCSD_T_SCOPE.md`).
+  `correlation ccsd(t)` and `uccsd(t)` equal PySCF in Cartesian and
+  spherical bases, with batched, threaded (T). `uccsd(t)` needs
+  `-DPLANCK_CC_UCC=ON`. System size is now limited by the CCSD, not by (T).
+  Open:
+  - ROHF-(T), after semicanonical ROHF-CC;
+  - size (`docs/CCSD_T_SIZE_SCOPE.md`). Memory binds, not the CC algebra.
+    Water dimer / cc-pVTZ `ccsd(t)` peak footprint 5.5 → 1.43 GB on this
+    8 GiB machine, energy identical. The changes: one SCF tensor copy,
+    batched `transform_eri`, (T) reusing the CCSD's blocks, re-exec with
+    macOS `MallocLargeCache=0` (libmalloc reused freed large blocks whole),
+    freed ERI thread scratch, a spherical tensor built per shell quartet
+    (never the Cartesian one), the CC solver moving its state instead of
+    copying every integral block, and the AO tensor freed before the CC
+    iterations. Each phase now holds one large object: the ns⁴ AO tensor
+    (SCF) or v⁴ `vvvv` (CCSD). 7 (ladder re-measure): the dimer energy
+    equals PySCF 2.15 to every digit, but time is now the limit and the
+    gap to PySCF grows with size, CCSD ~2× → 29× and (T) ~10× → 47× from
+    water cc-pVDZ to the dimer in cc-pVTZ (213 / 283 s against 7.4 / 6.0 s).
+    8: the restricted (T) computes W once per virtual triple for all six
+    orderings (24 distinct contractions instead of 144 evaluations), (T)
+    5–6× faster: dimer 283 → 49.9 s, 8× behind PySCF; whole run 278 s.
+    Next: 9 CCSD time (`docs/CCSD_T_SIZE_SCOPE.md`).
+    The gap was more arithmetic times slower arithmetic. Generator changes
+    closed the arithmetic to 1.4× PySCF (a j ≥ i half range, a
+    common-operand merge on t2 and on v) and most of the rate by lowering
+    every large binary contraction to an Eigen GEMM
+    (`src/post_hf/cc/gemm_contract.h`). Dimer cc-pVTZ CCSD per iteration
+    11.8 → 0.85 s, 2.7× PySCF, and the ratio no longer grows with the basis;
+    whole `ccsd(t)` 278 → 81 s. Step 10 halved the (T) blocks by t2
+    symmetry and runs the `t2 · ovvv` blocks as small GEMMs per triple:
+    (T) 49.8 → 8.25 s. Step 1a (2026-11-25) made every (T) block a GEMM
+    on contiguous layouts built once per (T): (T) 4.5–4.8 s, faster than
+    PySCF's 6.0 s; whole run ~37 s. R3b (staircase GEMMs on j ≥ i) done:
+    CCSD 1.04–1.08× per iteration. UCC (1c): the GEMM lowering reaches
+    UCC, water⁺ cc-pVTZ UCC CCSD 0.339 → 0.099 s per iteration (with U1,
+    U2 the batched t1·vvvv builders, U3a each intermediate built once per
+    residual evaluation, U3b the restricted merges per spin block); the GEMM
+    helper's parallel regions now run serially on tiny calls, which also
+    made the small CC gates 3–6× faster. UCC (T) as shared elementary GEMMs on prepared layouts (U4): (T) 1.33 → 0.19 s, whole run ~5.0 → 3.8 s. The U series is done; the UCC run is now 46 % CCSD (half of it building intermediates), 33 % spin-block ERI preparation, 15 % SCF, 5 % (T). The half range
+    does not apply to UCC (the orbit fold already covers it).
+    Open, in order: R3c
+    Accelerate behind the helper (2.5–4× on the GEMMs; B1 build decision),
+    R2c shared builder combinations, R4 re-measure. The hand-written
+    fallback is not justified.
+  - CCSD[T], CCSDT(Q), CCSDTQ(P) and the Λ variants
+    (`docs/CCSDT_Q_SCOPE.md`). The non-Λ projections generate in ccgen
+    today; (Q) is limited by the generated CCSDT's cost, and Λ needs new
+    ccgen machinery. The non-Λ steps wait for MRCC access (2026-11-26):
+    their gates need a CFOUR or MRCC value.
+  - Λ-CC (`docs/CC_LAMBDA_SCOPE.md`): Λ from differentiating
+    L = E + Σ λ R, any rank, RCC/UCC/GCC; the base for CC densities,
+    ΛCCSD(T), CCSDT(Q)_Λ and analytic CC gradients.
+    - Done:
+      - Λ and unrelaxed RDMs in Python, PySCF-gated;
+      - Λ residual kernels in Planck, gated against the Python residual
+        (RCC ranks 2–4, UCC 2–3);
+      - the Λ solver (`cc_lambda`), RCC and UCC, PySCF-gated
+        (`water_rccsd_lambda_631g`, `oh_uccsd_lambda_631g`);
+      - generated CC kernels compile in shards (`planck_cc_generated`), so
+        rank 4 with UCC builds in 8 GiB.
+    - Open:
+      - a rank-4 Λ regression case;
+      - λ in the `.ccamp`;
+      - density kernels;
+      - dipole and natural orbitals in the `.hfchk`.
+  - CC2, CC3, CCn and CCSDT-n (`docs/CC_APPROXIMATE_MODELS_SCOPE.md`): one
+    per-term perturbation-order filter in ccgen; worth building with an
+    excited-state CC scope. Its step 0 is a naming defect today: `ccN` /
+    `uccN` mean rank N, so `cc3` runs full CCSDT. Spelled rank names now
+    exist on both routes (`PostHF::RCCGEN` / `UCCGEN`, one keyword table);
+    left are migrating seven inputs and refusing `ccN` (user decision).
+  - **Generated RCCSDT: reading amplitudes through a fixed-rank view made
+    it 5–6× faster per iteration on one thread** (`docs/CCGEN_GENERATED_CC_COST.md`).
+    Hot nests read t2/t3 as `t3({...})`, a runtime-rank offset loop with
+    the index array rebuilt in memory on every read: about 40 instructions
+    per multiply-add. The emitter now binds every amplitude as
+    `fixed_rank_view<N>` (`src/post_hf/cc/common.h`) and emits
+    `t2(i, j, a, b)`. Iterations and energies are bitwise unchanged; all 9
+    generated CC regression cases pass. On an 8-rung ladder, generated is
+    1.4–2.3× the hand-written backend per iteration on one thread (was
+    2.2–5.1×; ratio fit o^0.38 · v^−0.32, LOO 11 %), and faster
+    wall-clock at four threads on every rung but CH4 (2.9–4.2× from
+    H2O/6-31G up). A 1.0e-8 Eh gap on C2H2 was the
+    hand-written solver stopping early (a fixed 1e-6 step tolerance let
+    |dE| alone decide); it now uses `tol_density`, and the routes agree to
+    ≤ 4e-10 (C2H4 1.7e-9, convergence noise). Open: re-run the ladder's
+    hand-written timings (it now takes more iterations), and its residual
+    plateaus near 1.7e-10. The registry's `-O1`
+    pin was measured and stays: `-O3` gains 1.15–1.23× for an ~21 min
+    compile.
+    - Before this, generated RCCSDT was 1.3–2.6× the hand-written one
+      wall-clock at 4 threads (within 2× on 6 of 8 rungs) and about 5.7×
+      on one thread; CH4 was 19× at 4 threads. Four fixes got it there:
+      every residual term binary (the emit path had kept matching the
+      retired route's seeded operators, leaving 112 terms n-ary), threaded
+      builders, the triples residual once per aab symmetry orbit, and
+      factored builder bodies (M3.0 had never reached the production
+      emit). The per-iteration ratio went from o^0.78 · v^−0.24 to
+      o^0.11 · v^−0.63, so the gap no longer grows with size.
+    - Also open: whether this lands, and the default `ccsdt` routing of a
+      dressed build.
 - **ROHF:** RMP2/UMP2, coupled cluster, stability, PCM and SOSCF reject ROHF.
   SOSCF and stability need new orbital-response machinery for the effective
   Roothaan Fock, which does not exist in the tree. ROHF CASSCF and RASSCF
@@ -257,8 +366,8 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   break silently (three on 2026-11-07). Plan: one static `planck_core` plus
   a small `planck_dft`. `USE_OPENMP`, `USING_Libxc`, `USE_MPI` and the
   `PLANCK_CC_*` options currently vary per target and decide what can be
-  shared. `planck-mpi` also omits two `PLANCK_CC_*` options the other
-  binaries define; check whether that was intended.
+  shared. `planck-mpi` now takes `hartree-fock`'s CC definitions from one
+  list (it lacked UCC and dressing until 2026-11-25, unintended).
 - **No build-and-test CI runs, because the runners ran out of disk.** The
   "CMake on multiple platforms" workflow
   (`.github/workflows/cmake-multi-platform.yml`) is `disabled_manually`; its
@@ -266,8 +375,9 @@ further post-HF ghost-atom checks; RI under MPI step M2 (distribute the
   since #181 it builds every target in two `PLANCK_CC_MAXORDER` jobs, so
   re-enabling it as it stands would fail the same way. The workflow fixes in
   #181 (build every target, `BASIS_PATH` for every test) have therefore never
-  executed on CI. **Blocked on** cutting the build's disk use, which the
-  shared-objects item above does by removing the duplicate objects. A first
+  executed on CI. It needs the build's disk use cut: first measure it, then
+  try runner cleanup, cached external projects and `-g0` (`docs/CI_SCOPE.md`
+  steps 1–2); the shared-objects item above is the durable fix. A first
   run is also the first Linux build of simple-dftd3 with gfortran. The
   `PLANCK_LICENSE` secret it needs is set. "Callgraph Profiling" hit the same
   limit on the 2026-11-07 `devel` push and is disabled too.
@@ -347,6 +457,19 @@ None of these blocks correctness. Take each up only with a current profile.
   memory strategy, not a prerequisite for it. RI work is split across ranks
   with the data replicated (M1, 2026-11-17); distributing the 3-center
   tensor (M2) is open: `docs/RI_MPI_SCOPE.md`.
+  - **CC under MPI** (`docs/CC_MPI_SCOPE.md`). Every rank currently runs
+    the full CC redundantly. In order:
+    - M0: (T) across ranks; bitwise equal to serial through owned slots.
+      (T) is ~21 % of the water dimer cc-pVTZ run now, so it pays.
+    - M1: split the generated CCSD residual by outer index.
+    - M2: split the memory; only once a single node is saturated.
+
+    Both prerequisites are met (spatial RCCSD, threaded generated kernels);
+    RI is not needed while time, not memory, binds.
+    `planck-mpi` has `uccsd(t)` since 2026-11-25 (same CC definitions as
+    `hartree-fock`), and `tests/mpi_smoke_compare.py` compares the CC
+    totals; baseline gates `{water_rccsd_t,oh_uccsd_t}_631g_mpi_smoke`.
+    Order and status: `docs/CC_REMAINING_WORK_HANDOFF.md`.
 - **CASSCF** (`docs/CASSCF_PERFORMANCE.md`). Stopped at 1.3× behind PySCF at
   water cc-pVTZ C2v, which was accepted. Leftovers, only with a new target:
   re-profile cc-pVTZ C2v, a better relaxed-solve preconditioner, and the RI
@@ -403,12 +526,13 @@ None of these blocks correctness. Take each up only with a current profile.
     3.14 % more mean wall time. It treated a symptom of defect 1 above;
     after the rounding fix no parent is below one walker, so the option has
     no effect and can be removed.
-- **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
-  `docs/CCGEN_KERNEL_PERFORMANCE.md`):
+- **ccgen generated kernels** (`docs/CCGEN_GENERATED_CC_COST.md`). Threading has been on by default
+  since 2026-11-20 (`PLANCK_CC_OMP_COLLAPSE`, default 3):
   - Re-profile the generated production configuration, separating
     per-iteration cost from iteration count.
   - Measure rank 4 on its own, including the registry `-O1` pin. Rank 3 is
-    not a proxy.
+    not a proxy. Threaded rank 4 is bitwise correct, but slower on
+    Be/STO-3G (thousands of short nests); time it on a system that matters.
   - Extend occupied-size and working-set coverage if cache effects matter.
   - Confirm the actual route for new fixtures: the determinant backstop
     belongs to `tensor_backend.cpp` only.
@@ -416,8 +540,17 @@ None of these blocks correctness. Take each up only with a current profile.
 ## 6. ccgen
 
 - UCC: `wick`-engine coverage and a durable amplitude-antisymmetry gate.
-- O6: spin-tag-aware operator reuse and dressing, with numeric UCC
-  validation.
+- **Derived operators on UCC (O6), wired 2026-11-22**
+  (`docs/CCGEN_UNRESTRICTED_CC.md`, "the derived operators reach UCC"). A
+  dressed build now dresses the UCC emit too, and the factorizer's UCC output
+  is value-gated (`UCCRewritePreservesValueTests`); the UCC regression
+  gates pass on the dressed build. The UCC orbit fold landed on top of it
+  (`docs/CCGEN_UCC_ORBIT_FOLD.md`). Open:
+  - a timing of dressed against undressed UCC from the same commit;
+  - the order-576 symmetrize pass (rank-4 same-spin quadruples) profiled
+    on a system larger than B/STO-3G;
+  - spin-resolved `tensor_symmetries` entries (`v_aaaa`, `v_abab`), which
+    would add merges.
 - Hand-written tensor-solver DIIS fragility, and a review of the small Be
   rank-4 reference offset before changing its pin.
 - Factorizer: decide whether a canonical tie-break should make factorization

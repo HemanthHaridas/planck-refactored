@@ -24,7 +24,7 @@ So the question's premise — that ccgen tried what CFOUR/MRCC do and it did not
 - `python/ccgen/tests/residual_eval.py` — basis-matched fixtures: `random_tensors` (GCC) / `ucc_closed_shell_tensors(...)[1]` (spatial)
 - `docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md` — the retirement this document questions
 - `docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` — operator granularity, UCC carry-over
-- `docs/CCGEN_KERNEL_SCALING_SCOPE.md` — the unmodelled cost this document's FLOP figures do not capture
+- `docs/CCGEN_GENERATED_CC_COST.md` — the unmodelled cost this document's FLOP figures do not capture
 - `docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md` — the production wiring of the derivation route
 
 ## The two routes
@@ -112,7 +112,7 @@ The payoff grows with rank. The retirement measured only `ccsd`, observed the sa
 
 The merging referred to above is a separate finding with its own answer (`docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md`): the shape key that fixed correctness also over-split operators that are one contraction up to a transpose. Merging them back is exact, costs nothing at the call site (operators are read by index inside the loop nest; no `W` is ever copied), and roughly doubles the spatial payoff.
 
-Every figure here is a FLOP model (`operator_savings` / `build_cost`). It does not price the emitter's contraction order, which `docs/CCGEN_KERNEL_SCALING_SCOPE.md` measured as a scaling defect (21.8x → 50.1x, no plateau) that no current cost model predicts. These are ratios between comparable configurations, not predicted wall-clock.
+Every figure here is a FLOP model (`operator_savings` / `build_cost`). It does not price the emitter's contraction order, which `docs/CCGEN_GENERATED_CC_COST.md` measured as a scaling defect (21.8x → 50.1x, no plateau) that no current cost model predicts. These are ratios between comparable configurations, not predicted wall-clock.
 
 ## Validation strategy that should remain in place
 
@@ -134,12 +134,12 @@ Every figure here is a FLOP model (`operator_savings` / `build_cost`). It does n
 
 This has since happened: `docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md` — originally scope, now itself an answer — records that the route was wired, went red on its first end-to-end energy comparison, and the cause was an invalid ERI symmetry table on the lowering path (the same class of mistake as the 52% recognition defect recorded above). Fixed; CH4 and LiH both match the undressed baseline. The gap turned out to be narrower than it sounded and wider than one flag: there were two emitters sharing exactly one parameter, and production called the other one. W1-W2 landed first (the pipeline takes equations rather than generating them, byte-identical over six configurations; the spatial TU compiles against the real CC headers both merged and un-merged — 59 → 31 builders), leaving W3 as a project-direction decision rather than a technical step.
 
-UCC is a separate matter: the factorizer handles UCC input fine (86 merged operators on `doubles_abab`), but the emitter rejects the spin-blocked manifold names, and the dressed-operator story there is unsound until O6 (see invariant 3 above).
+UCC is a separate matter. The derivation route now reaches the UCC emit too (2026-11-22): the emitter's builders are spin-resolved and the factorizer's UCC output is value-gated (`docs/CCGEN_UNRESTRICTED_CC.md`, "the derived operators reach UCC"). Invariant 3 still holds for recognition: no tag-blind matching.
 
 Leave recognition retired. Nothing in this work touched it. It remains 52% short on Be with five failed fix attempts behind it. Do not read this document as un-retiring dressing — what is shown is that the *derivation* route works; what is not shown is that the *recognition* route is fixable.
 
 ## Remaining architecture concern
 
 - **How CFOUR and MRCC actually factorize their intermediates** is the original question and it is not answered here — it needs literature the repo does not contain. What the repo does carry is a citation about *enumeration*, not factorization: MRCC/CFOUR enumerate diagram topologies canonical by construction rather than deduplicating algebraic terms (Kállay & Surján, JCP 113, 1359 (2000); JCP 115, 2945 (2001), cited in `ccgen/diagram.py`). Whether their intermediates are hand-derived per method or fall out of contraction-order optimization is the open half. It matters less than it did — the answer above stands on ccgen's own measurements, and the practical conclusion (wire the route that works) does not depend on what the other codes do. If someone does establish it, the useful form is a per-code classification: fixed-operator-recognition or structure-derived. If both are structure-derived, that is independent evidence ccgen wired the wrong one of its own two routes.
-- **Whether the operators are correct for UCC** — see invariant 3 above; scoped as O6 in `docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md`.
+- **Whether the operators are correct for UCC** — answered for the derivation route by a UCC value gate (O6 in `docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md`); recognition stays unsound there (invariant 3).
 - **Six selection-model gates need re-deriving.** They assert properties of the savings distribution, which the shape key changed. They are not correctness failures — the value gate is 0/0 throughout — but three of the four distinct kinds need their claim restated rather than their constant loosened. Detail in `docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` (O4.6).

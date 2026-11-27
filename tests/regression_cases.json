@@ -2920,6 +2920,32 @@
    "_note": "RI under MPI: RI CASSCF (fitted core/active Fock through build_ri_fock_rhf, active integrals through transform_eri_ri). The final Total Energy line is compared."
   },
   {
+   "id": "water_rccsd_t_631g_mpi_smoke",
+   "input": "tests/inputs/regression/post_hf/water_rccsd_t_631g.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "post_hf"
+   ],
+   "args": ["--ranks", "2", "3", "--atol", "0", "--timeout", "60"],
+   "expected_exit_code": 0,
+   "_note": "CC under MPI (docs/CC_MPI_SCOPE.md): ccsd(t) is replicated on every rank today, so Total RCCSD(T) Energy must equal serial to every printed digit. The baseline for M0/M1."
+  },
+  {
+   "id": "oh_uccsd_t_631g_mpi_smoke",
+   "input": "tests/inputs/regression/post_hf/oh_uccsd_t_631g.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended",
+    "ucc",
+    "post_hf"
+   ],
+   "requires_build_option": "PLANCK_CC_UCC",
+   "args": ["--ranks", "2", "3", "--atol", "0", "--timeout", "60"],
+   "expected_exit_code": 0,
+   "_note": "CC under MPI: uccsd(t) through planck-mpi, which has the UCC kernels since it takes hartree-fock's CC definitions. Total UCCSD(T) Energy must equal serial to every printed digit."
+  },
+  {
    "id": "h2_rmp2_gradient_smoke",
    "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
    "tags": [
@@ -6086,6 +6112,277 @@
    ]
   },
   {
+   "id": "oh_uccsd_t_631g",
+   "input": "tests/inputs/regression/post_hf/oh_uccsd_t_631g.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 UHF (conv_tol_grad 1e-10) + UCCSD + uccsd_t, cart=True, Planck's GBS: E_UCCSD(T) -75.4625534241, E(T) -0.0005574953. Equal to the last printed digit (2026-11-20).",
+   "tags": [
+    "extended",
+    "ucc",
+    "post_hf"
+   ],
+   "requires_build_option": "PLANCK_CC_UCC",
+   "expected_exit_code": 0,
+   "contains": [
+    "UCCSD(T) :",
+    "Total UCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "uccsd_t_total_energy",
+     "expected": -75.4625534241,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "ccsd_t_oracle_diff",
+     "value": 1e-14
+    },
+    {
+     "type": "metric_lt_metric",
+     "left": "uccsd_t_total_energy",
+     "right": "rhf_total_energy"
+    }
+   ]
+  },
+  {
+   "id": "water_rccsd_lambda_631g",
+   "input": "tests/inputs/regression/post_hf/water_rccsd_lambda_631g.hfinp",
+   "_pyscf_reference": "Spatial Λ equations (ccgen) solved by GMRES at PySCF 2.15.0 RCCSD t, cart=True, Planck's GBS (tests/pyscf/cc_lambda_references.py, 2026-11-26; SCF converged on the orbital gradient too). E_corr -0.1353220151.",
+   "tags": [
+    "core",
+    "post_hf"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Λ converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l1",
+     "expected": 0.004679933426,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l2",
+     "expected": 0.024618462126,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "oh_uccsd_lambda_631g",
+   "input": "tests/inputs/regression/post_hf/oh_uccsd_lambda_631g.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 UCCSD solve_lambda, cart=True, Planck's GBS (tests/pyscf/cc_lambda_references.py, 2026-11-26; UHF converged on the orbital gradient too, which moves λ1 by 7e-9). E_corr -0.0988276827.",
+   "tags": [
+    "extended",
+    "ucc",
+    "post_hf"
+   ],
+   "requires_build_option": "PLANCK_CC_UCC",
+   "expected_exit_code": 0,
+   "contains": [
+    "Λ converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l1_aa",
+     "expected": 0.0029167382498,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l1_bb",
+     "expected": 0.0020198176194,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l2_aaaa",
+     "expected": 0.0038830901861,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l2_abab",
+     "expected": 0.0058001225848,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lambda_rms_l2_bbbb",
+     "expected": 0.002531289884,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uccsd_t_631g",
+   "input": "tests/inputs/regression/post_hf/water_cation_uccsd_t_631g.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 UHF (conv_tol_grad 1e-10) + UCCSD + uccsd_t, cart=True, Planck's GBS: E_UCCSD(T) -75.6836253364, E(T) -0.0006729001. Equal to the last printed digit (2026-11-20).",
+   "tags": [
+    "extended",
+    "ucc",
+    "post_hf"
+   ],
+   "requires_build_option": "PLANCK_CC_UCC",
+   "expected_exit_code": 0,
+   "contains": [
+    "UCCSD(T) :",
+    "Total UCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "uccsd_t_total_energy",
+     "expected": -75.6836253364,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_lt_metric",
+     "left": "uccsd_t_total_energy",
+     "right": "rhf_total_energy"
+    }
+   ]
+  },
+  {
+   "id": "water_rccsd_t_spherical_ccpvdz",
+   "input": "tests/inputs/regression/post_hf/water_rccsd_t_spherical_ccpvdz.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 RCCSD + ccsd_t, cart=False, Planck's GBS: total -76.2431380861, E(T) -0.0030556274. Equal to every printed digit (2026-11-20).",
+   "tags": [
+    "extended",
+    "post_hf",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Total RCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rccsd_t_total_energy",
+     "expected": -76.2431380861,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uccsd_t_spherical_ccpvdz",
+   "input": "tests/inputs/regression/post_hf/water_cation_uccsd_t_spherical_ccpvdz.hfinp",
+   "timeout_s": 600,
+   "_pyscf_reference": "PySCF 2.15.0 UHF + UCCSD + uccsd_t, cart=False, Planck's GBS: total -75.8035962274, E(T) -0.0021313223. Equal to every printed digit (2026-11-20).",
+   "tags": [
+    "extended",
+    "post_hf",
+    "spherical",
+    "ucc"
+   ],
+   "requires_build_option": "PLANCK_CC_UCC",
+   "expected_exit_code": 0,
+   "contains": [
+    "Total UCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "uccsd_t_total_energy",
+     "expected": -75.8035962274,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rccsd_t_sto3g",
+   "input": "tests/inputs/regression/post_hf/water_rccsd_t_sto3g.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 RCCSD + ccsd_t, cart=True, Planck's GBS (parse_gaussian.load): E_CCSD(T) -75.0123539648, E(T) -0.0000673675. Equal to every printed digit (2026-11-20).",
+   "tags": [
+    "smoke",
+    "core",
+    "post_hf"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "RCCSD(T) :",
+    "Total RCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rccsd_t_total_energy",
+     "expected": -75.0123539648,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_lt_metric",
+     "left": "rccsd_t_total_energy",
+     "right": "rhf_total_energy"
+    }
+   ]
+  },
+  {
+   "id": "water_rccsd_t_631g",
+   "input": "tests/inputs/regression/post_hf/water_rccsd_t_631g.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 RCCSD + ccsd_t, cart=True, Planck's GBS (parse_gaussian.load): E_CCSD(T) -76.1203135797, E(T) -0.0009939583. Equal to every printed digit (2026-11-20).",
+   "tags": [
+    "core",
+    "post_hf"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "RCCSD(T) :",
+    "Total RCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rccsd_t_total_energy",
+     "expected": -76.1203135797,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "ccsd_t_oracle_diff",
+     "value": 1e-14
+    },
+    {
+     "type": "metric_lt_metric",
+     "left": "rccsd_t_total_energy",
+     "right": "rhf_total_energy"
+    }
+   ]
+  },
+  {
+   "id": "h2o2_c1_rccsd_t_631g",
+   "input": "tests/inputs/regression/post_hf/h2o2_c1_rccsd_t_631g.hfinp",
+   "_pyscf_reference": "PySCF 2.15.0 RCCSD + ccsd_t, cart=True, Planck's GBS (parse_gaussian.load): E_CCSD(T) -150.9728052008, E(T) -0.0045341491. Equal to every printed digit (2026-11-20).",
+   "tags": [
+    "extended",
+    "post_hf"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "RCCSD(T) :",
+    "Total RCCSD(T) Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rccsd_t_total_energy",
+     "expected": -150.9728052008,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_lt_metric",
+     "left": "rccsd_t_total_energy",
+     "right": "rhf_total_energy"
+    }
+   ]
+  },
+  {
    "id": "water_spherical_ccsd_sto3g",
    "input": "tests/inputs/regression/spherical/water_spherical_ccsd_sto3g.hfinp",
    "_pyscf_reference": "PySCF 2.13.0 RCCSD, cart=False, Planck's GBS: -75.0123316192. Re-pinned 2026-11-07 from Planck's own output (-75.0123310010), which lacked the F_me terms of the Stanton-Gauss doubles equation.",
@@ -7643,6 +7940,38 @@
    "expected_exit_code": 1,
    "contains": [
     "A double-hybrid functional with analytic gradients is not yet supported by planck-dft with basis_type spherical"
+   ]
+  },
+  {
+   "id": "water_rks_b2plyp_frozen_gradient_rejected_sto3g",
+   "input": "tests/inputs/regression/dft/water_rks_b2plyp_frozen_gradient_rejected_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "core",
+    "dft",
+    "double_hybrid"
+   ],
+   "_note": "The RKS DH gradient has no frozen-core terms; before 2026-11-20 it ran and missed its own energy FD by 6.2e-5 Ha/Bohr.",
+   "expected_exit_code": 1,
+   "contains": [
+    "RKS double-hybrid analytic gradients do not support mp2_frozen"
+   ]
+  },
+  {
+   "id": "water_rks_b2plyp_ri_gradient_rejected_sto3g",
+   "input": "tests/inputs/regression/dft/water_rks_b2plyp_ri_gradient_rejected_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "core",
+    "dft",
+    "double_hybrid"
+   ],
+   "_note": "The RKS DH gradient is conventional PT2; before 2026-11-20 RI PT2 ran and missed its own energy FD by 4.8e-7 Ha/Bohr.",
+   "expected_exit_code": 1,
+   "contains": [
+    "RKS double-hybrid analytic gradients do not support mp2_use_ri"
    ]
   },
   {

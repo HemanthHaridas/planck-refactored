@@ -3083,6 +3083,27 @@ namespace DFT::Driver
             return {};
         }
 
+        // The DH gradient Lagrangian (RKS and UKS) is all-active, conventional,
+        // unshifted PT2 with stored T2. Any other PT2 option changes the energy
+        // but not the gradient: frozen core missed its own energy FD by 6.2e-5
+        // Ha/Bohr and RI by 4.8e-7 on water/STO-3G B2PLYP before this check.
+        std::expected<void, std::string> validate_dh_gradient_pt2_options(
+            const HartreeFock::Calculator &calculator, std::string_view label)
+        {
+            const auto &mp2 = calculator._mp2;
+            const char *reason = !mp2.frozen.empty()       ? "mp2_frozen (frozen-core PT2)"
+                                 : mp2.use_ri              ? "mp2_use_ri (RI PT2)"
+                                 : mp2.level_shift != 0.0  ? "mp2_level_shift"
+                                 : !mp2.with_t2            ? "mp2_with_t2 .false."
+                                                           : nullptr;
+            if (reason == nullptr)
+                return {};
+            return std::unexpected(std::format(
+                "{} double-hybrid analytic gradients do not support {}; they require "
+                "all-active conventional unshifted PT2 with stored T2.",
+                label, reason));
+        }
+
         std::expected<void, std::string> validate_workflow_support(
             const HartreeFock::Calculator &calculator,
             const InitializedFunctionals &functionals,const Options &options)
@@ -3153,12 +3174,8 @@ namespace DFT::Driver
             {
                 if (calculator._solvation._model != HartreeFock::SolvationModel::None)
                     return std::unexpected("UKS double-hybrid analytic gradients do not implement solvent response.");
-                if (!calculator._mp2.frozen.empty() || calculator._mp2.use_ri ||
-                    calculator._mp2.level_shift != 0.0 || !calculator._mp2.with_t2)
-                {
-                    return std::unexpected(
-                        "UKS double-hybrid gradients require all-active conventional unshifted PT2 with stored T2.");
-                }
+                if (auto pt2 = validate_dh_gradient_pt2_options(calculator, "UKS"); !pt2)
+                    return pt2;
                 return validate_qualified_uks_dh_grid(calculator);
             }
 
@@ -3176,7 +3193,7 @@ namespace DFT::Driver
                 case HartreeFock::CalculationType::GeomOptFrequency:
                     if (calculator._solvation._model != HartreeFock::SolvationModel::None)
                         return std::unexpected("DFT double-hybrid analytic gradients do not implement solvent response.");
-                    return {};
+                    return validate_dh_gradient_pt2_options(calculator, "RKS");
                 default:
                     break;
                 }

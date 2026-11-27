@@ -10,8 +10,8 @@ under Not done.
 gradients, geometry optimizations, frequencies, TDDFT and stability analysis,
 matching PySCF to ≤1e-9 Eh and ≤3e-8 Ha/Bohr.** H–Kr needed only basis files.
 From Rb onward the core electrons are replaced by the def2 effective core
-potentials (ECPs), computed by libecpint, pinned to upstream `master`
-`436d9c48`, which carries PR #81 (see Findings). The ECP reaches every method through two things only: H_core
+potentials (ECPs), computed by libecpint, pinned to upstream v1.1.0
+(`d7966f19`), which carries PR #81 (see Findings). The ECP reaches every method through two things only: H_core
 (`_compute_potential` = V_ne + U) and the electron count (Z − n_core via
 `total_nuclear_charge()`), plus one gradient term.
 
@@ -179,8 +179,12 @@ engine (merged here and deleted). Build details:
   the PR head on the fork (`loriab/libecpint` `4e8767fc`); upstream deleted
   that branch on merge, so a fresh clone could not fetch it. The repin moved
   no printed energy or gradient (Findings);
-- one `ECPIntegral` per OpenMP thread, because #78 made a shared one race
-  (Findings);
+- repinned to v1.1.0 (`d7966f19`, 2026-11-18) on 2026-11-21: per-thread
+  caches make a shared `ECPIntegral` safe again (#82 closed), L ≤ 8, and no
+  Faddeeva/pugixml dependency. Planck went back to one shared engine. All 31
+  ECP cases pass at four threads and `planck-ecp-gradient-fd` at 1/4/8;
+- from #78 until v1.1.0, one `ECPIntegral` per OpenMP thread, because #78
+  made a shared one race (Findings);
 - built with Planck's C++ compiler, because its API passes `std::vector` and
   a libc++ build would not link against libstdc++;
 - linked into every target, since `ecp.cpp` sits in the shared integral
@@ -356,10 +360,6 @@ from PySCF, the only cases not matching every digit. At Planck's default
 
 ## Not done
 
-- **robashaw/libecpint#82** (filed 2026-11-16): a shared `ECPIntegral` is
-  not thread-safe since #78. Planck does not depend on the outcome (one
-  engine per thread); if upstream restores re-entrant `const` methods,
-  nothing needs to change here.
 - **PySCF's DFT gradient is wrong on ECP atoms**; reporting it upstream is
   `docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`. Planck's reference script
   corrects it at runtime.

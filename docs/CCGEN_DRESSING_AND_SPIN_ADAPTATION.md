@@ -110,7 +110,7 @@ At the time, a larger lever was untouched: the generated kernels' own cost. (A
 "~180×" figure cited here then never recorded its dimensions and did not
 reproduce.) That lever has since been worked: inlined tensor accessors (up to
 206×), operator-build hoisting, transpose merging, the derivation route, and
-OpenMP. See `CCGEN_WHY_GENERATED_IS_SLOW.md` and `CCGEN_KERNEL_PERFORMANCE.md`.
+OpenMP. See `CCGEN_GENERATED_CC_COST.md`.
 
 **Five fix attempts, all falsified**, each passing its own gate and making the energy worse:
 

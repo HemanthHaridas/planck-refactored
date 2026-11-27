@@ -19,12 +19,15 @@
 // occupation-count comparison.
 
 #include "post_hf/cc/cc_amplitude_checkpoint.h"
+#include "post_hf/cc/ccsd_t.h"
 #include "post_hf/cc/generated_arbitrary_runtime.h"
 #include "post_hf/cc/generated_kernel_registry.h"
+#include "post_hf/integrals.h"
 #include "post_hf/cc/solver_arbitrary.h"
 #include "io/logging.h"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <format>
 
@@ -186,6 +189,9 @@ namespace HartreeFock::Correlation::CC
         if (damping < 0.0 || damping > 1.0)
             return std::unexpected("run_uccgen: cc_damping must be between 0 and 1.");
 
+        // The iterations and (T) read only the CC blocks.
+        HartreeFock::Correlation::release_eri(calculator, "UCC[GENERATED] :");
+
         auto solve_res = run_generated_arbitrary_order_iterations(
             std::move(*state_res), *kernels_res,
             std::max(calculator._scf.get_max_cycles(calculator._shells.nbasis()), 100u),
@@ -216,6 +222,33 @@ namespace HartreeFock::Correlation::CC
                 solve_res->metrics.residual_rms));
 
         calculator._correlation_energy = solve_res->correlation_energy;
+
+        // (T) on the converged UCCSD sectors (docs/CCSD_T_SCOPE.md step 3).
+        if (calculator._scf._cc_triples)
+        {
+            if (rank != 2)
+                return std::unexpected(std::format(
+                    "UCCSD(T): (T) follows UCCSD only (rank 2), got rank {}.", rank));
+            const auto t_start = std::chrono::steady_clock::now();
+            auto e_t = compute_uccsd_t_energy(calculator, solve_res->state);
+            if (!e_t)
+                return std::unexpected(e_t.error());
+            const double t_sec = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t_start).count();
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "UCCSD(T) :",
+                std::format("E_corr(UCCSD) = {:.10f}  E(T) = {:.10f}  t={:.3f}s",
+                            solve_res->correlation_energy, *e_t, t_sec));
+            calculator._correlation_energy += *e_t;
+        }
+
+        if (calculator._scf._cc_lambda)
+        {
+            auto lam = solve_lambda_after_t(calculator, solve_res->state,
+                                            make_generated_lambda_kernels(rank, /*ucc=*/true), "UCC :");
+            if (!lam)
+                return std::unexpected("run_uccgen: " + lam.error());
+        }
 
         // U2: persist the converged sector amplitudes, mirroring run_rccgen's
         // write site exactly (same gate, same path derivation, same

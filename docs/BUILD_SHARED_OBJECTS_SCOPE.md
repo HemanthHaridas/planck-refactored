@@ -48,13 +48,16 @@ Four things differ today:
    integral engines and the DFT driver call. So every object that includes
    `mpi_env.h` differs between `planck-mpi` and the rest. Mixing the two
    would be an ODR violation.
-4. **`PLANCK_CC_*` options.** `hartree-fock` and `planck-dft` get
-   `PLANCK_CC_MAXORDER`, `PLANCK_CC_ARBITRARY_LOWER_RANKS` and
-   `PLANCK_CC_DRESS_OPERATORS`; `hartree-fock` also gets `PLANCK_CC_UCC`.
-   **`planck-mpi` omits `PLANCK_CC_DRESS_OPERATORS` and `PLANCK_CC_UCC`**, so
-   with those options ON it compiles a different CC path from the serial
-   binaries. That looks unintended; it should be checked rather than
-   carried into the new structure.
+4. **`PLANCK_CC_*` options.** `hartree-fock` and `planck-mpi` take one
+   list, `_planck_posthf_cc_defs` (`PLANCK_CC_MAXORDER`,
+   `PLANCK_CC_ARBITRARY_LOWER_RANKS`, `PLANCK_CC_DRESS_OPERATORS`,
+   `PLANCK_CC_UCC`). `planck-mpi` used to omit the last two, which was
+   unintended: with them ON it compiled a different CC path and had no
+   `uccsd(t)` (fixed 2026-11-25). `planck-dft` and a few test targets still
+   list the first three by hand and leave `PLANCK_CC_UCC` at 0, which keeps
+   the UCC TUs out of objects that never run them; a shared library would
+   need one value. `PLANCK_CC_SPIN_ADAPT` is a global definition
+   (`add_compile_definitions`), so it does not vary.
 
 Things that do **not** block sharing: `EIGEN_DONT_PARALLELIZE` is global;
 the `-O1` pin on `generated_kernel_registry.cpp` and the version definitions

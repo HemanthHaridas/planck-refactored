@@ -628,10 +628,78 @@ namespace HartreeFock::IO
         return lookup_enum(_table, value, "Invalid SCFType : ");
     }
 
+    // The generated CC routes, one row per keyword: route, excitation rank, and
+    // whether (T) follows the rank-2 CCSD. The parser takes the enum and the
+    // rank from this one table, so the two cannot drift.
+    //
+    // Both routes carry the rank on OptionsSCF::_cc_generated_rank, so a new
+    // rank needs no enum member or driver branch; PLANCK_CC_MAXORDER is the
+    // ceiling, and the registry refuses ranks the build did not generate. UCC
+    // needs -DPLANCK_CC_UCC=ON.
+    //
+    // Spellings, the same rule on both sides: every rank 2-6 has an `X_gen`
+    // name and a numeric `ccN` / `uccN` name. The plain method name means the
+    // generated route only where no hand-written solver claims it (ranks 4-6);
+    // `ccsd`, `ccsdt`, `uccsd`, `uccsdt` stay the hand-written solvers.
+    //
+    // The numeric names mean rank N, not the CC2/CC3/CCn models of the
+    // literature (docs/CC_APPROXIMATE_MODELS_SCOPE.md, step 0).
+    struct GeneratedCCKeyword
+    {
+        HartreeFock::PostHF route;
+        int rank;
+        bool triples;
+    };
+
+    static const GeneratedCCKeyword *generated_cc_keyword(const std::string &value)
+    {
+        using P = HartreeFock::PostHF;
+        static const std::unordered_map<std::string, GeneratedCCKeyword> table = {
+            // Restricted. Rank 2 is built in every build and is the CCSD
+            // behind ccsd(t) (the hand-written RCCSD is spin-orbital and
+            // 48-59x slower, docs/CCSD_T_SIZE_SCOPE.md). Rank 3 needs
+            // -DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON; it gives spatial
+            // amplitudes that can seed a rank-4 run through .ccamp.
+            {"ccsd_gen", {P::RCCGEN, 2, false}},
+            {"cc2", {P::RCCGEN, 2, false}},
+            {"ccsd(t)", {P::RCCGEN, 2, true}},
+            {"ccsdt_gen", {P::RCCGEN, 3, false}},
+            {"cc3", {P::RCCGEN, 3, false}},
+            {"ccsdtq_gen", {P::RCCGEN, 4, false}},
+            {"ccsdtq", {P::RCCGEN, 4, false}},
+            {"cc4", {P::RCCGEN, 4, false}},
+            {"ccsdtqp_gen", {P::RCCGEN, 5, false}},
+            {"ccsdtqp", {P::RCCGEN, 5, false}},
+            {"cc5", {P::RCCGEN, 5, false}},
+            {"ccsdtqph_gen", {P::RCCGEN, 6, false}},
+            {"ccsdtqph", {P::RCCGEN, 6, false}},
+            {"cc6", {P::RCCGEN, 6, false}},
+            // Unrestricted.
+            {"uccsd_gen", {P::UCCGEN, 2, false}},
+            {"ucc2", {P::UCCGEN, 2, false}},
+            {"uccsd(t)", {P::UCCGEN, 2, true}},
+            {"uccsdt_gen", {P::UCCGEN, 3, false}},
+            {"ucc3", {P::UCCGEN, 3, false}},
+            {"uccsdtq_gen", {P::UCCGEN, 4, false}},
+            {"uccsdtq", {P::UCCGEN, 4, false}},
+            {"ucc4", {P::UCCGEN, 4, false}},
+            {"uccsdtqp_gen", {P::UCCGEN, 5, false}},
+            {"uccsdtqp", {P::UCCGEN, 5, false}},
+            {"ucc5", {P::UCCGEN, 5, false}},
+            {"uccsdtqph_gen", {P::UCCGEN, 6, false}},
+            {"uccsdtqph", {P::UCCGEN, 6, false}},
+            {"ucc6", {P::UCCGEN, 6, false}},
+        };
+        const auto it = table.find(value);
+        return it == table.end() ? nullptr : &it->second;
+    }
+
     template <>
     std::expected<HartreeFock::PostHF, std::string>
     map_string_enum<HartreeFock::PostHF>(const std::string &value)
     {
+        if (const GeneratedCCKeyword *g = generated_cc_keyword(value))
+            return g->route;
         static const std::unordered_map<std::string, HartreeFock::PostHF> _table =
             {
                 // All possible combinations
@@ -641,51 +709,6 @@ namespace HartreeFock::IO
                 {"uccsd", HartreeFock::PostHF::UCCSD},
                 {"ccsdt", HartreeFock::PostHF::RCCSDT},
                 {"uccsdt", HartreeFock::PostHF::UCCSDT},
-                // The generated arbitrary-order RCC path. All of these map to the
-                // single RCCSDTQ enum value; the excitation rank is carried
-                // separately on OptionsSCF._cc_generated_rank (set in the
-                // "correlation" handler), so higher ranks need no new enum member
-                // or driver branch — the ceiling is PLANCK_CC_MAXORDER alone.
-                // cc3 / ccsdt_gen route CCSDT through the GENERATED arbitrary path
-                // (not the hand-written run_rccsdt) so it produces spatial
-                // amplitudes and can write a .ccamp seed for a later cc4 run
-                // (Route B). Only usable when the rank-3 companion is built
-                // (-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON).
-                {"cc3", HartreeFock::PostHF::RCCSDTQ},
-                {"ccsdt_gen", HartreeFock::PostHF::RCCSDTQ},
-                {"ccsdtq", HartreeFock::PostHF::RCCSDTQ},
-                {"cc4", HartreeFock::PostHF::RCCSDTQ},
-                {"ccsdtqp", HartreeFock::PostHF::RCCSDTQ},
-                {"cc5", HartreeFock::PostHF::RCCSDTQ},
-                {"cc6", HartreeFock::PostHF::RCCSDTQ},
-                // U5.3b: the generated UNRESTRICTED path. Same shape as the cc3..cc6
-                // spellings above -- one enum value with the excitation rank carried
-                // on _cc_generated_rank -- so higher ranks need no new enum member
-                // and no new driver branch. Requires -DPLANCK_CC_UCC=ON; without it
-                // the registry errors rather than falling back to the RCC bundle.
-                // U5.3c: the method-named aliases now cover ranks 3-4 as the RCC
-                // side does (`ccsdt_gen` / `ccsdtq`), and the numeric spellings run
-                // to 6. The rank-4 ceiling was a hand-written switch in the
-                // registry, not a real limit -- the emitter is rank-generic
-                // (verified: `ucc_independent_blocks(2 * rank)` yields 6 and 7 spin
-                // sectors at excitation ranks 5 and 6; note it takes the AMPLITUDE
-                // rank, which is twice the excitation rank) -- so ucc5/ucc6 follow
-                // PLANCK_CC_MAXORDER exactly as cc5/cc6 do.
-                //
-                // RCC having no rank-2 generated keyword while UCC has `ucc2` is
-                // NOT an asymmetry to fix: RCC's generated_floor is 4 (3 with
-                // PLANCK_CC_ARBITRARY_LOWER_RANKS) because the hand-written solvers
-                // already cover ranks 2-3, so a generated rank-2 RCC path would
-                // have no consumer. `ucc2` exists because U5.4 needs it as the
-                // comparison against hand-written UCCSD.
-                {"ucc2", HartreeFock::PostHF::UCCGEN},
-                {"uccsd_gen", HartreeFock::PostHF::UCCGEN},
-                {"ucc3", HartreeFock::PostHF::UCCGEN},
-                {"uccsdt_gen", HartreeFock::PostHF::UCCGEN},
-                {"ucc4", HartreeFock::PostHF::UCCGEN},
-                {"uccsdtq_gen", HartreeFock::PostHF::UCCGEN},
-                {"ucc5", HartreeFock::PostHF::UCCGEN},
-                {"ucc6", HartreeFock::PostHF::UCCGEN},
                 {"casscf", HartreeFock::PostHF::CASSCF},
                 {"rasscf", HartreeFock::PostHF::RASSCF},
                 {"fci", HartreeFock::PostHF::FCI},
@@ -758,38 +781,12 @@ namespace HartreeFock::IO
                      if (!parsed)
                          return std::unexpected(parsed.error());
                      correlation = *parsed;
-                     // For the generated arbitrary-order RCC path (all spellings
-                     // map to RCCSDTQ), carry the requested excitation rank so the
-                     // driver dispatches to the right generated kernel without a
-                     // per-rank enum/branch. Ranks not listed keep the default (4).
-                     if (*parsed == HartreeFock::PostHF::RCCSDTQ)
-                     {
-                         static const std::unordered_map<std::string, int> _cc_rank =
-                             {
-                                 {"cc3", 3}, {"ccsdt_gen", 3},
-                                 {"ccsdtq", 4}, {"cc4", 4},
-                                 {"ccsdtqp", 5}, {"cc5", 5},
-                                 {"cc6", 6},
-                             };
-                         if (auto it = _cc_rank.find(value); it != _cc_rank.end())
-                             scf._cc_generated_rank = it->second;
-                     }
-                     // U5.3b: the same mechanism for the generated unrestricted
-                     // path. Its floor is rank 2 (uccsd), not 4 -- unlike RCC there
-                     // is no hand-written generated-path predecessor to defer to.
-                     if (*parsed == HartreeFock::PostHF::UCCGEN)
-                     {
-                         static const std::unordered_map<std::string, int> _ucc_rank =
-                             {
-                                 {"ucc2", 2}, {"uccsd_gen", 2},
-                                 {"ucc3", 3}, {"uccsdt_gen", 3},
-                                 {"ucc4", 4}, {"uccsdtq_gen", 4},
-                                 {"ucc5", 5},
-                                 {"ucc6", 6},
-                             };
-                         if (auto it = _ucc_rank.find(value); it != _ucc_rank.end())
-                             scf._cc_generated_rank = it->second;
-                     }
+                     // Rank and (T) for the generated routes, from the same table
+                     // that chose the route.
+                     const GeneratedCCKeyword *g = generated_cc_keyword(value);
+                     scf._cc_triples = g && g->triples;
+                     if (g)
+                         scf._cc_generated_rank = g->rank;
                      return std::expected<void, std::string>{};
                  }},
                 {"engine", [&integral](const std::string &value) -> std::expected<void, std::string>
@@ -835,6 +832,14 @@ namespace HartreeFock::IO
                      if (!parsed)
                          return std::unexpected(parsed.error());
                      scf._cc_warm_start = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"cc_lambda", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = toBool(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     scf._cc_lambda = *parsed;
                      return std::expected<void, std::string>{};
                  }},
                 {"rccsdt_backend", [&scf](const std::string &value) -> std::expected<void, std::string>
@@ -1752,12 +1757,14 @@ namespace HartreeFock::IO
     static std::expected<void, std::string> validate_requested_methods(
         const HartreeFock::Calculator &calculator)
     {
-        if (calculator._correlation == HartreeFock::PostHF::RCCSDTQ &&
+        if ((calculator._correlation == HartreeFock::PostHF::RCCGEN ||
+             calculator._correlation == HartreeFock::PostHF::UCCGEN) &&
             calculator._calculation != HartreeFock::CalculationType::SinglePoint)
         {
             return std::unexpected(
-                "RCCSDTQ is currently available only for single-point calculations; "
-                "choose calculation_type sp or remove correlation ccsdtq.");
+                "Generated coupled cluster (ccsd(t), uccsd(t), cc2-cc6, ucc2-ucc6 and their "
+                "spelled forms) is currently available only for single-point calculations; "
+                "choose calculation_type sp.");
         }
 
         if (calculator._correlation == HartreeFock::PostHF::FCI &&

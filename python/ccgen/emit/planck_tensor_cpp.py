@@ -539,7 +539,7 @@ def _map_factor(
     # independent Sz sector of the same amplitude (t4_aaabaaab), stored/read as a
     # distinct block. Both are rank-`\d+` amplitudes; the tag routes the read to
     # the sector's own tensor.
-    amplitude_match = re.fullmatch(r"t(\d+)(?:_([ab]+))?", tensor_obj.name)
+    amplitude_match = re.fullmatch(r"([tl])(\d+)(?:_([ab]+))?", tensor_obj.name)
 
     # v/f may carry a UCC spin-block suffix (`v_abab`, `f_aa`). RCC emits bare
     # `v`/`f`, so this is a strict superset: `re.fullmatch(r"v(?:_([ab]+))?", "v")`
@@ -578,8 +578,9 @@ def _map_factor(
         return _map_eri_tensor(tensor, integral_tag)
 
     if amplitude_match is not None:
-        excitation_rank = int(amplitude_match.group(1))
-        sector_tag = amplitude_match.group(2)      # None for the reference sector
+        root = amplitude_match.group(1)            # t, or l for a Λ multiplier
+        excitation_rank = int(amplitude_match.group(2))
+        sector_tag = amplitude_match.group(3)      # None for the reference sector
         occ = [idx.name for idx in indices if idx.space == "occ"]
         vir = [idx.name for idx in indices if idx.space == "vir"]
         if len(occ) != excitation_rank or len(vir) != excitation_rank:
@@ -587,16 +588,20 @@ def _map_factor(
         # The arbitrary-order runtime type (ArbitraryOrderRCCAmplitudes, rank ≥ 4
         # methods) exposes only `.tensor(rank)` — returning std::expected<view> —
         # with no t1/t2/t3 members. The view is bound ONCE per kernel/builder as a
-        # local `t<rank>` (see _amplitude_view_bindings); the factor then indexes
-        # that local with an initializer-list `t<rank>({...})`. The rank ≤ 3
-        # tensor_backend types (RCCSD/RCCSDTAmplitudes) have direct t1/t2/t3(...)
-        # accessors instead.
+        # local `t<rank>` of fixed rank (see _amplitude_view_bindings); the factor
+        # then indexes that local with plain arguments `t<rank>(i, j, ...)`, which
+        # expand to inline arithmetic. (The braced runtime-rank form `t<rank>({...})`
+        # looped over the rank on every read: 5.7x slower on a triples nest at the
+        # registry's -O1.) The rank ≤ 3 tensor_backend types
+        # (RCCSD/RCCSDTAmplitudes) have direct t1/t2/t3(...) accessors instead.
         if arbitrary_amplitudes:
             # R3.1.3d: a higher Sz sector reads from its own bound view
             # `t<rank>_<tag>` (sector_tag), the reference from `t<rank>`.
-            view = (f"t{excitation_rank}_{sector_tag}" if sector_tag
-                    else f"t{excitation_rank}")
-            return 1, f"{view}({{{', '.join(occ + vir)}}})"
+            view = (f"{root}{excitation_rank}_{sector_tag}" if sector_tag
+                    else f"{root}{excitation_rank}")
+            return 1, f"{view}({', '.join(occ + vir)})"
+        if root == "l":
+            raise ValueError(f"λ factor {tensor_obj!r} outside the arbitrary-order emit")
         if excitation_rank == 1:
             return 1, f"amplitudes.t1({occ[0]}, {vir[0]})"
         if excitation_rank == 2:
@@ -653,10 +658,12 @@ def _omp_collapse_setting() -> int:
     An env var rather than a threaded parameter, following `_fuse_loops_setting`
     and for the same reason: `print_cpp_planck` already carries 16 branches, and
     W3 set the precedent that a knob earns a parameter only once it is staying.
-    The CMake option `PLANCK_CC_OMP_COLLAPSE` sets it for a build.
+    The CMake option `PLANCK_CC_OMP_COLLAPSE` (default 3) passes it to every
+    generator invocation, so a CMake build is threaded by default; a direct
+    script run without the variable is not.
 
     Unset or 0 => no pragma, byte-identical to the unthreaded emit. **3 is the
-    measured value** (docs/CCGEN_CC_OPENMP.md): 3.22x at 4 threads on HF/6-31G
+    measured value** (docs/CCGEN_GENERATED_CC_COST.md): 3.22x at 4 threads on HF/6-31G
     with the energy bitwise identical at 1/2/4/8 threads. 2 also works but is
     ~4 % slower -- 25 chunks over 4 threads against 125.
     """
@@ -665,6 +672,8 @@ def _omp_collapse_setting() -> int:
         return max(0, int(raw))
     except ValueError:
         return 0
+
+
 def _fuse_loops_setting() -> int:
     """How many loop-signature groups to fuse, from `CCGEN_FUSE_LOOPS`.
 
@@ -691,10 +700,11 @@ def _emit_terms(
     fuse_loops: int = 0,
     annotate: bool = True,
     omp_collapse: int = 0,
+    factor_spins: dict[str, tuple[str, ...]] | None = None,
 ) -> list[str]:
     """Emit the term bodies of a residual kernel.
 
-    `fuse_loops` is the F3/F4 knob (docs/CCGEN_WHY_GENERATED_IS_SLOW.md): 0 emits
+    `fuse_loops` is the F3/F4 knob (docs/CCGEN_GENERATED_CC_COST.md): 0 emits
     one nest per term (the default, byte-identical to before); N > 0 fuses the N
     LARGEST loop-signature groups into one nest each and leaves the rest per-term.
     F3 uses N=1 to land the mechanism against a bit-identical-energy gate before
@@ -715,7 +725,7 @@ def _emit_terms(
                 term, lhs="result", indent=4,
                 intermediate_names=intermediate_names,
                 arbitrary_amplitudes=arbitrary, ucc=ucc,
-                omp_collapse=omp_collapse))
+                omp_collapse=omp_collapse, factor_spins=factor_spins))
             if annotate:
                 lines.append("")
         return lines
@@ -751,7 +761,7 @@ def _emit_terms(
             term, lhs="result", indent=4,
             intermediate_names=intermediate_names,
             arbitrary_amplitudes=arbitrary, ucc=ucc,
-            omp_collapse=omp_collapse))
+            omp_collapse=omp_collapse, factor_spins=factor_spins))
         if annotate:
             lines.append("")
     return lines
@@ -797,7 +807,7 @@ def emit_planck_fused_group(
     the shape the hand-written kernel writes by hand (~9 accumulations per
     single-index loop).
 
-    See docs/CCGEN_WHY_GENERATED_IS_SLOW.md: this does not change FLOP count. It
+    See docs/CCGEN_GENERATED_CC_COST.md: this does not change FLOP count. It
     cuts how many times the o^3v^3 result is traversed and its operands
     re-streamed -- 414 nests -> 13 on the factorized manifold, 399 -> 8 undressed.
 
@@ -865,7 +875,7 @@ def term_loop_signature(
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The `(free, summed)` index-name pair that defines a term's loop nest.
 
-    F2 (docs/CCGEN_WHY_GENERATED_IS_SLOW.md). Terms sharing this signature emit
+    F2 (docs/CCGEN_GENERATED_CC_COST.md). Terms sharing this signature emit
     IDENTICAL loop headers and differ only in the accumulated expression, so they
     are exactly the candidates for fusing into one nest -- which is what the
     hand-written kernel does by hand (~9 accumulations per single-index loop).
@@ -904,6 +914,161 @@ def group_terms_by_loop_signature(
     return groups
 
 
+def with_gemm_include(text: str) -> str:
+    """Include the GEMM helper after tensor_backend.h, only when a lowered
+    contraction uses it, so a TU without one is unchanged."""
+    if "cc_gemm_contract(" not in text:
+        return text
+    return text.replace('#include "post_hf/cc/tensor_backend.h"\n',
+                        '#include "post_hf/cc/tensor_backend.h"\n'
+                        '#include "post_hf/cc/gemm_contract.h"\n', 1)
+
+
+_READ = re.compile(r"([A-Za-z_][\w.]*)\(([^(){}]*)\)")
+# A UCC same-spin ERI read as <pq||rs> = <pq|rs> - <pq|sr>
+# (`_block_needs_explicit_exchange`). The two reads are one stored array, or
+# two when the routing puts <pq|sr> in another block (`ovov` - `ovvo`).
+_DIFF_READ = re.compile(
+    r"\(([A-Za-z_][\w.]*)\(([^(){}]*)\) - ([A-Za-z_][\w.]*)\(([^(){}]*)\)\)")
+# Operands the UCC kernels bind locally: ERI and Fock spin blocks
+# (Tensor4D/Tensor2D references), and a builder's scratch arrays.
+_UCC_OPERAND = re.compile(r"v_[ab]{4}_[ov]{4}|f_[ab]{2}_[ov]{2}|X\d+")
+
+
+def _gemm_lowering(term, factors, free, summed, lhs, intermediate_names,
+                   arbitrary_amplitudes, pad):
+    """One binary contraction as a `cc_gemm_contract` call
+    (src/post_hf/cc/gemm_contract.h; docs/CCSD_T_SIZE_SCOPE.md, R3),
+    or None to keep the loop nest.
+
+    Lowered when: two factors, at least one summed index and five distinct
+    indices in all (o^2v^3, o^3v^2 and up), every summed index in both
+    factors and every free index in exactly one, and each operand either used
+    in place by the helper or small enough to copy (at most three virtual
+    indices, so at most o v^3, the size of the ovvv block). The vvvv block is
+    therefore never copied.
+
+    Group orders: k as stored in the operand with more virtual indices, m as
+    stored in the first factor, n as stored in the second. The helper uses an
+    operand in place exactly when its storage is r+c or c+r in those orders,
+    which is the test below.
+
+    UCC: operands are spin blocks bound locally (`v_abab_oovv`, `f_aa_vv`,
+    `t2_abab`, builder scratch `X1`), and a same-spin ERI read is the
+    antisymmetrized difference `(v(..cd) - v(..dc))` of one stored array.
+    Each alternative of a difference is lowered as its own call with its
+    sign, so one term can emit up to four calls.
+    """
+    # Five or more distinct indices: o^2v^3 and up. Smaller nests are cheap
+    # enough that the GEMM setup would not pay.
+    if len(factors) != 2 or not summed or len(free) + len(summed) < 5:
+        return None
+    # Per factor, its alternatives (sign, name, labels): one read, or the two
+    # reads of an antisymmetrized UCC difference, each lowered as its own call.
+    alternatives = []
+    sign = 1
+    for factor in factors:
+        s, expr = _map_factor(factor, intermediate_names, arbitrary_amplitudes)
+        sign *= s
+        m = _READ.fullmatch(expr)
+        d = None if m else _DIFF_READ.fullmatch(expr)
+        if m:
+            parts = [(1, m.group(1), m.group(2))]
+        elif d:
+            parts = [(1, d.group(1), d.group(2)), (-1, d.group(3), d.group(4))]
+        else:
+            return None
+        alts = []
+        for alt_sign, name, args in parts:
+            labels = [x.strip() for x in args.split(",")]
+            known = (name.startswith("mo_blocks.")
+                     or name in (intermediate_names or ())
+                     or (arbitrary_amplitudes and re.fullmatch(r"[tl]\d+(?:_[ab]+)?", name))
+                     or _UCC_OPERAND.fullmatch(name))
+            if not known or any(len(x) != 1 for x in labels) or len(set(labels)) != len(labels):
+                return None
+            alts.append((alt_sign, name, "".join(labels)))
+        if any(set(lab) != set(alts[0][2]) for _, _, lab in alts):
+            return None
+        alternatives.append(alts)
+    (_, a_name, a_lab), (_, b_name, b_lab) = alternatives[0][0], alternatives[1][0]
+    free_names = [i.name for i in free]
+    sum_names = [i.name for i in summed]
+    if any(len(x) != 1 for x in free_names + sum_names):
+        return None
+    if not all(c in a_lab and c in b_lab for c in sum_names):
+        return None
+    if not all((c in a_lab) != (c in b_lab) for c in free_names):
+        return None
+    if set(a_lab) | set(b_lab) != set(free_names) | set(sum_names):
+        return None
+    space = {i.name: i.space for i in list(free) + list(summed)}
+    n_vir = lambda lab: sum(space[c] == "vir" for c in lab)  # noqa: E731
+    k_src = b_lab if n_vir(b_lab) > n_vir(a_lab) else a_lab
+    k = "".join(c for c in k_src if c in sum_names)
+    m = "".join(c for c in a_lab if c not in sum_names)
+    n = "".join(c for c in b_lab if c not in sum_names)
+    if not m or not n:
+        return None
+
+    def allowed(lab, r, c):
+        # Used in place, or small enough to copy (never vvvv).
+        return lab in (r + c, c + r) or n_vir(lab) <= 3
+
+    def swapped(lab, x, y):
+        return lab.translate(str.maketrans({x: y, y: x}))
+
+    def batched(a_lab, b_lab):
+        """(m, n, batch) when one operand's leading free labels can be
+        batched so that each slice is used in place or is small enough to
+        copy, e.g. t1(ic) vvvv(abcd): batch `ab`, slices vvvv(ab, c, d)."""
+        for lab, own, other_ok in ((b_lab, n, allowed(a_lab, m, k)),
+                                   (a_lab, m, allowed(b_lab, k, n))):
+            if not other_ok:
+                continue
+            batch = ""
+            for c in lab:
+                if c in sum_names:
+                    break
+                batch += c
+            rest_own = "".join(c for c in own if c not in batch)
+            if not batch or not rest_own:
+                continue
+            rest = lab[len(batch):]
+            pair = (k, rest_own) if lab is b_lab else (rest_own, k)
+            if allowed(rest, *pair):
+                return ((m, rest_own, batch) if lab is b_lab else (rest_own, n, batch))
+        return None
+
+    calls = []
+    for a_sign, a_name, a_lab in alternatives[0]:
+        for b_sign, b_name, b_lab in alternatives[1]:
+            mm, nn, batch = m, n, ""
+            if not (allowed(a_lab, m, k) and allowed(b_lab, k, n)):
+                # Rename two summed (dummy) indices in both operands: the same
+                # sum, with the permutation moved onto the operand that may be
+                # copied. Turns t2(ijcd) v(abdc) into t2(ijdc) v(abcd).
+                for x, y in itertools.combinations(sum_names, 2):
+                    a2, b2 = swapped(a_lab, x, y), swapped(b_lab, x, y)
+                    if allowed(a2, m, k) and allowed(b2, k, n):
+                        a_lab, b_lab = a2, b2
+                        break
+                else:
+                    # Else batch over the leading free labels of the operand
+                    # that cannot be copied (U2).
+                    found = batched(a_lab, b_lab)
+                    if found is None:
+                        return None
+                    mm, nn, batch = found
+            coeff = float(term.coeff * sign * a_sign * b_sign)
+            tail = f', false, "{batch}");' if batch else ");"
+            calls.append(
+                f'{pad}cc_gemm_contract({lhs}, "{"".join(free_names)}", {coeff!r}, '
+                f'cc_operand({a_name}), "{a_lab}", cc_operand({b_name}), "{b_lab}", '
+                f'"{mm}", "{k}", "{nn}"{tail}')
+    return "\n".join(calls)
+
+
 def emit_planck_term(
     term: AlgebraTerm | RestrictedClosedShellTerm,
     lhs: str = "result",
@@ -912,8 +1077,13 @@ def emit_planck_term(
     arbitrary_amplitudes: bool = False,
     ucc: bool = False,
     omp_collapse: int = 0,
+    factor_spins: dict[str, tuple[str, ...]] | None = None,
 ) -> str:
     """Emit a single algebraic term using Planck tensor accessors.
+
+    ``factor_spins`` (UCC only) gives the slot spins of factors whose names carry
+    no spin tag: derived operators (`W_...`) and a builder's scratch arrays. An
+    index that meets only such factors gets its spin from here.
 
     ``intermediate_names`` lists the materialized intermediates in scope (the
     kernel's specs) so their factors resolve as local references (D7.3).
@@ -946,7 +1116,7 @@ def emit_planck_term(
     # `test_spin_adapted_ccsdtq_compiles_with_sector_accessor`, not by the RCC
     # SHA-256 pin -- that pin emits with spin_adapt=False and never sees this
     # path).
-    index_spins = ucc_term_index_spins(term) if ucc else {}
+    index_spins = _term_index_spins(term, factor_spins) if ucc else {}
 
     pad = " " * indent
     lines: list[str] = []
@@ -959,6 +1129,13 @@ def emit_planck_term(
         free = list(term.free_indices)
         summed = list(term.summed_indices)
         factors = term.factors
+
+    # RCC and UCC alike (1c, docs/CCSD_T_SIZE_SCOPE.md): the helper takes its
+    # extents from the operands, so spin blocks need nothing extra.
+    lowered = _gemm_lowering(term, factors, free, summed, lhs,
+                             intermediate_names, arbitrary_amplitudes, pad)
+    if lowered is not None:
+        return lowered
 
     if omp_collapse > 0 and len(free) >= omp_collapse:
         lines.append(
@@ -1000,7 +1177,7 @@ def _amplitude_type(method: str, force_arbitrary: bool = False) -> str:
     return "RCCSDAmplitudes"
 
 
-def _amplitude_ranks_used(terms) -> list[tuple[int, str | None]]:
+def _amplitude_ranks_used(terms, root: str = "t") -> list[tuple[int, str | None]]:
     """Distinct t-amplitude `(rank, sector_tag)` pairs referenced across `terms`,
     sorted. `sector_tag` is None for the reference Sz sector (`t<rank>`) and the
     tag string for a higher sector (`t<rank>_<tag>`, R3.1.3d). Drives the
@@ -1008,7 +1185,7 @@ def _amplitude_ranks_used(terms) -> list[tuple[int, str | None]]:
     used: set[tuple[int, str | None]] = set()
     for term in terms:
         for factor in term.factors:
-            m = re.fullmatch(r"t(\d+)(?:_([ab]+))?", _source_tensor(factor).name)
+            m = re.fullmatch(root + r"(\d+)(?:_([ab]+))?", _source_tensor(factor).name)
             if m:
                 used.add((int(m.group(1)), m.group(2)))
     return sorted(used, key=lambda rt: (rt[0], rt[1] or ""))
@@ -1020,16 +1197,21 @@ def _amplitude_view_bindings(terms, indent: int = 4) -> list[str]:
     is unwrapped once here and indexed in the loops. `.value()` is safe: the
     solver constructs every rank ≤ max before calling. The reference sector binds
     `t<rank> = amplitudes.tensor(rank)`; a higher Sz sector (R3.1.3d) binds
-    `t<rank>_<tag> = amplitudes.sector_tensor(rank, "<tag>")`."""
+    `t<rank>_<tag> = amplitudes.sector_tensor(rank, "<tag>")`. Each is wrapped
+    in `fixed_rank_view<2*rank>` so the loops index it with inline arithmetic."""
     pad = " " * indent
     lines: list[str] = []
-    for rank, tag in _amplitude_ranks_used(terms):
-        if tag is None:
-            lines.append(f"{pad}const auto t{rank} = amplitudes.tensor({rank}).value();")
-        else:
-            lines.append(
-                f'{pad}const auto t{rank}_{tag} = '
-                f'amplitudes.sector_tensor({rank}, "{tag}").value();')
+    # λ (`l<rank>`, Λ kernels) binds from the `lambdas` argument the same way.
+    for root, source in (("t", "amplitudes"), ("l", "lambdas")):
+        for rank, tag in _amplitude_ranks_used(terms, root):
+            if tag is None:
+                lines.append(
+                    f"{pad}const auto {root}{rank} = "
+                    f"fixed_rank_view<{2 * rank}>({source}.tensor({rank}).value());")
+            else:
+                lines.append(
+                    f'{pad}const auto {root}{rank}_{tag} = fixed_rank_view<{2 * rank}>('
+                    f'{source}.sector_tensor({rank}, "{tag}").value());')
     return lines
 
 
@@ -1093,15 +1275,21 @@ def _denominator_type(method: str, force_arbitrary: bool = False) -> str:
     return "DenominatorCache"
 
 
-def _target_expr(lhs: str, indices: Sequence[Index]) -> str:
-    if not indices:
+def _accessor(lhs: str, names: Sequence[str]) -> str:
+    """`lhs(i, j, ...)` for the fixed-rank types (rank 2/4/6), the braced
+    `lhs({i, j, ...})` for TensorND. One rule for every emitted element access."""
+    if not names:
         return lhs
-    if len(indices) in (2, 4, 6):
-        return f"{lhs}({', '.join(idx.name for idx in indices)})"
-    return f"{lhs}({{{', '.join(idx.name for idx in indices)}}})"
+    if len(names) in (2, 4, 6):
+        return f"{lhs}({', '.join(names)})"
+    return f"{lhs}({{{', '.join(names)}}})"
 
 
-def _kernel_name(method: str, target: str, ucc: bool = False) -> str:
+def _target_expr(lhs: str, indices: Sequence[Index]) -> str:
+    return _accessor(lhs, [idx.name for idx in indices])
+
+
+def _kernel_name(method: str, target: str, ucc: bool = False, lam: bool = False) -> str:
     """The C++ name of one emitted kernel.
 
     U5.0: `ucc=True` prefixes the symbol so a UCC translation unit does not
@@ -1117,7 +1305,7 @@ def _kernel_name(method: str, target: str, ucc: bool = False) -> str:
     both roles is what makes this look like a one-line change and then fail at
     the rank parse.
     """
-    prefix = "ucc_" if ucc else ""
+    prefix = ("ucc_" if ucc else "") + ("lambda_" if lam else "")
     if target == "energy":
         return f"compute_{prefix}{method}_energy"
     return f"compute_{prefix}{method}_{target}_residual"
@@ -1137,7 +1325,7 @@ def _target_rank(
     raise ValueError(f"Cannot infer excitation rank for target {target!r}")
 
 
-def _builder_symbol(method: str, name: str) -> str:
+def _builder_symbol(method: str, name: str, lam: bool = False, ucc: bool = False) -> str:
     """The C++ symbol for intermediate ``name``'s builder in ``method``'s TU (V1.3.2).
 
     Method-suffixed (``build_tau_ccsdt``), because the kernel registry ``#include``s several
@@ -1156,7 +1344,36 @@ def _builder_symbol(method: str, name: str) -> str:
     One function for all four emission sites (the definition plus three call sites), so a
     definition and its calls cannot drift apart.
     """
-    return f"build_{name}_{method.lower()}"
+    # `ucc_` as on the entry points: a UCC builder with no `v` factor carries no
+    # spin block in its name, so RCC and UCC Λ-CCSDTQ both emitted
+    # build_W_l4_aaabaaabt4_aaabaaabv_oovv_<tag>_lambda_ccsdtq into one registry TU.
+    return f"build_{name}_{'ucc_' if ucc else ''}{'lambda_' if lam else ''}{method.lower()}"
+
+
+def _amp_params(amplitude_type: str, lam: bool) -> list[str]:
+    """The amplitude parameters of every emitted function: t, and for a Λ
+    kernel (``lam``) the multipliers λ beside it, in the same container type."""
+    out = [f"const {amplitude_type} &amplitudes"]
+    if lam:
+        out.append("const ArbitraryOrderRCCAmplitudes &lambdas")
+    return out
+
+
+def _call_args(lam: bool) -> str:
+    """The matching argument list for a call from one emitted function to another."""
+    return "reference, mo_blocks, denominators, amplitudes" + (", lambdas" if lam else "")
+
+
+def _required_intermediates(terms, intermediate_map) -> list[IntermediateSpec]:
+    """The intermediates *terms* read, in first-use order."""
+    out: list[IntermediateSpec] = []
+    seen: set[str] = set()
+    for term in terms:
+        for factor in term.factors:
+            if factor.name in intermediate_map and factor.name not in seen:
+                seen.add(factor.name)
+                out.append(intermediate_map[factor.name])
+    return out
 
 
 def _emit_kernel(
@@ -1168,7 +1385,18 @@ def _emit_kernel(
     free_indices: Sequence[Index] | None = None,
     force_arbitrary: bool = False,
     ucc: bool = False,
+    symmetrizer: Sequence[tuple[dict[str, str], int]] | None = None,
+    pair_half: bool = False,
+    shared_ops: str | None = None,
+    lam: bool = False,
 ) -> str:
+    """``shared_ops`` (U3a): the name of the file's residual-ops struct. The
+    kernel then takes it as a last `const&` argument and binds its
+    intermediates from it instead of building them."""
+    if pair_half:
+        return _pair_half_kernel(_emit_kernel(
+            method, target, terms, lowered_terms, intermediates, free_indices,
+            force_arbitrary, ucc, symmetrizer, shared_ops=shared_ops, lam=lam))
     lowered_terms = tuple(lowered_terms or ())
     if free_indices is None:
         if lowered_terms:
@@ -1183,18 +1411,31 @@ def _emit_kernel(
     intermediate_map = {spec.name: spec for spec in intermediates or ()}
 
     lines: list[str] = []
-    lines.append(f"{result_type} {_kernel_name(method, target, ucc)}(")
+    lines.append(f"{result_type} {_kernel_name(method, target, ucc, lam)}(")
     lines.append("    const CanonicalRHFCCReference &reference,")
     lines.append("    const TensorCCBlockCache &mo_blocks,")
-    lines.append(f"    const {denominator_type} &denominators,")
-    lines.append(f"    const {amplitude_type} &amplitudes)")
+    params = [f"const {denominator_type} &denominators", *_amp_params(amplitude_type, lam)]
+    if shared_ops:
+        params.append(f"const {shared_ops} &ops")
+    lines.extend(f"    {p}{',' if k + 1 < len(params) else ')'}" for k, p in enumerate(params))
     lines.append("{")
     lines.extend(_orbital_count_preamble(ucc))
-    # U3b.2c: the result's extents are per-spin under UCC. The spins come from the
-    # kernel's own terms -- every term of a block-tagged target carries the same
-    # free-index spins (measured across the CCSD UCC manifold: 352 terms, zero
-    # disagreements with the target's tag), so the first term is representative.
-    result_spins = ucc_term_index_spins(terms[0]) if (ucc and terms) else None
+    # U3b.2c: the result's extents are per-spin under UCC, read off the kernel's
+    # own terms. Not the first term alone: after the merges (U3b) a term can
+    # read only a merged sum, whose name carries no spin, so every term is
+    # resolved through the operators' slot table and the free indices must
+    # agree across them.
+    slot_spins = _operator_slot_spins(intermediates) if ucc else None
+    result_spins = None
+    if ucc and terms:
+        free = {i.name for i in terms[0].free_indices}
+        result_spins = {}
+        for term in terms:
+            for name, spin in _term_index_spins(term, slot_spins).items():
+                if name in free and result_spins.setdefault(name, spin) != spin:
+                    raise ValueError(
+                        f"{target}: free index {name!r} is both spin "
+                        f"{result_spins[name]!r} and {spin!r} across its terms")
     if result_rank == 0:
         lines.append("    double result = 0.0;")
     else:
@@ -1202,13 +1443,7 @@ def _emit_kernel(
             f"    {result_type} result("
             f"{_dims_expr(free_indices, result_type, result_spins)});"
         )
-    required_intermediates: list[IntermediateSpec] = []
-    seen_intermediates: set[str] = set()
-    for term in terms:
-        for factor in term.factors:
-            if factor.name in intermediate_map and factor.name not in seen_intermediates:
-                seen_intermediates.add(factor.name)
-                required_intermediates.append(intermediate_map[factor.name])
+    required_intermediates = _required_intermediates(terms, intermediate_map)
     emitted_terms: Sequence[AlgebraTerm | RestrictedClosedShellTerm]
     emitted_terms = lowered_terms if lowered_terms else terms
     intermediate_names = frozenset(intermediate_map)
@@ -1226,12 +1461,17 @@ def _emit_kernel(
     # exactly why.
     if required_intermediates and not chunked:
         lines.append("")
-        lines.append("    // Build reused intermediates once for this kernel")
-        for spec in required_intermediates:
-            lines.append(
-                f"    const auto {spec.name} = {_builder_symbol(method, spec.name)}("
-                "reference, mo_blocks, denominators, amplitudes);"
-            )
+        if shared_ops:
+            lines.append("    // Intermediates, built once per residual evaluation (U3a)")
+            for spec in required_intermediates:
+                lines.append(f"    const auto &{spec.name} = ops.{spec.name};")
+        else:
+            lines.append("    // Build reused intermediates once for this kernel")
+            for spec in required_intermediates:
+                lines.append(
+                    f"    const auto {spec.name} = {_builder_symbol(method, spec.name, lam, ucc)}("
+                    f"{_call_args(lam)});"
+                )
     lines.append("")
     lines.append(f"    // {target} kernel ({len(terms)} terms)")
 
@@ -1250,7 +1490,9 @@ def _emit_kernel(
         return _emit_chunked_kernel(
             method, target, lines, emitted_terms, result_type, free_indices,
             denominator_type, amplitude_type, required_intermediates,
-            intermediate_names, arbitrary, ucc)
+            intermediate_names, arbitrary, ucc, symmetrizer=symmetrizer,
+            result_spins=result_spins, shared_ops=shared_ops, slot_spins=slot_spins,
+            lam=lam)
 
     if arbitrary:
         bindings = (_amplitude_view_bindings(emitted_terms)
@@ -1261,10 +1503,95 @@ def _emit_kernel(
             lines.extend(bindings)
     lines.extend(_emit_terms(
         emitted_terms, intermediate_names, arbitrary, ucc, _fuse_loops_setting(),
-        omp_collapse=_omp_collapse_setting()))
+        omp_collapse=_omp_collapse_setting(),
+        factor_spins=slot_spins))
+    lines.extend(_symmetrize_lines(result_type, free_indices, symmetrizer,
+                                   result_spins))
     lines.append("    return result;")
     lines.append("}")
     return "\n".join(lines)
+
+
+_PAIR_J_FULL = "for (int j = 0; j < no; ++j)"
+_PAIR_J_HALF = "for (int j = i; j < no; ++j)"
+
+
+def _pair_half_kernel(text: str) -> str:
+    """Compute a spatial doubles residual on j >= i only, then mirror.
+
+    R(i,j,a,b) = R(j,i,b,a) holds because t2 has it (the MP2 start does,
+    Jacobi divides by symmetric denominators, DIIS mixes). So every term nest
+    starts j at i, and one pass fills i > j from it: (o+1)/(2o) of the work,
+    for every term including the self-symmetric vvvv ladder, with no orbit
+    matching (PySCF's i >= j; docs/CCSD_T_SIZE_SCOPE.md, R1).
+
+    In this kernel j is only ever the free occupied index (summed occupied
+    indices are k, l, ...), so the loop header is rewritten as text. Checked:
+    the result is declared (no, no, nv, nv) and some nest loops j. The
+    mirror comment is deliberately not `// symmetrize`: the numpy evaluator
+    ignores loop bounds and so already sees the full R.
+    """
+    assert re.search(r"Tensor4D result\(no, no, nv, nv\b", text), \
+        "pair_half: not an (o, o, v, v) kernel"
+    nests = text.count(_PAIR_J_FULL)
+    assert nests > 0, "pair_half: no free j loop found"
+    text = text.replace(_PAIR_J_FULL, _PAIR_J_HALF)
+    # Lowered contractions (R3) take the same half: a GEMM group holding both
+    # i and j keeps j >= i (the ladder); other groups compute in full and the
+    # mirror below overwrites j < i. A batched call (U2, `false, "batch"`)
+    # stays full range; the mirror covers it the same way.
+    text = re.sub(r'^(\s*cc_gemm_contract\(result, (?!.*, false, ").*)\);$', r"\1, true);",
+                  text, flags=re.M)
+    # GCC refuses `schedule` on a non-rectangular collapsed loop. The default
+    # schedule is harmless here: each element is written by one iteration.
+    text = re.sub(r"(#pragma omp parallel for collapse\(\d+\)) schedule\(static\)", r"\1", text)
+    head, sep, tail = text.rpartition("    return result;\n")
+    assert sep, "pair_half: kernel has no final return"
+    collapse = _omp_collapse_setting()
+    mirror = ["", "    // mirror ijab: only j >= i was computed; R(j,i,b,a) = R(i,j,a,b)"]
+    if collapse > 0:
+        mirror.append(f"    #pragma omp parallel for collapse({min(collapse, 2)})")
+    mirror += [
+        "    for (int i = 0; i < no; ++i)",
+        "    for (int j = 0; j < i; ++j)",
+        "    for (int a = 0; a < nv; ++a)",
+        "    for (int b = 0; b < nv; ++b)",
+        f"        {_accessor('result', ['i', 'j', 'a', 'b'])} = "
+        f"{_accessor('result', ['j', 'i', 'b', 'a'])};",
+    ]
+    return head + "\n".join(mirror) + "\n" + sep + tail
+
+
+def _symmetrize_lines(result_type, free_indices, symmetrizer,
+                      spins=None) -> list[str]:
+    """R = sum_g s_g g(X), for a kernel whose terms were folded to X by
+    `fold_external_symmetry`. One o^n pass over a copy of X.
+
+    ``spins`` (UCC) sizes each loop by its index's spin; None keeps the RCC
+    `no`/`nv` bounds.
+
+    The comment line is read by the numpy evaluator in ccgen/tests, so the
+    value gates apply the same pass the C++ does.
+    """
+    if not symmetrizer or len(symmetrizer) < 2:   # the identity group is a no-op
+        return []
+    names = [i.name for i in free_indices]
+    images = []
+    for mapping, sign in symmetrizer:
+        args = [mapping.get(n, n) for n in names]
+        images.append(("+" if sign > 0 else "-", args))
+    tag = " ".join(f"{sg}{''.join(a)}" for sg, a in images)
+    rhs = " ".join(f"{sg} {_accessor('x', a)}" for sg, a in images)
+    out = ["", f"    // symmetrize {''.join(names)}: {tag}", "    {",
+           f"        const {result_type} x = result;"]
+    collapse = _omp_collapse_setting()
+    if collapse > 0 and len(free_indices) >= collapse:
+        out.append(f"        #pragma omp parallel for collapse({collapse}) schedule(static)")
+    for idx in free_indices:
+        out.append(f"        for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, (spins or {}).get(idx.name))}; ++{idx.name})")
+    out.append(f"            {_accessor('result', names)} = {rhs.lstrip('+ ')};")
+    out.append("    }")
+    return out
 
 
 # Terms-per-function threshold above which a residual kernel is split into
@@ -1278,13 +1605,14 @@ _KERNEL_CHUNK_TERMS = 256
 def _emit_chunked_kernel(
     method, target, header_lines, emitted_terms, result_type, free_indices,
     denominator_type, amplitude_type, required_intermediates,
-    intermediate_names, arbitrary, ucc=False,
+    intermediate_names, arbitrary, ucc=False, symmetrizer=None,
+    result_spins=None, shared_ops=None, slot_spins=None, lam=False,
 ):
     """Emit a large residual kernel as `_partN` sub-functions accumulating into a
     by-reference `result`, plus the main kernel that allocates `result`, calls
     each part, and returns it. Keeps per-function body size bounded so any -O
     level compiles in ~linear time. See _emit_kernel for why."""
-    kernel = _kernel_name(method, target, ucc)
+    kernel = _kernel_name(method, target, ucc, lam)
 
     # F3: with fusion on, reorder so each loop-signature group is CONTIGUOUS
     # before slicing into parts. Chunks are contiguous slices, so an unsorted
@@ -1302,7 +1630,7 @@ def _emit_chunked_kernel(
 
     n_parts = (len(emitted_terms) + _KERNEL_CHUNK_TERMS - 1) // _KERNEL_CHUNK_TERMS
 
-    # H5 (docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md): build each dressed operator
+    # H5 (docs/CCGEN_GENERATED_CC_COST.md_SCOPE.md): build each dressed operator
     # ONCE and pass it to the parts, instead of every part rebuilding the whole set.
     #
     # The comment this replaces called the per-part rebuild "cheap". It was, for an
@@ -1313,9 +1641,12 @@ def _emit_chunked_kernel(
     #
     # A struct rather than 270 parameters: it keeps each part's signature stable as
     # the operator set changes, and one `const&` costs nothing at the call.
-    ops_struct = f"{kernel}_ops" if required_intermediates else None
+    # U3a: with a file-wide residual-ops struct the kernel already holds every
+    # intermediate (its last argument), so the parts take that one.
+    own_struct = bool(required_intermediates) and not shared_ops
+    ops_struct = shared_ops or (f"{kernel}_ops" if required_intermediates else None)
     out: list[str] = []
-    if ops_struct:
+    if own_struct:
         out.append(f"struct {ops_struct}")
         out.append("{")
         for spec in required_intermediates:
@@ -1334,10 +1665,10 @@ def _emit_chunked_kernel(
         out.append(f"    {result_type} &result,")
         out.append("    const CanonicalRHFCCReference &reference,")
         out.append("    const TensorCCBlockCache &mo_blocks,")
-        out.append(f"    const {denominator_type} &denominators,")
-        out.append(f"    const {amplitude_type} &amplitudes{',' if ops_struct else ')'}")
+        params = [f"const {denominator_type} &denominators", *_amp_params(amplitude_type, lam)]
         if ops_struct:
-            out.append(f"    const {ops_struct} &ops)")
+            params.append(f"const {ops_struct} &ops")
+        out.extend(f"    {q}{',' if k + 1 < len(params) else ')'}" for k, q in enumerate(params))
         out.append("{")
         out.extend(_orbital_count_preamble(ucc))
         if ucc:
@@ -1356,7 +1687,8 @@ def _emit_chunked_kernel(
             out.extend(bindings)
         out.extend(_emit_terms(
             chunk, intermediate_names, arbitrary, ucc, fuse, annotate=False,
-            omp_collapse=_omp_collapse_setting()))
+            omp_collapse=_omp_collapse_setting(),
+            factor_spins=slot_spins))
         out.append("}")
         out.append("")
 
@@ -1364,21 +1696,79 @@ def _emit_chunked_kernel(
     # the signature + result allocation already; strip its trailing setup we don't
     # reuse (the parts do their own no/nv + intermediates) by appending calls.
     body = list(header_lines)
-    if ops_struct:
+    if own_struct:
         body.append(f"    const {ops_struct} ops{{")
         for spec in required_intermediates:
             body.append(
-                f"        {_builder_symbol(method, spec.name)}("
-                "reference, mo_blocks, denominators, amplitudes),")
+                f"        {_builder_symbol(method, spec.name, lam, ucc)}({_call_args(lam)}),")
         body.append("    };")
     call_tail = ", ops);" if ops_struct else ");"
     for p in range(n_parts):
         body.append(
-            f"    {kernel}_part{p}(result, reference, mo_blocks, denominators, amplitudes"
+            f"    {kernel}_part{p}(result, {_call_args(lam)}"
             f"{call_tail}")
+    body.extend(_symmetrize_lines(result_type, free_indices, symmetrizer,
+                                  result_spins))
     body.append("    return result;")
     body.append("}")
     return "\n".join(out + body)
+
+
+def _term_index_spins(term, factor_spins) -> dict[str, str]:
+    """`ucc_term_index_spins`, plus positional spins from ``factor_spins`` for
+    untagged factors. A conflict means a slot table is wrong; refuse it."""
+    spins = dict(ucc_term_index_spins(term))
+    for factor in term.factors:
+        slots = (factor_spins or {}).get(_source_tensor(factor).name)
+        if slots is None:
+            continue
+        for idx, spin in zip(_access_indices(factor), slots):
+            if spins.setdefault(idx.name, spin) != spin:
+                raise ValueError(
+                    f"index {idx.name!r} is spin {spins[idx.name]!r} in the term "
+                    f"but {spin!r} in slot table of {_source_tensor(factor).name}")
+    return spins
+
+
+def _operator_slot_spins(specs) -> dict[str, tuple[str, ...]]:
+    """Slot spins of each derived operator, read off its own definition.
+
+    Specs come in dependency order, so a definition that reads other derived
+    operators (a merged sum Y over the factorizer's W's, U3b) resolves their
+    untagged factors from the slots already in the table. Only the operator's
+    own indices must agree across its definition terms; dummies are per term."""
+    table: dict[str, tuple[str, ...]] = {}
+    for spec in specs or ():
+        if not spec.definition_terms:
+            continue
+        own = {i.name for i in spec.indices}
+        spins: dict[str, str] = {}
+        for term in spec.definition_terms:
+            for name, spin in _term_index_spins(term, table).items():
+                if name in own and spins.setdefault(name, spin) != spin:
+                    raise ValueError(
+                        f"{spec.name}: index {name!r} is both spin "
+                        f"{spins[name]!r} and {spin!r} across its definition")
+        table[spec.name] = tuple(spins[i.name] for i in spec.indices)
+    return table
+
+
+def _builder_index_spins(spec: IntermediateSpec, steps) -> dict[str, str]:
+    """One spin per index name across a UCC builder's definition and steps.
+
+    A factored step's scratch arrays are untagged, so an index that meets only
+    scratch (and the result) gets no spin from its own step. All steps come from
+    the builder's own definition, so its index names are shared; a name with two
+    spins would mean that assumption broke, and is refused rather than guessed.
+    """
+    merged: dict[str, str] = {}
+    for term in list(spec.definition_terms) + [s for _, s in steps]:
+        for name, spin in ucc_term_index_spins(term).items():
+            if merged.setdefault(name, spin) != spin:
+                raise ValueError(
+                    f"{spec.name}: index {name!r} is both spin {merged[name]!r} "
+                    f"and {spin!r} across the builder's terms")
+    return merged
 
 
 def _emit_intermediate_builder(
@@ -1389,30 +1779,50 @@ def _emit_intermediate_builder(
     stride_order: bool = False,
     force_arbitrary: bool = False,
     sibling_specs: dict[str, IntermediateSpec] | None = None,
+    ucc: bool = False,
+    slot_spins: dict[str, tuple[str, ...]] | None = None,
+    lam: bool = False,
 ) -> str:
+    """``slot_spins`` (UCC): every derived operator's slot spins, built once
+    per file by `_operator_slot_spins`. A definition term that reads only
+    other operators (a merged sum, U3b) has no spin-tagged factor of its own,
+    so its loop bounds and this builder's extents come from this table."""
     result_type = _tensor_type(spec.rank)
+    if ucc and slot_spins is None:
+        slot_spins = _operator_slot_spins((sibling_specs or {}).values())
     amplitude_type = _amplitude_type(method, force_arbitrary)
     denominator_type = _denominator_type(method, force_arbitrary)
-    lowered_definition_terms = tuple(
+    # UCC definition terms are already spin-resolved AlgebraTerms, like the UCC
+    # residual terms `_emit_kernel` receives: the closed-shell lowering must not
+    # run on them, or their `v` reads skip the canonical spin-block resolution.
+    lowered_definition_terms = () if ucc else tuple(
         lower_term_restricted_closed_shell(term, "reference")
         for term in spec.definition_terms
     )
+    definition_terms = lowered_definition_terms or tuple(spec.definition_terms)
     if lowered_definition_terms:
         builder_indices = lowered_definition_terms[0].canonical_free_indices
     else:
         builder_indices = spec.indices
 
     lines: list[str] = []
-    lines.append(f"{result_type} {_builder_symbol(method, spec.name)}(")
+    lines.append(f"{result_type} {_builder_symbol(method, spec.name, lam, ucc)}(")
     lines.append("    const CanonicalRHFCCReference &reference,")
     lines.append("    const TensorCCBlockCache &mo_blocks,")
     lines.append(f"    const {denominator_type} &denominators,")
-    lines.append(f"    const {amplitude_type} &amplitudes)")
+    params = _amp_params(amplitude_type, lam)
+    lines.extend(f"    {q}{',' if k + 1 < len(params) else ')'}" for k, q in enumerate(params))
     lines.append("{")
-    lines.append("    const int no = reference.orbital_partition.n_occ;")
-    lines.append("    const int nv = reference.orbital_partition.n_virt;")
+    lines.extend(_orbital_count_preamble(ucc))
+    from ..optimization.factorize import factored_builder_steps
+    steps = factored_builder_steps(spec, stride_order=stride_order)
+    result_spins = (_builder_index_spins(spec, steps)
+                    if (ucc and spec.definition_terms) else None)
+    if result_spins is not None and spec.name in slot_spins:
+        result_spins.update(
+            {i.name: s for i, s in zip(spec.indices, slot_spins[spec.name])})
     lines.append(
-        f"    {result_type} result({_dims_expr(builder_indices, result_type)});"
+        f"    {result_type} result({_dims_expr(builder_indices, result_type, result_spins)});"
     )
     lines.append("")
     lines.append(
@@ -1443,8 +1853,8 @@ def _emit_intermediate_builder(
         if referenced:
             for name in referenced:
                 lines.append(
-                    f"    const auto {name} = {_builder_symbol(method, name)}("
-                    "reference, mo_blocks, denominators, amplitudes);"
+                    f"    const auto {name} = {_builder_symbol(method, name, lam, ucc)}("
+                    f"{_call_args(lam)});"
                 )
             lines.append("")
 
@@ -1453,14 +1863,12 @@ def _emit_intermediate_builder(
     # below the flat cost. Cuts the builder's own FLOP scaling (e.g.
     # W_t1t2v_oooovv o^5v^3 -> o^5v^2) at ~0.3x scratch memory. Falls back to the
     # flat lowered emit for single-step (<=2-factor) definitions.
-    from ..optimization.factorize import factored_builder_steps
-    steps = factored_builder_steps(spec, stride_order=stride_order)
     arbitrary = amplitude_type == "ArbitraryOrderRCCAmplitudes"
     if arbitrary:
         # bind amplitude views once; the factored steps and the flat definition
         # both reference the same leaf amplitudes, so bind from the definition.
         binding_terms = ([s for _, s in steps] if (factor_body and len(steps) > 1)
-                         else lowered_definition_terms)
+                         else definition_terms)
         bindings = (_amplitude_view_bindings(binding_terms)
                     + _eri_view_bindings(binding_terms)
                     + _fock_view_bindings(binding_terms))
@@ -1471,25 +1879,68 @@ def _emit_intermediate_builder(
         scratch_names = frozenset(
             lhs for lhs, _ in steps if lhs != "result")
         names_in_scope = (sibling_names or frozenset()) | scratch_names
+        factor_spins = dict(slot_spins) if ucc else {}
         for lhs, step in steps:
             if lhs != "result":
                 stype = _tensor_type(len(step.free_indices))
                 lines.append(
-                    f"    {stype} {lhs}({_dims_expr(step.free_indices, stype)});")
+                    f"    {stype} {lhs}({_dims_expr(step.free_indices, stype, result_spins)});")
+            # Builders thread like the residual nests: each nest writes disjoint
+            # elements of its lhs, and each step is its own parallel region, so
+            # the barrier orders a scratch write before the next step reads it.
             lines.append(emit_planck_term(
                 step, lhs=lhs, indent=4, intermediate_names=names_in_scope,
-                arbitrary_amplitudes=arbitrary))
+                arbitrary_amplitudes=arbitrary, ucc=ucc,
+                omp_collapse=_omp_collapse_setting(), factor_spins=factor_spins))
+            if ucc and lhs != "result":
+                factor_spins[lhs] = tuple(
+                    result_spins[i.name] for i in step.free_indices)
             lines.append("")
     else:
-        for i, term in enumerate(lowered_definition_terms, start=1):
+        for i, term in enumerate(definition_terms, start=1):
             lines.append(f"    // Definition term {i}")
             lines.append(emit_planck_term(
                 term, lhs="result", indent=4, intermediate_names=sibling_names,
-                arbitrary_amplitudes=arbitrary))
+                arbitrary_amplitudes=arbitrary, ucc=ucc,
+                omp_collapse=_omp_collapse_setting(),
+                factor_spins=slot_spins if ucc else None))
             lines.append("")
     lines.append("    return result;")
     lines.append("}")
     return "\n".join(lines)
+
+
+def _bundle_emitted(method: str, force_arbitrary: bool) -> bool:
+    """Whether the file emits a `GeneratedArbitraryOrderKernels` bundle."""
+    return force_arbitrary or max(parse_cc_level(method), default=0) >= 4
+
+
+def _residual_ops_name(method: str, ucc: bool, lam: bool = False) -> str:
+    return f"{'ucc_' if ucc else ''}{'lambda_' if lam else ''}{method}_residual_ops"
+
+
+def _emit_residual_ops(method, struct, specs, force_arbitrary, lam=False, ucc=False) -> list[str]:
+    """The residual-ops struct and its builder (U3a). A builder builds what
+    it reads itself (the restricted `t2merge` builders call sibling
+    builders), so member order does not matter.
+    ponytail: those inner sibling builds can repeat a struct member; passing
+    the struct into the builders would remove them."""
+    amplitude_type = _amplitude_type(method, force_arbitrary)
+    denominator_type = _denominator_type(method, force_arbitrary)
+    lines = [f"struct {struct}", "{"]
+    lines += [f"    {_tensor_type(spec.rank)} {spec.name};" for spec in specs]
+    lines += ["};", "",
+              f"static {struct} build_{struct}(",
+              "    const CanonicalRHFCCReference &reference,",
+              "    const TensorCCBlockCache &mo_blocks,",
+              f"    const {denominator_type} &denominators,"]
+    params = _amp_params(amplitude_type, lam)
+    lines += [f"    {q}{',' if k + 1 < len(params) else ')'}" for k, q in enumerate(params)]
+    lines += ["{", f"    return {struct}{{"]
+    lines += [f"        {_builder_symbol(method, spec.name, lam, ucc)}({_call_args(lam)}),"
+              for spec in specs]
+    lines += ["    };", "}"]
+    return lines
 
 
 def _emit_arbitrary_order_kernel_bundle(
@@ -1498,9 +1949,10 @@ def _emit_arbitrary_order_kernel_bundle(
     lowered_equations: dict[str, list[RestrictedClosedShellTerm]],
     force_arbitrary: bool = False,
     ucc: bool = False,
+    shared_ops: str | None = None,
 ) -> str:
     max_rank = max(parse_cc_level(method), default=0)
-    if max_rank < 4 and not force_arbitrary:
+    if not _bundle_emitted(method, force_arbitrary):
         return ""
 
     # Split targets into the per-rank REFERENCE residuals (residuals_by_rank) and
@@ -1522,18 +1974,39 @@ def _emit_arbitrary_order_kernel_bundle(
     ranked_targets.sort()
     sector_targets.sort()
 
-    def _residual_lambda(target: str, indent: str) -> list[str]:
+    args = "reference, mo_blocks, denominators, amplitudes"
+    call_tail = ", ops" if shared_ops else ""
+
+    def _signature(indent: str, returns: str) -> list[str]:
         return [
             f"{indent}[](",
             f"{indent}    const CanonicalRHFCCReference &reference,",
             f"{indent}    const TensorCCBlockCache &mo_blocks,",
             f"{indent}    const ArbitraryOrderDenominatorCache &denominators,",
-            f"{indent}    const ArbitraryOrderRCCAmplitudes &amplitudes) -> TensorND",
+            f"{indent}    const ArbitraryOrderRCCAmplitudes &amplitudes) -> {returns}",
             f"{indent}{{",
+        ]
+
+    def _residual_lambda(target: str, indent: str) -> list[str]:
+        # One kernel on its own builds the whole struct; the runtime uses
+        # `all_residuals` below, which builds it once for every kernel.
+        build = ([f"{indent}    const auto ops = build_{shared_ops}({args});"]
+                 if shared_ops else [])
+        return _signature(indent, "TensorND") + build + [
             f"{indent}    return to_tensor_nd("
-            f"{_kernel_name(method, target, ucc)}(reference, mo_blocks, denominators, amplitudes));",
+            f"{_kernel_name(method, target, ucc)}({args}{call_tail}));",
             f"{indent}}}",
         ]
+
+    def _all_residuals_lambda(indent: str) -> list[str]:
+        body = [f"{indent}    const auto ops = build_{shared_ops}({args});",
+                f"{indent}    std::vector<TensorND> out;",
+                f"{indent}    out.reserve({len(ranked_targets) + len(sector_targets)});"]
+        for target in [t for _, t in ranked_targets] + [t for _, _, t in sector_targets]:
+            body.append(f"{indent}    out.push_back(to_tensor_nd("
+                        f"{_kernel_name(method, target, ucc)}({args}, ops)));")
+        return (_signature(indent, "std::vector<TensorND>") + body
+                + [f"{indent}    return out;", f"{indent}}};"])
 
     lines: list[str] = []
     factory = f"make_generated_{'ucc_' if ucc else ''}{method}_kernels"
@@ -1553,8 +2026,57 @@ def _emit_arbitrary_order_kernel_bundle(
         lines.append(f'        {{{rank}, "{tag}",')
         lines.extend(_residual_lambda(target, "         "))
         lines.append("        });")
+    if shared_ops:
+        lines.append("    kernels.all_residuals =")
+        lines.extend(_all_residuals_lambda("        "))
     lines.append("    return kernels;")
     lines.append("}")
+    return "\n".join(lines)
+
+
+def _emit_lambda_kernel_bundle(method, equations, lowered_equations, shared_ops,
+                               ucc=False, scales=None) -> str:
+    """`make_generated_[ucc_]lambda_<method>_kernels()`: every Λ residual from
+    one evaluation, read with t and λ (docs/CC_LAMBDA_SCOPE.md, 3b). Order: the
+    per-rank reference residuals by rank, then the block-tagged ones in
+    `sector_tags` order (UCC has only the latter, as its T bundle).
+    `diagonal_scale` holds each output's c (`lagrangian.lambda_diagonal_scale`),
+    in the same order: the solver divides by c·D."""
+    ranked, sectors = [], []
+    for target, terms in equations.items():
+        if target == "energy":
+            continue
+        rank = _target_rank(target, terms, lowered_equations.get(target))
+        m = re.search(r"_([ab]+)$", target)
+        (sectors.append((rank, m.group(1), target)) if m else ranked.append((rank, target)))
+    ranked.sort()
+    sectors.sort()
+    args = _call_args(True)
+    factory = f"make_generated_{'ucc_' if ucc else ''}lambda_{method}_kernels"
+    lines = [f"GeneratedLambdaKernels {factory}()",
+             "{",
+             "    GeneratedLambdaKernels kernels;",
+             f"    kernels.max_excitation_rank = {max(parse_cc_level(method))};"]
+    lines += [f'    kernels.sector_tags.push_back({{{r}, "{tag}"}});' for r, tag, _ in sectors]
+    order = [t for _, t in ranked] + [t for _, _, t in sectors]
+    lines.append("    kernels.diagonal_scale = {"
+                 + ", ".join(repr(float(scales[t])) for t in order) + "};")
+    lines += ["    kernels.residuals = [](",
+              "        const CanonicalRHFCCReference &reference,",
+              "        const TensorCCBlockCache &mo_blocks,",
+              "        const ArbitraryOrderDenominatorCache &denominators,",
+              "        const ArbitraryOrderRCCAmplitudes &amplitudes,",
+              "        const ArbitraryOrderRCCAmplitudes &lambdas) -> std::vector<TensorND>",
+              "    {"]
+    if shared_ops:
+        lines.append(f"        const auto ops = build_{shared_ops}({args});")
+    lines += ["        std::vector<TensorND> out;",
+              f"        out.reserve({len(ranked) + len(sectors)});"]
+    tail = ", ops" if shared_ops else ""
+    for target in order:
+        lines.append(f"        out.push_back(to_tensor_nd("
+                     f"{_kernel_name(method, target, ucc, True)}({args}{tail})));")
+    lines += ["        return out;", "    };", "    return kernels;", "}"]
     return "\n".join(lines)
 
 
@@ -1567,6 +2089,8 @@ def emit_planck_translation_unit(
     force_arbitrary: bool = False,
     spin_adapted: bool = False,
     ucc: bool = False,
+    symmetrizers: dict[str, Sequence[tuple[dict[str, str], int]]] | None = None,
+    lambda_scales: dict[str, float] | None = None,
 ) -> str:
     """Emit a Planck-compatible C++ translation unit.
 
@@ -1580,8 +2104,12 @@ def emit_planck_translation_unit(
     contraction (2*(direct)-(exchange)), the whole point of the spin adaptation.
     Skip the relabel-only ``lower_equations_restricted_closed_shell`` (which would
     both re-apply the defect it was meant to replace AND crash on the multi-Sz
-    target names like ``quadruples_aaabaaab``); emit the AlgebraTerms directly."""
+    target names like ``quadruples_aaabaaab``); emit the AlgebraTerms directly.
+
+    ``lambda_scales`` (Λ kernels, docs/CC_LAMBDA_SCOPE.md): the equations are
+    Λ residuals, and this maps each to its Jacobi diagonal scale."""
     method = method.lower()
+    lam = lambda_scales is not None
     if spin_adapted:
         lowered_equations = {}                  # emit AlgebraTerms directly
     else:
@@ -1605,13 +2133,39 @@ def emit_planck_translation_unit(
         # Ordered by construction: `intermediates` is dependency-ordered, so a sibling
         # referenced by a later spec already has its `build_` emitted above it (V1.3).
         sibling_spec_map = {spec.name: spec for spec in intermediates}
+        file_slot_spins = _operator_slot_spins(intermediates) if ucc else None
         for spec in intermediates:
             if not _is_supported_tensor_rank(spec.rank):
                 continue
             lines.append(_emit_intermediate_builder(
                 method, spec, sibling_names, factor_body=factor_builder_bodies,
                 stride_order=factor_builder_bodies, force_arbitrary=force_arbitrary,
-                sibling_specs=sibling_spec_map))
+                sibling_specs=sibling_spec_map, ucc=ucc, slot_spins=file_slot_spins,
+                lam=lam))
+            lines.append("")
+
+    # U3a: a file that emits a kernel bundle builds every intermediate its
+    # residual kernels read once per residual evaluation, in one struct, and
+    # passes it to each kernel. Before, each kernel built its own, so an
+    # intermediate read by k kernels was built k times (UCC CCSD: 31 of 92
+    # built 2-3 times, 10 % of the residual).
+    # ponytail: every residual intermediate is alive at once; if peak memory
+    # binds, hoist only those read by more than one kernel.
+    shared_ops = None
+    if intermediates and _bundle_emitted(method, force_arbitrary):
+        intermediate_map = {spec.name: spec for spec in intermediates}
+        union: list[IntermediateSpec] = []
+        seen: set[str] = set()
+        for target, terms in equations.items():
+            if target == "energy":
+                continue
+            for spec in _required_intermediates(terms, intermediate_map):
+                if spec.name not in seen:
+                    seen.add(spec.name)
+                    union.append(spec)
+        if union:
+            shared_ops = _residual_ops_name(method, ucc, lam)
+            lines.extend(_emit_residual_ops(method, shared_ops, union, force_arbitrary, lam, ucc))
             lines.append("")
 
     for target, terms in equations.items():
@@ -1624,20 +2178,32 @@ def emit_planck_translation_unit(
                 intermediates=intermediates,
                 force_arbitrary=force_arbitrary,
                 ucc=ucc,
+                symmetrizer=(symmetrizers or {}).get(target),
+                # Spatial doubles: R(i,j,a,b) = R(j,i,b,a). Under UCC the swap
+                # maps an abab block to baba, another block, so not there.
+                # Not for Λ: G is not pair symmetric; the symmetrizer makes R so.
+                pair_half=spin_adapted and not ucc and not lam and target == "doubles",
+                shared_ops=shared_ops if target != "energy" else None,
+                lam=lam,
             )
         )
         lines.append("")
 
-    bundle_code = _emit_arbitrary_order_kernel_bundle(
-        method,
-        equations,
-        lowered_equations,
-        force_arbitrary=force_arbitrary,
-        ucc=ucc,
-    )
+    if lam:
+        bundle_code = _emit_lambda_kernel_bundle(
+            method, equations, lowered_equations, shared_ops, ucc, lambda_scales)
+    else:
+        bundle_code = _emit_arbitrary_order_kernel_bundle(
+            method,
+            equations,
+            lowered_equations,
+            force_arbitrary=force_arbitrary,
+            ucc=ucc,
+            shared_ops=shared_ops,
+        )
     if bundle_code:
         lines.append(bundle_code)
         lines.append("")
 
     lines.append("} // namespace HartreeFock::Correlation::CC")
-    return "\n".join(lines)
+    return with_gemm_include("\n".join(lines))

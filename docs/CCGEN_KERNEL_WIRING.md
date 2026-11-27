@@ -105,7 +105,7 @@ Design rule:
 
 ### 4. Two measurement sets from different harnesses are not comparable
 
-**Generated vs hand-written** (`CCGEN_KERNEL_SCALING_SCOPE.md`, six-point ladder,
+**Generated vs hand-written** (`CCGEN_GENERATED_CC_COST.md`, six-point ladder,
 isolated triples residual) and **undressed vs derivation-dressed**
 (`CCGEN_WIRING_THE_DERIVATION_ROUTE.md`, end-to-end solve) measure different things — one an
 isolated residual evaluation on a designed ladder, the other end-to-end solve time on two systems,
@@ -118,11 +118,11 @@ Design rule:
 
 ## What was measured
 
-**Generated vs hand-written** (`CCGEN_KERNEL_SCALING_SCOPE.md`, six-point ladder,
+**Generated vs hand-written** (`CCGEN_GENERATED_CC_COST.md`, six-point ladder,
 isolated triples residual): the generated kernel is **21.8x to 50.1x slower**,
 and the ratio *grows* with system size — a scaling defect, not a constant tax.
 The dominant constant factor, an out-of-line allocating tensor accessor, is
-fixed (`CCGEN_KERNEL_PERFORMANCE.md`, 206x on rank 3).
+fixed (`CCGEN_GENERATED_CC_COST.md`, 206x on rank 3).
 
 **Undressed vs derivation-dressed** (`CCGEN_WIRING_THE_DERIVATION_ROUTE.md`,
 end-to-end solve):
@@ -172,6 +172,6 @@ closed by gates that assert the routing line instead.
 |---|---|
 | `CCGEN_SPIN_ADAPT_DEFAULT.md` | why a build flag made the kernel look broken |
 | `CCGEN_WIRING_THE_DERIVATION_ROUTE.md` | how dressing reaches production, and the defect that exposed |
-| `CCGEN_KERNEL_SCALING_SCOPE.md` | why generated is slower than hand-written, and by how much |
-| `CCGEN_KERNEL_PERFORMANCE.md` | the accessor fix, the dominant constant factor |
+| `CCGEN_GENERATED_CC_COST.md` | why generated is slower than hand-written, and by how much |
+| `CCGEN_GENERATED_CC_COST.md` | the accessor fix, the dominant constant factor |
 | `CCGEN_GCC_TO_UCC_BRIDGE.md` | how adapted terms become runtime tensors |

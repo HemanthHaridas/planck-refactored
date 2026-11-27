@@ -369,6 +369,16 @@ def seeded_fingerprints():
     return out
 
 
+# The emit path (emittable_operators, rewrite_term_factorized,
+# manifold_operators) derives every operator and matches none: it emits no
+# Reuse builders, and the recognized route that would dress seeded matches is
+# retired. A seeded match there could only be inlined, which left terms n-ary
+# (112 in spin-adapted ccsdt, docs/CCGEN_GENERATED_CC_COST.md #7). The
+# analysis helpers (identify_tree, value_operators, reused_operators) still
+# default to the seeded set, since reporting reuse is what they are for.
+EMIT_FINGERPRINTS = ()
+
+
 # ── F2.3: match or derive ──────────────────────────────────────────
 
 
@@ -440,14 +450,42 @@ def _contraction_shape(node_term: AlgebraTerm) -> tuple:
     # the contraction alone. The summed count is tiny (<= 4 here), so the
     # permutation sweep is cheap.
     import itertools
+    import math
 
     summed = [x for x in node_term.summed_indices if x not in pos]
+    if len(summed) <= 6:
+        best = None
+        for perm in itertools.permutations(range(len(summed))):
+            cand = entries({idx: f"S{perm[k]}" for k, idx in enumerate(summed)})
+            if best is None or cand < best:
+                best = cand
+        return best if best is not None else entries({})
+
+    # More than six summed indices (Λ terms at rank >= 4: λ4·t4 sums up to
+    # eight): n! numberings is 40320 key builds per node. Number them class by
+    # class instead, a class being the indices with the same (space, slots
+    # they occupy) signature, and sweep permutations only within classes.
+    # Still a function of the contraction alone; it can differ from the
+    # full-sweep minimum, which only renames operators no T term reaches.
+    def signature(idx):
+        return (idx.space, tuple(sorted((f.name, k) for f in node_term.factors
+                                        for k, x in enumerate(f.indices) if x == idx)))
+
+    classes: dict = {}
+    for idx in summed:
+        classes.setdefault(signature(idx), []).append(idx)
+    groups = [classes[k] for k in sorted(classes)]
+    if math.prod(math.factorial(len(g)) for g in groups) > 5040:
+        # ponytail: classes this degenerate fall back to input order; that
+        # can only miss a dedup (two names for one operator), never merge two.
+        return entries({idx: f"S{k}" for k, idx in enumerate(i for g in groups for i in g)})
     best = None
-    for perm in itertools.permutations(range(len(summed))):
-        cand = entries({idx: f"S{perm[k]}" for k, idx in enumerate(summed)})
+    for perms in itertools.product(*(itertools.permutations(g) for g in groups)):
+        order = [i for p in perms for i in p]
+        cand = entries({idx: f"S{k}" for k, idx in enumerate(order)})
         if best is None or cand < best:
             best = cand
-    return best if best is not None else entries({})
+    return best
 
 
 def _derived_name(node_term: AlgebraTerm) -> str:
@@ -481,8 +519,12 @@ def _shape_tag(node_term: AlgebraTerm) -> str:
     """
     import hashlib
 
+    # 8 bytes, not 2: a 16-bit tag collided at rank 4 (one T-CCSDTQ name,
+    # four Λ-CCSDTQ names each covering two contractions), so one builder
+    # served two operators and λ1–λ3 came out wrong by up to 1.4e-4.
+    # `_manifold_operators_impl` refuses any collision that remains.
     raw = repr(_contraction_shape(node_term)).encode()
-    return hashlib.blake2s(raw, digest_size=2).hexdigest()
+    return hashlib.blake2s(raw, digest_size=8).hexdigest()
 
 
 def identify_node(node_or_term, fingerprints=None, usage_count: int = 1):
@@ -540,7 +582,7 @@ def emittable_operators(term: AlgebraTerm, fingerprints=None):
     ponytail: `internal_nodes` yields the root first (pre-order), so dropping
     index 0 is the whole fix — no tree re-walk."""
     if fingerprints is None:
-        fingerprints = seeded_fingerprints()
+        fingerprints = EMIT_FINGERPRINTS
     _, root = best_contraction_tree_full(term)
     nodes = internal_nodes(root)
     non_root = nodes[1:]  # drop the root; its contraction is the residual
@@ -581,7 +623,7 @@ def rewrite_term_factorized(
     from ..indices import canonical_index_order
 
     if fingerprints is None:
-        fingerprints = seeded_fingerprints()
+        fingerprints = EMIT_FINGERPRINTS
     _, root = best_contraction_tree_full(term)
     if root is None or root.is_leaf:
         return term
@@ -719,7 +761,7 @@ def _manifold_operators_impl(terms, fingerprints, include_reuse,
     from .dressing import seeded_operators, operator_to_intermediate_spec
 
     if fingerprints is None:
-        fingerprints = seeded_fingerprints()
+        fingerprints = EMIT_FINGERPRINTS
     derived: dict[str, list] = {}
     reuse_counts: dict[str, int] = {}
     for t in terms:
@@ -732,6 +774,11 @@ def _manifold_operators_impl(terms, fingerprints, include_reuse,
     for name, specs in derived.items():
         rep = specs[0]  # any instance defines the operator (all same shape)
         rep_def = rep.definition_terms[0]
+        rep_shape = _contraction_shape(rep_def)
+        if any(_contraction_shape(s.definition_terms[0]) != rep_shape for s in specs[1:]):
+            raise RuntimeError(
+                f"operator name {name} covers two contractions (a _shape_tag collision); "
+                "one builder would serve both")
         out.append(IntermediateSpec(
             name=name,
             indices=rep.indices,
@@ -1017,6 +1064,232 @@ def factorize_equations(eqs, *, top_k=None, savings_fraction=None,
         for m, terms in eqs.items()
     }
     return rewritten, kept
+
+
+# ── R2: merge terms that read one operand the same way ─────────────
+
+# Spatial RCC t2(a,b,i,j) = t2(b,a,j,i): the (ia)(jb) pair swap. The same pair
+# swap holds for a physicist ERI, <pq|rs> = <qp|sr>.
+_PAIR_SWAP_SPELLINGS = ((0, 1, 2, 3), (1, 0, 3, 2))
+
+
+def merge_common_operand_reads(terms, target, operand="t2",
+                               spellings=_PAIR_SWAP_SPELLINGS, max_rest=1,
+                               inline=None):
+    """sum_n c_n A(P) R_n -> A(P) Y, with Y = sum_n c_n R_n permuted to one
+    slot order (docs/CCSD_T_SIZE_SCOPE.md, R2 and R2b).
+
+    A is the one factor named `operand`; R_n, the rest of the term, is up to
+    `max_rest` factors with no summation of its own (every index of R_n is free
+    or read by A), so building Y costs |Y| per member against the contraction
+    each merged member saves. Two terms share a group when their A read is the
+    same once summed indices are renamed in order of appearance, taking the
+    smallest of A's equivalent `spellings`, and their rests carry the same index
+    set. Singletons are left alone.
+
+    `inline` maps names of intermediates read once and defined by one term to
+    their specs. A term that reaches A only through one of them is looked at
+    with it expanded; if that term merges, its intermediate is dead and the
+    caller drops it. Unmerged terms are returned as they came.
+
+    R2 runs it with A = t2 after the factorizer (the rests are its W's). R2b
+    runs it with A = v after R2, when only terms R2 left alone still read v:
+    there the ladder t2.v and t1 . (t1 v) merge into tau = t2 + t1 t1, without
+    taking any term from a t2 group.
+
+    Returns (new_terms, new_specs).
+    """
+    import hashlib
+    from fractions import Fraction
+
+    from ..indices import Index, canonical_index_order
+    from .intermediates import IntermediateSpec
+
+    def pool(space, taken):
+        names = "klmnopqrstuvwxyz" if space == "occ" else "cdefghabmnopqrst"
+        return [n for n in names if n not in taken]
+
+    def expand(t, f, spec):
+        d = spec.definition_terms[0]
+        m = dict(zip(spec.indices, f.indices))
+        used = {i.name for x in t.factors for i in x.indices}
+        new_dummies = []
+        for i in d.summed_indices:
+            n = pool(i.space, used)[0]
+            used.add(n)
+            m[i] = Index(n, i.space, is_dummy=True)
+            new_dummies.append(m[i])
+        factors = tuple(x for x in t.factors if x is not f) + tuple(
+            Tensor(x.name, tuple(m[i] for i in x.indices), x.antisym_groups)
+            for x in d.factors)
+        return AlgebraTerm(coeff=t.coeff * d.coeff, factors=factors,
+                           free_indices=t.free_indices,
+                           summed_indices=t.summed_indices + tuple(new_dummies),
+                           connected=True)
+
+    def analyse(t):
+        ops = [f for f in t.factors if f.name == operand]
+        if not ops and inline:
+            for f in t.factors:
+                if f.name in inline:
+                    return analyse(expand(t, f, inline[f.name]))
+        if len(ops) != 1:
+            return None
+        a = ops[0]
+        rest = tuple(f for f in t.factors if f is not a)
+        if not rest or len(rest) > max_rest:
+            return None
+        rest_idx = tuple(i for f in rest for i in f.indices)
+        if not set(rest_idx) <= set(t.free_indices) | set(a.indices):
+            return None
+        # Y no larger than A: an outer product rest (t1 t2) would make Y o^4v^4.
+        if len(set(rest_idx)) > len(a.indices):
+            return None
+        dummies = set(t.summed_indices)
+        taken = {i.name for i in t.free_indices}
+        best = None
+        for perm in spellings:
+            read = tuple(a.indices[p] for p in perm)
+            free_pool = {s: pool(s, taken) for s in ("occ", "vir")}
+            ren = {}
+            for i in read + rest_idx:
+                if i in dummies and i not in ren:
+                    ren[i] = free_pool[i.space].pop(0)
+            key = (tuple(ren.get(i, i.name) for i in read),
+                   tuple(sorted({ren.get(i, i.name) for i in rest_idx})))
+            if best is None or key < best[0]:
+                best = (key, read, ren)
+        return best[0], best[1], best[2], a, rest, t
+
+    def slot(i, ren):
+        return Index(ren[i], i.space) if i in ren else i
+
+    def dummy(i, ren):
+        return Index(ren[i], i.space, is_dummy=True) if i in ren else i
+
+    groups: dict = {}
+    order = []
+    for t in terms:
+        info = analyse(t)
+        k = info[0] if info else ("single", len(order))
+        if k not in groups:
+            groups[k] = []
+            order.append(k)
+        groups[k].append((t, info))
+
+    out_terms, specs = [], []
+    for k in order:
+        members = groups[k]
+        if len(members) == 1:
+            out_terms.append(members[0][0])
+            continue
+        _, (_, read0, ren0, a0, rest0, t0) = members[0]
+        # Y's slots: the rest's indices under the group's renaming, occ first.
+        slots = tuple(canonical_index_order(list(dict.fromkeys(
+            slot(i, ren0) for f in rest0 for i in f.indices))))
+        # Sum the members' rests, combining repeats; drop what cancels.
+        coeffs: dict = {}
+        for _, (_, _, ren, _, rest, t) in members:
+            facs = tuple(Tensor(f.name, tuple(slot(i, ren) for i in f.indices),
+                                f.antisym_groups) for f in rest)
+            coeffs[facs] = coeffs.get(facs, Fraction(0)) + t.coeff
+        defs = tuple(
+            AlgebraTerm(coeff=c, factors=facs, free_indices=slots,
+                        summed_indices=(), connected=True)
+            for facs, c in coeffs.items() if c != 0)
+        if not defs:
+            continue
+        digest = hashlib.blake2s(repr((target, k)).encode(),
+                                 digest_size=3).hexdigest()
+        sig = "".join(i.space[0] for i in slots)
+        name = f"W_{operand}merge_{sig}_{digest}"
+        specs.append(IntermediateSpec(
+            name=name, indices=slots, definition_terms=defs,
+            usage_count=1, index_space_sig=sig, usage_targets=(target,)))
+        # Merged term: A read in the group's spelling, Y on the same slots;
+        # renamed dummies stay dummies here.
+        y_read = tuple(Index(s.name, s.space, is_dummy=s.name not in
+                             {i.name for i in t0.free_indices})
+                       for s in slots)
+        out_terms.append(AlgebraTerm(
+            coeff=Fraction(1),
+            factors=(Tensor(a0.name, tuple(dummy(i, ren0) for i in read0),
+                            a0.antisym_groups),
+                     Tensor(name, y_read)),
+            free_indices=t0.free_indices,
+            summed_indices=tuple(canonical_index_order(
+                [dummy(i, ren0) for i in t0.summed_indices])),
+            connected=True))
+    return out_terms, specs
+
+
+def _spec_reads(eqs, specs):
+    """How many times each factor name is read, by residual terms and by spec
+    definitions."""
+    from collections import Counter
+    reads = Counter()
+    for terms in eqs.values():
+        for t in terms:
+            reads.update(f.name for f in t.factors)
+    for spec in specs:
+        for d in spec.definition_terms:
+            reads.update(f.name for f in d.factors)
+    return reads
+
+
+def single_use_specs(eqs, specs):
+    """Specs read exactly once and defined by one term: the ones a merge may
+    expand at their single reader."""
+    reads = _spec_reads(eqs, specs)
+    return {s.name: s for s in specs
+            if reads[s.name] == 1 and len(s.definition_terms) == 1}
+
+
+def drop_unread_specs(eqs, specs):
+    """Drop specs nothing reads any more (a merge expanded their one reader),
+    repeating until none is left, since a dropped spec may have been the last
+    reader of another."""
+    specs = list(specs)
+    while True:
+        reads = _spec_reads(eqs, specs)
+        kept = [s for s in specs if reads[s.name]]
+        if len(kept) == len(specs):
+            return kept
+        specs = kept
+
+
+def merge_operand_reads(eqs, specs, ucc=False):
+    """R2 then R2b over a whole residual manifold, after the factorizer:
+    returns (eqs, specs) with merged terms and the dead specs dropped.
+
+    R2: terms reading t2 the same way share one contraction against the sum
+    of their other factors (spatial t2 symmetry; on rank-2 doubles 31
+    o^3v^3 contractions -> 6); the summed factors are the factorizer's W's.
+    R2b: the same on v, over what R2 left reading v, seeing through W's read
+    once; the ladder t2.v and t1.(t1 v) become one contraction with
+    tau = t2 + t1 t1. docs/CCSD_T_SIZE_SCOPE.md.
+
+    U3b, ``ucc``: the same passes once per spin block (`t2_aaaa`, ...,
+    `v_bbbb`). The pair swap (b,a,j,i) is a sign +1 symmetry of a same-spin
+    block, as of the spatial one; on abab it lands on baba, another block,
+    so abab merges on the identity spelling only. The pass carries no sign,
+    so a single swap (sign -1 on a same-spin block) is never offered."""
+    blocks = ("aaaa", "abab", "bbbb") if ucc else ("",)
+    eqs = dict(eqs)
+    specs = list(specs or [])
+    for base, max_rest in (("t2", 1), ("v", 2)):
+        for block in blocks:
+            operand = f"{base}_{block}" if block else base
+            spellings = ((0, 1, 2, 3),) if block == "abab" else _PAIR_SWAP_SPELLINGS
+            inline = single_use_specs(eqs, specs) if base == "v" else None
+            for target in list(eqs):
+                if target == "energy":
+                    continue
+                eqs[target], merged = merge_common_operand_reads(
+                    eqs[target], target, operand=operand, spellings=spellings,
+                    max_rest=max_rest, inline=inline)
+                specs += merged
+    return eqs, drop_unread_specs(eqs, specs)
 
 
 # ── M3.0: factor an operator's OWN builder body ────────────────────

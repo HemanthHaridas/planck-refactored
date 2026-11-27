@@ -1,0 +1,36 @@
+# CCSD(T) size-scope rung (docs/CCSD_T_SIZE_SCOPE.md): water dimer,
+# cc-pVTZ spherical, o 10 / v 106. Geometry: S22 water dimer, the ladder's
+# rung: Total RCCSD(T) Energy -152.7012785674, equal to PySCF 2.15.
+%begin_control
+    basis       cc-pvtz
+    calculation energy
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation ccsd(t)
+    use_diis    .true.
+    diis_dim    8
+    save_checkpoint .false.
+    guess       sad
+    tol_energy  1.0e-11
+    tol_density 1.0e-10
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+6
+0   1
+O    -1.551007    -0.114520     0.000000
+H    -1.934259     0.762503     0.000000
+H    -0.599677     0.040712     0.000000
+O     1.350625     0.111469     0.000000
+H     1.680398    -0.373741    -0.758561
+H     1.680398    -0.373741     0.758561
+%end_coords

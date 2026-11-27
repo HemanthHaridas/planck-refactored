@@ -56,8 +56,10 @@ determinant-space result.
 
 ### 4. ROHF-CCSD(T)
 
-After `docs/CCSD_T_SCOPE.md` step 5 (open-shell (T)). Semicanonical (T)
-needs the f_ov-dependent terms too: generate with `canonical_fock=False`.
+Open-shell (T) exists: the UHF (T) (`docs/CCSD_T_SCOPE.md`) is generated
+per spin block. Semicanonical (T) needs the f_ov-dependent terms too:
+generate with `canonical_fock=False`. That is the same generator change as
+the tensor ROHF-CCSD in step 3.
 
 ## Not in this scope
 

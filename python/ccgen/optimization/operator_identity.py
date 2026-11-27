@@ -153,14 +153,64 @@ def canonical_shape_of_term(node_term, spatial: bool = False):
 
 
 def _canonicalize(shape, spaces, spatial):
+    """The minimum over relabelings of `shape`, restricted to those that send
+    slots (and summed labels) to positions in signature order.
+
+    A label's signature is where it occurs: (factor, position) for factors
+    without modelled symmetry, the factor name alone for those in
+    `tensor_symmetries` (whose positions `v_variants` permutes). Signatures are
+    invariant under relabeling and under those symmetries, so two
+    transpose-equivalent shapes get the same restricted relabeling set and the
+    same minimum: the classes are exactly those of the full sweep. Only the
+    permutations within equal-signature groups are swept. The full sweep was
+    (n_occ! n_vir!) · nsum! per operator, which stalled Λ-CCSDTQ (rank-8
+    operators) in `merge_plan`.
+    """
+    table = tensor_symmetries(spatial)
+
+    def signature(label):
+        return tuple(sorted(
+            (name, -1 if (name in table and len(sl) == 4) else k)
+            for name, sl in shape for k, x in enumerate(sl) if x == label))
+
+    def grouped(labels, key):
+        out = []
+        for lab in sorted(labels, key=key):
+            if out and key(out[-1][0]) == key(lab):
+                out[-1].append(lab)
+            else:
+                out.append([lab])
+        return out
+
     n = len(spaces)
     nsum = 1 + max(
         [int(x[1:]) for _, sl in shape for x in sl if x.startswith("S")] or [-1])
+    # Slots of each space go to that space's positions, in signature order.
+    slot_groups = []
+    for space in sorted(set(spaces)):
+        positions = [p for p in range(n) if spaces[p] == space]
+        groups = grouped([k for k in range(n) if spaces[k] == space],
+                         lambda k: signature(str(k)))
+        slot_groups.append((positions, groups))
+    sum_groups = grouped(range(nsum), lambda s: signature(f"S{s}"))
+
+    def assignments(groups):
+        """Every order of the labels that keeps the groups in sequence."""
+        return [[x for g in combo for x in g]
+                for combo in itertools.product(*(itertools.permutations(g) for g in groups))]
+
     best = None
-    for perm in itertools.permutations(range(n)):
-        if any(spaces[k] != spaces[perm[k]] for k in range(n)):
-            continue
-        for sperm in itertools.permutations(range(nsum)):
+    per_space = [[(positions, order) for order in assignments(groups)]
+                 for positions, groups in slot_groups]
+    for choice in itertools.product(*per_space):
+        perm = [0] * n
+        for positions, order in choice:
+            for p, k in zip(positions, order):
+                perm[k] = p
+        for sorder in assignments(sum_groups):
+            sperm = [0] * nsum
+            for new, old in enumerate(sorder):
+                sperm[old] = new
             for variant in v_variants(relabel(shape, perm, sperm), spatial):
                 if best is None or variant < best:
                     best = variant

@@ -320,6 +320,12 @@ class EmitterConsumesThePredicateTests(unittest.TestCase):
         self.assertTrue(expected, "no v_<tag> factors found; fixture drift")
 
         tu = self._ucc_tu()
+        # A lowered contraction names each operand and its index order as
+        # `cc_operand(v_abab_ovvo), "kbci"`; spell those as reads too, so the
+        # check still covers both the array and the order.
+        tu += "\n".join(
+            f"{name}({', '.join(labels)})"
+            for name, labels in re.findall(r'cc_operand\((\w+)\), "(\w+)"', tu))
         missing = sorted({e for e in expected if e not in tu})
         self.assertEqual(
             missing, [],

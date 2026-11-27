@@ -1,9 +1,13 @@
 #ifndef HF_INTEGRALS_H
 #define HF_INTEGRALS_H
 
+#include <expected>
+#include <limits>
+#include <string>
 #include <utility>
 
 #include "base/types.h"
+#include "basis/spherical.h"
 #include "ecp.h"
 #include "hgp.h"
 #include "os.h"
@@ -57,6 +61,22 @@ inline Eigen::MatrixXd _compute_external_charge_attraction(
     return HartreeFock::ObaraSaika::_compute_external_charge_attraction(shell_pairs, nbasis, charges, sym_ops);
 }
 
+// The engines keep grow-only thread-local scratch sized by the largest
+// quartet seen (~140 MiB over six threads in cc-pVTZ). A one-shot tensor build
+// is not followed by more quartets on these threads, so the builds below free
+// it: each thread of a fresh team frees its own. The pool reuses the build's
+// threads; a thread missed here only keeps its scratch. Direct Fock builds do
+// not come through here and keep their scratch across SCF iterations.
+inline void _release_eri_thread_scratch()
+{
+#pragma omp parallel
+    {
+        HartreeFock::ObaraSaika::release_thread_scratch();
+        HartreeFock::HeadGordonPople::release_thread_scratch();
+        HartreeFock::RysQuad::release_thread_scratch();
+    }
+}
+
 inline std::vector<double> _compute_2e(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const std::size_t nbasis,
@@ -69,17 +89,47 @@ inline std::vector<double> _compute_2e(
     // Rys handles the higher-angular-momentum and range-separated paths more
     // robustly, while OS remains the default explicit recurrence engine. Auto
     // keeps that choice centralized instead of scattered across callers.
+    std::vector<double> eri;
     switch (engine)
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
-        return HartreeFock::RysQuad::_compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
+        eri = HartreeFock::RysQuad::_compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
+        break;
     case HartreeFock::IntegralMethod::HeadGordonPople:
-        return HartreeFock::HeadGordonPople::_compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
+        eri = HartreeFock::HeadGordonPople::_compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
+        break;
     case HartreeFock::IntegralMethod::Auto:
-        return HartreeFock::RysQuad::_compute_2e_auto(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
+        eri = HartreeFock::RysQuad::_compute_2e_auto(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
+        break;
     default:
-        return HartreeFock::ObaraSaika::_compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
+        eri = HartreeFock::ObaraSaika::_compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
+        break;
     }
+    _release_eri_thread_scratch();
+    return eri;
+}
+
+// The spherical AO ERI tensor without materializing the Cartesian one (see
+// RysQuad::_compute_2e_spherical). Integral-symmetry operations act on
+// Cartesian AOs, so with them this builds Cartesian and transforms.
+inline std::expected<std::vector<double>, std::string> _compute_2e_spherical(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const std::size_t nbasis_cart,
+    const Eigen::MatrixXd &cart_to_sph,
+    const HartreeFock::IntegralMethod &engine,
+    double tol_eri = 1e-10,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr)
+{
+    if (sym_ops != nullptr && sym_ops->size() > 1) // identity alone is no symmetry
+        return HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+            _compute_2e(shell_pairs, nbasis_cart, engine, HartreeFock::ERIKernel::Coulomb, 0.0,
+                        tol_eri, sym_ops),
+            cart_to_sph, nbasis_cart, std::numeric_limits<std::size_t>::max());
+    auto eri = HartreeFock::RysQuad::_compute_2e_spherical(
+        shell_pairs, nbasis_cart, cart_to_sph, engine,
+        HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+    _release_eri_thread_scratch();
+    return eri;
 }
 
 inline Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair> &shell_pairs,
